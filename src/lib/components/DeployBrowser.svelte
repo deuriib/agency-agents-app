@@ -177,17 +177,9 @@
   });
 
   // ── Right pane: per-tool installer, scoped to THIS project ──
-  const projectTools = $derived(
-    SUPPORTED_TOOLS.filter(
-      (t) =>
-        t.supportsProject &&
-        (install.tools.length === 0 ||
-          install.tools.some((ti) => ti.tool === t.id && ti.detected) ||
-          install.installed.some(
-            (r) => r.tool === t.id && r.state !== "removed" && (r.projectPath ?? null) === projectPath,
-          )),
-    ),
-  );
+  // Every wired (installable) project-capable tool is a valid deployment target:
+  // detection is status, not a gate, since install creates the tool's directory.
+  const projectTools = $derived(SUPPORTED_TOOLS.filter((t) => t.supportsProject));
 
   function cover(tool: Tool) {
     const rows = install.installed.filter(
