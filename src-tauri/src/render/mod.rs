@@ -10,7 +10,7 @@
 //! Identity tools (claude-code, copilot) ship the agent `.md` verbatim, so their
 //! "render" is the raw corpus source. Transform tools (cursor/.mdc, codex/TOML,
 //! gemini-cli, opencode, qwen) rebuild the file from frontmatter fields + body.
-//! Skill tools (osaurus, antigravity) emit an Agent-Skills `SKILL.md` directory.
+//! Skill tools (osaurus) emit an Agent-Skills `SKILL.md` directory.
 //! The remaining tools (openclaw multi-file, aider / windsurf accumulated files,
 //! kimi) are special multi-file shapes — not yet supported here; `render`/`dests`
 //! return an error so the UI can disable them cleanly.
@@ -526,33 +526,33 @@ mod tests {
     }
 
     #[test]
-    fn antigravity_skill_md_shape_and_dests() {
-        // Antigravity reuses the skill-md renderer (identical shape to osaurus,
-        // same `agency-` prefix). Global skills load from ~/.gemini/config/skills/,
-        // project skills from <project>/.agents/skills/.
+    fn antigravity_native_agents_shape_and_dests() {
+        // Antigravity native agents use the gemini-md renderer shape. Global
+        // agents load from ~/.gemini/config/agents/, project agents from
+        // <project>/.agents/agents/.
         let out = render(&agent(), raw(), "antigravity").unwrap();
         assert_eq!(
             out,
-            "---\nname: 'agency-frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
+            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
         );
-        assert_eq!(output_slug(&agent(), raw(), "antigravity"), "agency-frontend-developer");
-        // user-scope → ~/.gemini/config/skills/<name>/SKILL.md
-        let user = dests("antigravity", "agency-frontend-developer", Path::new("/home"), None).unwrap();
+        assert_eq!(output_slug(&agent(), raw(), "antigravity"), "frontend-developer");
+        // user-scope → ~/.gemini/config/agents/<name>.md
+        let user = dests("antigravity", "frontend-developer", Path::new("/home"), None).unwrap();
         assert_eq!(
             user,
-            vec![PathBuf::from("/home/.gemini/config/skills/agency-frontend-developer/SKILL.md")]
+            vec![PathBuf::from("/home/.gemini/config/agents/frontend-developer.md")]
         );
-        // project-scope → <project>/.agents/skills/<name>/SKILL.md
+        // project-scope → <project>/.agents/agents/<name>.md
         let proj = dests(
             "antigravity",
-            "agency-frontend-developer",
+            "frontend-developer",
             Path::new("/home"),
             Some(Path::new("/proj")),
         )
         .unwrap();
         assert_eq!(
             proj,
-            vec![PathBuf::from("/proj/.agents/skills/agency-frontend-developer/SKILL.md")]
+            vec![PathBuf::from("/proj/.agents/agents/frontend-developer.md")]
         );
     }
 
@@ -725,7 +725,7 @@ mod tests {
             ("zcode", "zcode/agents", "md"),
         ];
         // Agent-Skills tools write `<tool>/agency-<slug>/SKILL.md`.
-        let skill_tools = [("antigravity", "antigravity"), ("osaurus", "osaurus"), ("deepseekHarness", "dsh")];
+        let skill_tools = [("osaurus", "osaurus"), ("deepseekHarness", "dsh")];
         for tool in tools.iter().map(|(_, dir, _)| dir.split('/').next().unwrap()).chain(skill_tools.iter().map(|(_, cli)| *cli)) {
             let status = Command::new("bash")
                 .arg(&script)
