@@ -1,0 +1,13 @@
+[settings]
+experimental = true
+
+[tools]
+node = "22"
+rust = "stable"
+npm = "latest"
+pnpm = "latest"
+
+[env]
+NODE_ENV = "development"
+TAURI_SIGNING_PRIVATE_KEY_PATH = ".secrets/tauri.key"
+TAURI_SIGNING_PRIVATE_KEY_PASSWORD = "set_in_vault"
