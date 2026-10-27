@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Built with Tauri 2](https://img.shields.io/badge/Built%20with-Tauri%202-orange)](https://tauri.app)
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey)](https://www.apple.com/macos)
-[![Sponsor](https://img.shields.io/badge/♥-Sponsor-EC4899?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/msitarzewski)
+[![Sponsor](https://img.shields.io/badge/♥-Sponsor-EC4899?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/deuriib)
 
 Agency Agents is a small, native app for browsing, installing, and tracking the agent personas from [`msitarzewski/agency-agents`](https://github.com/msitarzewski/agency-agents) across the AI coding tools you actually use.
 
@@ -55,7 +55,7 @@ New to directing agents? See **[docs/USING-AGENTS.md](./docs/USING-AGENTS.md)** 
 The app currently installs to the renderer-backed targets that have deterministic byte parity with the upstream `agency-agents` converter:
 
 | Tool | Scope Today | Output |
-|------|-------------|--------|
+| ------ | ------------- | -------- |
 | Claude Code | user | `~/.claude/agents/*.md` |
 | Codex | user | `~/.codex/agents/*.toml` |
 | Gemini CLI | user | `~/.gemini/agents/*.md` |
@@ -197,4 +197,4 @@ The highest-value areas before 1.0 are:
 
 ## Support The Project
 
-If Agency Agents saves you time, consider [sponsoring on GitHub](https://github.com/sponsors/msitarzewski). Sponsorship is optional and does not unlock a paid tier.
+If Agency Agents saves you time, consider [sponsoring on GitHub](https://github.com/sponsors/deuriib). Sponsorship is optional and does not unlock a paid tier.
