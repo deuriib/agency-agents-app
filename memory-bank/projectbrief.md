@@ -10,7 +10,7 @@
 
 A native macOS app store for AI agents. Browse, search, install, and **track** the
 **210** specialized agent personas (across 16 categories) from
-[`deuriib/agency-agents`](https://github.com/msitarzewski/agency-agents)
+[`deuriib/agency-agents`](https://github.com/deuriib/agency-agents)
 across every AI coding tool you use (Claude Code, Cursor, Codex, Gemini CLI, Copilot,
 Windsurf, Aider, opencode, qwen, openclaw, antigravity).
 (The repo also ships NEXUS playbooks + workflow examples — docs, not agents — a candidate

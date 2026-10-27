@@ -16,7 +16,7 @@
   const REPO_URL = "https://github.com/deuriib/agency-agents-app";
   const LICENSE_URL =
     "https://github.com/deuriib/agency-agents-app/blob/main/LICENSE";
-  const AGENCY_AGENTS_URL = "https://github.com/msitarzewski/agency-agents";
+  const AGENCY_AGENTS_URL = "https://github.com/deuriib/agency-agents";
 
   let appVer = $state<string | null>(null);
   let modalEl: HTMLDivElement | undefined = $state();
