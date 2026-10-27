@@ -17,7 +17,7 @@
   import { i18n } from "$lib/stores/i18n.svelte";
 
   const REPO_URL = "https://github.com/deuriib/agency-agents-app";
-  const CATALOG_URL = "https://github.com/msitarzewski/agency-agents";
+  const CATALOG_URL = "https://github.com/deuriib/agency-agents";
 
   let version = $state<string | null>(null);
   let versionError = $state<string | null>(null);
