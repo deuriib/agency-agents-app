@@ -151,10 +151,11 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: BarChart,
     color: "#0ea5e9",
     agents: [
-      "data-data-scientist",
-      "data-analytics-engineer",
-      "data-data-engineer",
+      "data-consolidation-agent",
+      "engineering-data-visualization-engineer",
+      "engineering-data-engineer",
       "engineering-ai-engineer",
+      "data-privacy-officer"
     ],
   },
   {
@@ -164,9 +165,9 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: Headphones,
     color: "#10b981",
     agents: [
-      "support-support-agent",
-      "support-customer-success-manager",
-      "support-technical-support-engineer",
+      "support-support-responder",
+      "customer-success-manager",
+      "customer-service",
     ],
   },
   {
@@ -177,8 +178,9 @@ export const PRESET_TEAMS: PresetTeam[] = [
     color: "#8b5cf6",
     agents: [
       "marketing-content-creator",
-      "marketing-copywriter",
-      "marketing-social-media-manager",
+      "marketing-aeo-foundations",
+      "marketing-email-strategist",
+      "marketing-social-media-strategist",
       "marketing-seo-specialist",
     ],
   },
@@ -189,10 +191,12 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: Gamepad2,
     color: "#f59e0b",
     agents: [
-      "game-game-designer",
-      "game-game-developer",
-      "game-game-artist",
-      "game-level-designer",
+      "game-designer",
+      "narrative-designer",
+      "technical-artist",
+      "level-designer",
+      "game-audio-designer",
+      "economy-designer",
     ],
   },
   {
@@ -203,9 +207,10 @@ export const PRESET_TEAMS: PresetTeam[] = [
     color: "#6366f1",
     agents: [
       "finance-financial-analyst",
-      "finance-accountant",
-      "legal-legal-counsel",
-      "legal-compliance-checker",
+      "finance-fpa-analyst",
+      "support-finance-tracker",
+      "legal-client-intake",
+      "support-legal-compliance-checker",
     ],
   },
   {
@@ -218,7 +223,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
       "engineering-sre",
       "engineering-incident-response-commander",
       "engineering-devops-automator",
-      "engineering-observability-reviewer",
+      "engineering-review-observability",
     ],
   },
   {
@@ -254,9 +259,9 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: ShieldCheck,
     color: "#7c3aed",
     agents: [
-      "specialized-data-privacy-officer",
-      "legal-compliance-checker",
-      "engineering-security-engineer",
+      "data-privacy-officer",
+      "support-legal-compliance-checker",
+      "security-architect",
       "support-legal-compliance",
     ],
   },
@@ -267,7 +272,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: Brain,
     color: "#db2777",
     agents: [
-      "specialized-ai-ethics-officer",
+      "security-ai-generated-code-auditor",
       "engineering-ai-engineer",
       "product-behavioral-nudge-engine",
       "academic-psychologist",
@@ -281,8 +286,8 @@ export const PRESET_TEAMS: PresetTeam[] = [
     color: "#f97316",
     agents: [
       "specialized-developer-advocate",
-      "specialized-open-source-maintainer",
-      "marketing-technical-writer",
+      "marketing-developer-community-builder",
+      "engineering-technical-writer",
       "engineering-codebase-onboarding-engineer",
     ],
   },
@@ -296,7 +301,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
       "specialized-esg-sustainability-officer",
       "engineering-sre",
       "finance-financial-analyst",
-      "specialized-supply-chain-analyst",
+      "supply-chain-strategist",
     ],
   },
   {
@@ -306,8 +311,8 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: Link,
     color: "#ca8a04",
     agents: [
-      "engineering-blockchain-developer",
-      "specialized-smart-contract-auditor",
+      "engineering-solidity-smart-contract-engineer",
+      "security-blockchain-security-auditor",
       "security-penetration-tester",
       "finance-investment-researcher",
     ],
@@ -320,8 +325,8 @@ export const PRESET_TEAMS: PresetTeam[] = [
     color: "#dc2626",
     agents: [
       "engineering-incident-response-commander",
-      "support-customer-support",
-      "marketing-crisis-communicator",
+      "support-support-responder",
+      "marketing-pr-communications-manager",
       "project-management-project-shepherd",
     ],
   },
@@ -371,7 +376,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: FileText,
     color: "#2563eb",
     agents: [
-      "marketing-technical-writer",
+      "engineering-technical-writer",
       "specialized-developer-advocate",
       "engineering-codebase-onboarding-engineer",
       "design-ux-researcher",
@@ -494,7 +499,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
       "engineering-review-observability",
       "engineering-review-risk",
       "engineering-review-security",
-      "specialized-review-refuter",
+      "review-refuter",
     ],
   },
   {
@@ -507,7 +512,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
       "engineering-review-readability",
       "engineering-review-reliability",
       "engineering-review-resilience",
-      "specialized-review-refuter",
+      "review-refuter",
     ],
   },
   {
@@ -519,7 +524,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     agents: [
       "engineering-review-security",
       "engineering-review-risk",
-      "specialized-review-refuter",
+      "review-refuter",
       "engineering-review-reliability",
     ],
   },
@@ -542,7 +547,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     icon: Sword,
     color: "#7c3aed",
     agents: [
-      "specialized-review-refuter",
+      "review-refuter",
       "engineering-review-risk",
       "engineering-review-security",
       "engineering-review-readability",
@@ -557,7 +562,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     agents: [
       "engineering-review-reliability",
       "engineering-review-resilience",
-      "specialized-review-refuter",
+      "review-refuter",
       "engineering-review-observability",
     ],
   },
@@ -569,7 +574,7 @@ export const PRESET_TEAMS: PresetTeam[] = [
     color: "#64748b",
     agents: [
       "engineering-review-readability",
-      "specialized-review-refuter",
+      "review-refuter",
     ],
   },
 ];
