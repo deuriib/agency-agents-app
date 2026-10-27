@@ -76,7 +76,7 @@ The upstream AA repo also contains integrations for Antigravity, Aider, Windsurf
 
 ## Install
 
-Grab the build for your platform from the [latest release](https://github.com/msitarzewski/agency-agents-app/releases/latest):
+Grab the build for your platform from the [latest release](https://github.com/deuriib/agency-agents-app/releases/latest):
 
 - **macOS** (Apple Silicon & Intel) — signed + notarized `.dmg`, macOS 13+.
 - **Linux** (x86_64) — `.deb`, `.rpm`, or the portable `.AppImage`.
@@ -111,7 +111,7 @@ Prerequisites:
 Then:
 
 ```sh
-git clone https://github.com/msitarzewski/agency-agents-app
+git clone https://github.com/deuriib/agency-agents-app
 cd agency-agents-app
 npm install
 npm run tauri dev

@@ -13,8 +13,9 @@
   import appIcon from "$lib/assets/app-icon.png";
   import appIconDark from "$lib/assets/app-icon-dark.png";
 
-  const REPO_URL = "https://github.com/msitarzewski/agency-agents-app";
-  const LICENSE_URL = "https://github.com/msitarzewski/agency-agents-app/blob/main/LICENSE";
+  const REPO_URL = "https://github.com/deuriib/agency-agents-app";
+  const LICENSE_URL =
+    "https://github.com/deuriib/agency-agents-app/blob/main/LICENSE";
   const AGENCY_AGENTS_URL = "https://github.com/msitarzewski/agency-agents";
 
   let appVer = $state<string | null>(null);
@@ -24,8 +25,12 @@
   $effect(() => {
     if (ui.aboutOpen && appVer === null) {
       void appVersion()
-        .then((v) => { appVer = v; })
-        .catch(() => { appVer = "unknown"; });
+        .then((v) => {
+          appVer = v;
+        })
+        .catch(() => {
+          appVer = "unknown";
+        });
     }
   });
 
@@ -46,10 +51,18 @@
     return () => window.removeEventListener("keydown", onKeydown);
   });
 
-  function openSponsor()        { void safeOpenUrl(SPONSOR_URL); }
-  function openRepo()           { void safeOpenUrl(REPO_URL); }
-  function openLicense()        { void safeOpenUrl(LICENSE_URL); }
-  function openAgencyAgents()   { void safeOpenUrl(AGENCY_AGENTS_URL); }
+  function openSponsor() {
+    void safeOpenUrl(SPONSOR_URL);
+  }
+  function openRepo() {
+    void safeOpenUrl(REPO_URL);
+  }
+  function openLicense() {
+    void safeOpenUrl(LICENSE_URL);
+  }
+  function openAgencyAgents() {
+    void safeOpenUrl(AGENCY_AGENTS_URL);
+  }
 </script>
 
 {#if ui.aboutOpen}
@@ -62,24 +75,58 @@
       aria-labelledby="about-title"
       data-tauri-drag-region="false"
     >
-      <button class="close" aria-label={i18n.t("about.closeAria")} onclick={() => ui.closeAbout()}>
+      <button
+        class="close"
+        aria-label={i18n.t("about.closeAria")}
+        onclick={() => ui.closeAbout()}
+      >
         <X size={16} />
       </button>
 
       <div class="hero">
-        <img class="brand-mark light" src={appIcon} alt="Agency Agents" width="80" height="80" />
-        <img class="brand-mark dark" src={appIconDark} alt="" aria-hidden="true" width="80" height="80" />
+        <img
+          class="brand-mark light"
+          src={appIcon}
+          alt="Agency Agents"
+          width="80"
+          height="80"
+        />
+        <img
+          class="brand-mark dark"
+          src={appIconDark}
+          alt=""
+          aria-hidden="true"
+          width="80"
+          height="80"
+        />
         <h1 id="about-title">Agency Agents</h1>
         <p class="tagline">{i18n.t("about.tagline")}</p>
       </div>
 
       <dl class="meta">
-        <div><dt>{i18n.t("about.version")}</dt><dd class="mono">{appVer ?? "…"}</dd></div>
-        <div><dt>{i18n.t("about.license")}</dt><dd><button class="link" onclick={openLicense}>MIT</button></dd></div>
-        <div><dt>{i18n.t("about.repo")}</dt><dd><button class="link" onclick={openRepo}>github.com/msitarzewski/agency-agents-app</button></dd></div>
+        <div>
+          <dt>{i18n.t("about.version")}</dt>
+          <dd class="mono">{appVer ?? "…"}</dd>
+        </div>
+        <div>
+          <dt>{i18n.t("about.license")}</dt>
+          <dd><button class="link" onclick={openLicense}>MIT</button></dd>
+        </div>
+        <div>
+          <dt>{i18n.t("about.repo")}</dt>
+          <dd>
+            <button class="link" onclick={openRepo}
+              >github.com/deuriib/agency-agents-app</button
+            >
+          </dd>
+        </div>
       </dl>
 
-      <button class="donate-cta" onclick={openSponsor} title={i18n.t("about.sponsorTitle")}>
+      <button
+        class="donate-cta"
+        onclick={openSponsor}
+        title={i18n.t("about.sponsorTitle")}
+      >
         <Heart size={16} />
         <span>{i18n.t("about.donate")}</span>
         <ExternalLink size={12} />
@@ -128,7 +175,10 @@
     padding: 4px;
     border-radius: var(--radius-sm);
   }
-  .close:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
+  .close:hover {
+    background: var(--color-surface-sunken);
+    color: var(--color-text-primary);
+  }
 
   .hero {
     text-align: center;
@@ -185,9 +235,18 @@
     gap: var(--space-3);
     font-size: var(--text-body-sm);
   }
-  dt { color: var(--color-text-muted); }
-  dd { color: var(--color-text-primary); margin: 0; min-width: 0; overflow-wrap: anywhere; }
-  .mono { font-family: var(--font-mono); }
+  dt {
+    color: var(--color-text-muted);
+  }
+  dd {
+    color: var(--color-text-primary);
+    margin: 0;
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+  .mono {
+    font-family: var(--font-mono);
+  }
 
   .donate-cta {
     display: flex;
@@ -202,10 +261,15 @@
     font-weight: var(--fw-semibold);
     font-size: var(--text-body);
     cursor: pointer;
-    transition: filter 0.12s ease, transform 0.12s ease;
+    transition:
+      filter 0.12s ease,
+      transform 0.12s ease;
     margin-bottom: var(--space-4);
   }
-  .donate-cta:hover { filter: brightness(1.05); transform: translateY(-1px); }
+  .donate-cta:hover {
+    filter: brightness(1.05);
+    transform: translateY(-1px);
+  }
 
   .credits {
     border-top: 1px solid var(--color-border);
@@ -229,7 +293,10 @@
     margin: 0 0 var(--space-2);
     line-height: var(--lh-normal);
   }
-  .thanks { font-style: italic; opacity: 0.85; }
+  .thanks {
+    font-style: italic;
+    opacity: 0.85;
+  }
 
   .link {
     background: transparent;
@@ -239,7 +306,9 @@
     padding: 0;
     font: inherit;
   }
-  .link:hover { text-decoration: underline; }
+  .link:hover {
+    text-decoration: underline;
+  }
 
   .posture {
     text-align: center;

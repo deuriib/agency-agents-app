@@ -27,6 +27,7 @@ brew env footer, added live agent-count footer); default landing dashboard→per
 macOSPrivateApi vibrancy. Verified live (window-only screenshot). 615 tests stay green.
 
 2026-06-05 — Phase 2 (lead, drove solo): Install + Reconcile.
+
 - 2a render/: deterministic per-tool converters ported from convert.sh — claude-code/copilot
   (identity), cursor(.mdc), codex(TOML+escape), gemini-cli, qwen, opencode(color→hex). dests() per
   tool/scope; Copilot dual-write; 4 unsupported tools (antigravity/openclaw/aider/windsurf) error
@@ -47,13 +48,14 @@ persona panel). Next: Library/Tools views, then Phase 3 (Loadouts + Dashboard).
 recognized-but-unledgered corpus agents → Foreign state (Adopt-able). (3) Library view
 (AgentLibrary.svelte) — reconciled cross-tool installs, attention-first, status chips, per-state
 actions (Update/Reinstall/Adopt/Remove). (4) Tools view (ToolsView.svelte) — detected tools + scope
-+ counts + dest. Wired both into sidebar nav (Agents/Library/Tools/Activity) + fixed ⌘1/2/3/6 keymap
+- counts + dest. Wired both into sidebar nav (Agents/Library/Tools/Activity) + fixed ⌘1/2/3/6 keymap
 to match. Library badge shows attention count. cargo test 630 / 0; vite GREEN. Deferred (noted in
 install/mod.rs): the 4 multi-file renderers (antigravity/openclaw/aider/windsurf). Next: Phase 3.
 NB: real-world validation — Michael ran the repo's install.sh (184 agents → ~/.claude/agents); the
 Foreign sweep correctly surfaced ~180 as Adopt-able in the Library. Zero fake data.
 
 2026-06-05 — Phase 3 (lead): Loadouts + Dashboard.
+
 - Loadouts: loadout_export/import commands (Agentfile JSON manifest; export reads ledger, import
   installs each entry, skips failures). Loadouts.svelte (Export/Restore via dialog save/open +
   current-loadout list). agentfile_roundtrips test.
@@ -64,6 +66,7 @@ Foreign sweep correctly surfaced ~180 as Adopt-able in the Library. Zero fake da
 - cargo test 631 / 0; vite GREEN. Phase 3 DONE. Next: Phase 4 (Trending + GitHub).
 
 2026-06-05 — Bugfix (lead): "Library panel broken" + Tools rescan.
+
 - ROOT CAUSE (proved via temp DBG readout): components called `install.reconcile()` / `loadTools()`
   at SCRIPT TOP LEVEL, mutating install-store $state (reconciling/installed) DURING the component's
   own setup/derivation → froze that component's reactivity. Backend was fine (reconcile logged
@@ -96,7 +99,7 @@ Track/Update safety + clone-as-source-of-truth.
 verified). Removed the whole inherited brew domain: backend dirs brew/catalog/enrichment/trending/
 vulns + 16 brew command files + brew state fields/init + brew data + brew types; frontend brew
 components (Dashboard/Library/Discover/Snapshots/Services/PackageDetail/Row/Trending/Upgrade/Issue)
-+ 4 brew Settings sections + ~14 brew stores + brew api.ts/types.ts + +page brew branches +
+- 4 brew Settings sections + ~14 brew stores + brew api.ts/types.ts + +page brew branches +
 CommandPalette/ui trims. KEPT (forward infra, not-yet-wired): Settings shell + generic sections,
 full design system, updater, github/ (→P4), util, the agency domain. Smart relocations: SSRF guard
 `is_public_host` → util/net.rs (used by github/url.rs); `app_version` → commands/settings.rs.
@@ -107,6 +110,7 @@ deferred (not blocking): rename BrewError→AppError; agency-ify Settings Networ
 Pill formula/cask tones; brew strings in tokens.css/comments. Next: #1 clone-as-source-of-truth.
 
 2026-06-06 — Adopt→Track SAFETY FIX + #1 slice 1 (dynamic categories) (lead).
+
 - TRACK (was Adopt): `install/mod.rs` — `track_agent`/`do_track` records provenance in the
   ledger but WRITES NOTHING (was do_install = re-render + overwrite). Reconcile then shows the
   tracked file as Current (matches catalog) or Modified (differs) — never clobbered. All writes now
@@ -135,6 +139,7 @@ Pill formula/cask tones; brew strings in tokens.css/comments. Next: #1 clone-as-
   pull → first-run modal + Settings). Managed path = ~/.agency-agents (confirmed).
 
 2026-06-06 — #1 slices 2–4: clone-as-source-of-truth (lead). Catalog now has a SOURCE.
+
 - SLICE 2 — CatalogSource model: `types.rs` enum {Bundled | Managed{path} | UserClone{path,manage}}
   (serde tag "kind"), persisted to `state/catalog.json`. corpus/mod.rs: load/save_catalog_source +
   `catalog_root(app_data,source)` resolver. Refactored resolve_active/read_source/refresh to read the
@@ -163,6 +168,7 @@ Pill formula/cask tones; brew strings in tokens.css/comments. Next: #1 clone-as-
 
 2026-06-06 — Warning purge + AppError rename + Catalog GitHub/sync (lead). Michael flagged
 dead-code warnings on `tauri dev` + asked for repo pull/sync management with GitHub login + diff stats.
+
 - CLEANUP (0 warnings now): renamed `BrewError`→`AppError` everywhere (412 refs, sed; Rust-only, wire
   `code` strings unchanged). Pruned dead brew variants (BrewNotFound/BrewExitNonZero/JobNotFound/
   Canceled/BrewfileNotFound/FeatureDisabled/VulnsNotInstalled) + truncate_head/tail + ~30 dead tests;
@@ -189,6 +195,7 @@ dead-code warnings on `tauri dev` + asked for repo pull/sync management with Git
 2026-06-06 — Settings panel refocus to Agency Agents' lens (lead). Michael: "we're nowhere near
 close :9 look at the setting panel." The whole Settings panel was still a Homebrew control panel.
 Refocused every section to show ONLY what's functional + real for Agency Agents:
+
 - NETWORK → "Network & Privacy": removed dead brew controls (Cask icon fetching, Trending TTL,
   Catalog auto-refresh, stale-banner — all non-functional after the brew sweep). Kept the one
   functional toggle (Offline Mode / paranoid_mode, 19 live refs). Rewrote the outbound-paths
@@ -226,6 +233,7 @@ phase-roadmap.md (v2 sequence). First git commit made. Next: #1 clone-as-source-
 
 2026-06-08 — Install-management loop + grouped Library + signed build + report (lead). Long session;
 many commits (see git log eacbf35..2370ce0). Highlights:
+
 - CATALOG SOURCE (#1): CatalogSource{bundled|managed|userClone} in state/catalog.json; detect/provision
   (git clone or tarball)/pull; catalog_status + catalog_check_updates (git behind/ahead + diffstat);
   first-run picker; Settings→Catalog (git status + GitHub repo stats + sign-in via existing github
@@ -247,7 +255,7 @@ many commits (see git log eacbf35..2370ce0). Highlights:
   bug fixed (was ~/Library/Application Support/brew-browser → com.zerologic.agency-agents-app).
 - SIGNED + NOTARIZED BUILD: scripts/release.sh pulls notary pw + updater key from Keychain.
   SKIP_UPDATER=1 ./scripts/release.sh → Gatekeeper-accepted notarized+stapled .app + signed .dmg.
-  Notary creds: keychain service "agency-agents-notary" / msitarzewski@mac.com, Team 7JQGQ7CRH8.
+  Notary creds: keychain service "agency-agents-notary" / <msitarzewski@mac.com>, Team 7JQGQ7CRH8.
   Updater minisign key NOT set up yet. .gitignore hardened.
 - ICON: new white-glyph-on-purple flat icon shipped; Liquid Glass layered source staged in docs/icon/
   (AppIcon.icon validates with actool) for Tahoe — not wired to build (Icon Composer is the export path).
@@ -262,14 +270,16 @@ many commits (see git log eacbf35..2370ce0). Highlights:
   (created private GitHub repo — no remote existed before).
 
 ## 2026-06-08 (later) — IA RE-ORG: Agents + Library unified into a three-pane workspace
+
 Michael: "the 'Library' and 'Agents' views are overlapping … bring the latest methods, charting, UX
 patterns … cross-platform (macOS/Linux/Windows 11) … organize 200+ agents, the tools they're installed
 in, and their purpose/roles." Decided via AskUserQuestion: (1) UNIFY Agents+Library into one view;
 (2) THREE-PANE (mail/IDE) layout; (3) all four Dashboard charts (coverage matrix, health donut, category
 distribution, per-tool coverage). Diagnosis: brew's "installed vs not" binary doesn't fit a 5-state
 cross-tool world, so the same (agent×tool) install rows were rendered twice (PersonaDiscover slide-over
-+ AgentLibrary) in two visual languages — and an agent's PURPOSE and its DEPLOYMENT never appeared
+- AgentLibrary) in two visual languages — and an agent's PURPOSE and its DEPLOYMENT never appeared
 together.
+
 - **PHASE A DONE (this session).** New `AgentsWorkspace.svelte` = three-pane: list pane (segmented filter
   lens All/Installed/Needs-attention/Untracked with live counts + search + Category ▾ dropdown +
   Select-mode bulk Update/Track/Delete, lifted from the old Library) · `ResizeHandle` · persistent
@@ -299,7 +309,9 @@ together.
   (those 7+4 ingest a persona file into an agents dir; runtimes serve weights and have no agents dir).
 
 ## 2026-06-09 — Phase B charts, back/forward nav, Tools console, dev icon + squircle
+
 Big session on top of the IA re-org. All frontend except the Tools backend commands + dev-icon (Rust).
+
 - **PHASE B — Dashboard charts (dependency-free SVG/CSS).** `HealthDonut.svelte` (install-health donut,
   clickable legend deep-links by state), `CoverageMatrix.svelte` (category × tool heatmap; only
   tools/columns with installs — empty = noise; cells deep-link). Rebuilt `AgencyDashboard`: stats +
@@ -333,6 +345,7 @@ Big session on top of the IA re-org. All frontend except the Tools backend comma
   convert.sh (load-bearing) · uninstall-backup decision · local-runtime target · #8 multi-file renderers.
 
 ## 2026-06-09 (later) — macOS 26 Tahoe app icon (LIQUID GLASS) — FIXED + long detour
+
 The app showed a blank/gray squircle in Finder/Dock. We burned a LOT of time treating it as an `.icns`
 problem (made a squircle, regenerated 8-bit, canonical `iconutil` icns, swapped into the bundle, cleared
 icon caches, lsregister) — the `.icns` was PROVEN byte-correct the whole time (composite-over-red = red
@@ -340,6 +353,7 @@ corners). **ROOT CAUSE: macOS 26 Tahoe renders app icons from a compiled `Assets
 "Liquid Glass"), not `.icns`. Apps shipping only `.icns` get "icon jail" → blank squircle.** `tauri icon`
 can't make `Assets.car` (tauri#14207/#14979). brew-browser "works" because its full-bleed square art
 survives the legacy path. Web research (9to5Mac gray-box, Apple forums 801181, hendrik-erz.de) nailed it.
+
 - **THE FIX (reproducible, wired + verified):** `actool` compiles `docs/icon/AppIcon.icon` (Michael's
   finished Icon Composer build) → `Assets.car` + a Tahoe-aware `AppIcon.icns`. **actool is ONLY in full
   Xcode, not CLT** — call it by path: `/Applications/Xcode-beta.app/Contents/Developer/usr/bin/actool …
@@ -358,8 +372,10 @@ survives the legacy path. Web research (9to5Mac gray-box, Apple forums 801181, h
   Dock/Finder.
 
 ## 2026-06-14 — Phase C: renderer parity VERIFIED + uninstall safety + cross-platform chrome
+
 Picked up the in-flight `codex/renderer-parity-safety-phase-c` branch (nothing committed; entire diff
 was working-tree only). Resolved the two IMMEDIATE backlog items and the deferred Phase C chrome.
+
 - **#1 Renderer parity — VERIFIED (was load-bearing + unproven).** `render/mod.rs` reimplements the
   upstream shell converter's exact byte semantics: `source_field` mirrors `scripts/lib.sh#get_field`
   (first literal `field: value` between `---` fences, quotes/spelling preserved — NOT YAML parsing);
@@ -399,9 +415,11 @@ was working-tree only). Resolved the two IMMEDIATE backlog items and the deferre
   Then: memory bank updated, committed, pushed, PR opened.
 
 ## 2026-06-15 — Pre-release polish: brew vestiges, Activity Journal, Tools lens, cargo-test gate
+
 On `release-planning` (off merged main). Documented the v0.1.0 release plan in `docs/BUILD.md#Release
 Checklist` + a `decisions.md` ADR (manual signed DMG, SKIP_UPDATER, auto-update deferred) — NOT cutting yet.
 Then knocked out pre-release issues, all green (svelte 0, cargo 258/0), committed + pushed:
+
 - **brew vestige cleanup**: renamed `BrewErrorPayload`/`isBrewError`/`brewErrorMessage` → `AppError*`;
   removed the dead `catalogAutoRefresh` setting (struct/enum/tests + types.ts); removed dead error codes
   (`brew_not_found`/`brew_exit_non_zero`/`brewfile_not_found`/`job_not_found`/`canceled`/`feature_disabled`/
@@ -433,7 +451,9 @@ Then knocked out pre-release issues, all green (svelte 0, cargo 258/0), committe
 - **Showed it live**: `npm run tauri dev` (warm ~4.6s). Can't self-screenshot — Michael drove. GOTCHA stays.
 
 ### 2026-06-15 (later) — live UI polish in the running app (HMR feedback loop)
+
 With `tauri dev` running, iterated on the Tools + Agents panes via screenshots; all svelte 0-error:
+
 - **Tools pane**: bar reworked from a sync-state breakdown to a **catalog-coverage** bar — green =
   distinct catalog agents installed in the tool, gray track = the rest; shown on every row
   (`installedCount(tool)` / `catalogTotal`). (Dot = tool detected; bar = coverage — two different axes.)
@@ -449,6 +469,7 @@ With `tauri dev` running, iterated on the Tools + Agents panes via screenshots; 
   empty state + its `counts` derived + `.dpe-*` CSS.
 
 ### 2026-06-15 (later 2) — cross-platform creds, dead-code/brew pass, coverage-% matrix, Category→Division
+
 - **Cross-platform GitHub credential storage FIXED + validated on VMs.** The token was stored macOS-only:
   `keyring` was built with `apple-native` only ("we only use the macOS path") so Windows/Linux had no
   native vault. Restructured `Cargo.toml` to per-target keyring backends — macOS `apple-native` (Keychain),
@@ -487,7 +508,9 @@ With `tauri dev` running, iterated on the Tools + Agents panes via screenshots; 
 - Green throughout: svelte-check 0, cargo 258/0 (macOS + Linux), config validation all-pass.
 
 ## 2026-06-15 (later 3) — Dashboard viz overhaul: donuts, division color scheme, cross-platform creds
+
 Iterating live on the Dashboard "Cross-tool coverage" + division color. All green (svelte 0, cargo 258/0).
+
 - **CoverageMatrix → coverage-% first** (committed in PR #3): cells shade by `installed ÷ division catalog
   size` (0–100% per cell), not raw count vs global max.
 - **Then replaced the matrix with `CoverageDonuts.svelte`** (NEW, uncommitted): one donut per tool, sliced by
@@ -516,6 +539,7 @@ Iterating live on the Dashboard "Cross-tool coverage" + division color. All gree
   row-click; the dashboard bars call `ui.openTools(t.id)`.
 
 ### ⏳ RESUME HERE (queued, NOT done — Michael approved the plan, paused at 90% context)
+
 1. **Build the catalog-by-division segmented bar** (Michael's mockup: a single full-width proportion bar,
    segments = divisions colored via `corpus.colorOf`, with leader-line callouts above/below — top row = larger
    divisions near their segment centers, bottom row = smaller divisions EVENLY spaced with angled dotted
@@ -531,11 +555,14 @@ Iterating live on the Dashboard "Cross-tool coverage" + division color. All gree
    in `categoryIcon.ts` (it statically imports ~19 icons) → add `Map` + `Workflow` imports + map entries, else
    they fall back to HelpCircle.
 4. Then: commit the color-scheme batch + push (onto PR #3), and the catalog PR #592 awaits merge.
+
 - **Uncommitted at checkpoint**: agency-categories.json, corpus/mod.rs, types.rs, AgencyDashboard.svelte,
   ToolsView.svelte, corpus.svelte.ts, ui.svelte.ts, types.ts, + NEW CoverageDonuts.svelte.
 
 ## 2026-06-15 (later 4) — Catalog-by-division chart DONE + icon tinting (resume items 1–3 all closed)
+
 All three queued items landed; green (svelte-check 0). Built live with Michael's screenshot feedback each round.
+
 - **`CatalogByDivision.svelte`** (NEW) replaces the orange `<ul class="bars">` bar-list in AgencyDashboard.
   ONE proportional bar: a `<button>` segment per division, width ∝ count, painted with `corpus.colorOf`,
   thin inset separators, hover brighten. Header reads "{total} agents … 100%". Labels span FOUR lanes:
@@ -563,6 +590,7 @@ All three queued items landed; green (svelte-check 0). Built live with Michael's
   categoryIcon.ts. Next: merge PR #3 → main, then VM matrix Win/Linux build verify.
 
 ## 2026-06-15 (later 5) — PR #3 MERGED to main; giant-donut fix; full VM matrix GREEN (21/0/1)
+
 - **PR #3 merged** (`release-planning → main`, merge commit 633ff3ff). Catalog-by-division + icon work shipped.
 - **Giant CoverageDonut bug** (Michael: "that ain't right" — one donut ballooned to full card width). ROOT
   CAUSE: the donut `<svg>` had only `viewBox` + relied on `.cd-chart { width:132px }`; when that scoped style
@@ -584,9 +612,11 @@ All three queued items landed; green (svelte-check 0). Built live with Michael's
 - **Uncommitted**: CoverageDonuts.svelte (the donut hardening) — awaiting Michael's go to branch + PR (on main).
 
 ## 2026-06-15 (later 6) — app reads catalog divisions.json directly (corpus, backend-only)
+
 Catalog PR #592 merged (divisions.json now canonical, with a check-divisions CI linter + becoming the CLI
 installer source). Verified the catalog clone's divisions.json (18 divisions) is byte-in-sync with the app's
 bundled `agency-categories.json` (no drift). Then wired the app to read it directly:
+
 - `Corpus` gained `division_meta: BTreeMap<String, CategoryMetaRow>`, resolved at build time in
   `resolve_active` via new **`load_division_meta(catalog_root)`**: start from the bundled floor
   (`bundled_division_meta()` ← `agency-categories.json`), then OVERLAY the catalog root's `divisions.json`
@@ -603,6 +633,7 @@ bundled `agency-categories.json` (no drift). Then wired the app to read it direc
   raw string with hex colors needs `r##"…"##` (a `"#` closes `r#"…"#`).
 
 ## 2026-06-15 (later 7) — catalog #593 (integrations purge), strategy-docs finding, default-landing fix
+
 - **Renderer parity "failure" was a CATALOG data issue, NOT a render bug.** PR #5's matrix run hit a Codex
   parity mismatch on `design/design-brand-guardian.md`. Root cause: the catalog clone had been pulled to
   upstream `main` (232→**748** files), and `integrations/` (957 files: openclaw 427, opencode 232,
@@ -627,7 +658,9 @@ bundled `agency-categories.json` (no drift). Then wired the app to read it direc
   consider also dropping `strategy` from the division set (0 agents). Then we're clear to cut **v0.1.0**.
 
 ## 2026-06-16 — v0.1.0 SHIPPED (cross-platform, signed) + repo PUBLIC + Homebrew tap
-Cut the first public release: **github.com/msitarzewski/agency-agents-app/releases/tag/v0.1.0**, all 7 artifacts.
+
+Cut the first public release: **github.com/deuriib/agency-agents-app/releases/tag/v0.1.0**, all 7 artifacts.
+
 - **macOS** aarch64 + x64 DMGs — signed + **notarized** (spctl: accepted / Notarized Developer ID; stapler ok).
   Built locally via `scripts/release.sh` (dual-arch; host native, x64 cross via rustup).
 - **Linux** deb/rpm/AppImage (x86_64) + **Windows** x64/arm64 NSIS — built by NEW GitHub Actions workflows
@@ -650,7 +683,9 @@ Cut the first public release: **github.com/msitarzewski/agency-agents-app/releas
   Red herrings ruled out: toolchain, linker, Xcode CLT-vs-beta, PATH/node shims, ulimit (1M), disk (5TB), RAM (128GB).
 
 ## 2026-06-21 — v0.1.2: tool registry single-source + all 13 tools + Osaurus + Playbook + Projects dashboard
+
 Two PRs merged (`main` @ `1df932c`):
+
 - **PR #18** — Tool registry as the single source of truth. Killed the Rust `Tool` enum (a tool is now a string
   id; label/detect/version/dests/scope are registry lookups, `render()` dispatches on a `format` key); deleted
   the frontend ACCENTS/ICONS_SVG/SHORT/hardcoded SUPPORTED_TOOLS. All 13 tools modeled (incl. Kimi), real brand
@@ -671,9 +706,11 @@ Two PRs merged (`main` @ `1df932c`):
   `tasks/2026-06/260621_tool-registry-12-tools-osaurus.md`.
 
 ## 2026-06-23 — v0.2.0 SHIPPED: first feature release + LIVE auto-update (cross-platform, both Mac arches)
+
 Cut **v0.2.0** — the first release since the v0.1.0 launch. The manifests still said `0.1.0` and the only tag
 was `v0.1.0`, so the internally-tracked "0.1.1"/"0.1.2" milestones (IA re-org + registry/Osaurus/Playbook) were
 never separate releases; they ship here. Then took it further: **turned auto-update on for real.**
+
 - **Release prep (PR #21, merged):** version 0.1.0→0.2.0 (`package.json`+`tauri.conf.json`+`Cargo.toml`+`Cargo.lock`);
   consolidated `docs/release-notes/0.2.0.md`; README four-pillar/Teams/Projects/registry/Osaurus pass (+ Osaurus
   install-target row, 8 installable); `docs/PLAN.md` refresh (Phase D = done via the registry; post-0.2.0 punch

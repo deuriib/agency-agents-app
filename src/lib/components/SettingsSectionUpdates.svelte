@@ -78,7 +78,9 @@
       see the changelog + assets even when the manifest snippet is
       terse. */
   let releaseNotesUrl = $derived(
-    info ? `https://github.com/msitarzewski/agency-agents-app/releases/tag/v${info.version}` : null,
+    info
+      ? `https://github.com/deuriib/agency-agents-app/releases/tag/v${info.version}`
+      : null,
   );
 
   function onOpenReleaseNotes() {
@@ -105,7 +107,9 @@
         class="btn-secondary"
         onclick={onCheckNow}
         disabled={offline || updater.checking}
-        title={offline ? i18n.t("common.disabledByOffline") : i18n.t("updates.checkManifestTitle")}
+        title={offline
+          ? i18n.t("common.disabledByOffline")
+          : i18n.t("updates.checkManifestTitle")}
       >
         {#if updater.checking}
           <span class="spin"><Loader size={14} /></span>
@@ -115,7 +119,9 @@
           {i18n.t("updates.checkNow")}
         {/if}
       </button>
-      <span class="meta">{i18n.t("updates.lastChecked", { time: lastCheckedLabel })}</span>
+      <span class="meta"
+        >{i18n.t("updates.lastChecked", { time: lastCheckedLabel })}</span
+      >
     </div>
     {#if offline}
       <p class="hint">{i18n.t("updates.offlineHint")}</p>
@@ -154,7 +160,9 @@
       <span class="toggle-track" aria-hidden="true"></span>
       <span class="toggle-label">{i18n.t("updates.autoInstall")}</span>
     </label>
-    <p class="hint" id="auto-install-hint">{i18n.t("updates.autoInstallHint")}</p>
+    <p class="hint" id="auto-install-hint">
+      {i18n.t("updates.autoInstallHint")}
+    </p>
   </div>
 
   <!-- Row 3: Update channel -->
@@ -168,16 +176,22 @@
 
   <!-- Conditional: notice card when an update is available -->
   {#if info}
-    <div class="notice" role="region" aria-label={i18n.t("updates.availableAria", { version: info.version })}>
+    <div
+      class="notice"
+      role="region"
+      aria-label={i18n.t("updates.availableAria", { version: info.version })}
+    >
       <div class="notice-head">
-        <strong>{i18n.t("updates.available", { version: info.version })}</strong>
+        <strong>{i18n.t("updates.available", { version: info.version })}</strong
+        >
         <button
           type="button"
           class="link"
           onclick={onOpenReleaseNotes}
           aria-label={i18n.t("common.openReleaseNotes")}
         >
-          {i18n.t("updates.releaseNotes")} <ExternalLink size={12} />
+          {i18n.t("updates.releaseNotes")}
+          <ExternalLink size={12} />
         </button>
       </div>
 
@@ -192,12 +206,14 @@
           onclick={onRelaunch}
           title={i18n.t("updates.relaunchTitle")}
         >
-          <RotateCw size={14} /> {i18n.t("common.relaunchNow")}
+          <RotateCw size={14} />
+          {i18n.t("common.relaunchNow")}
         </button>
       {:else if updater.installing}
         <div class="progress" role="status" aria-live="polite">
           <span class="spin"><Loader size={16} /></span>
-          <span>{i18n.t("updates.downloading", { version: info.version })}</span>
+          <span>{i18n.t("updates.downloading", { version: info.version })}</span
+          >
         </div>
       {:else if updater.error}
         <div class="result error">
@@ -209,9 +225,12 @@
           class="btn-secondary"
           onclick={onTryAgain}
           disabled={offline}
-          title={offline ? i18n.t("common.disabledByOffline") : i18n.t("updates.retryTitle")}
+          title={offline
+            ? i18n.t("common.disabledByOffline")
+            : i18n.t("updates.retryTitle")}
         >
-          <RotateCw size={14} /> {i18n.t("common.tryAgain")}
+          <RotateCw size={14} />
+          {i18n.t("common.tryAgain")}
         </button>
       {:else}
         <button
@@ -219,9 +238,12 @@
           class="btn-primary"
           onclick={onInstall}
           disabled={offline}
-          title={offline ? i18n.t("common.disabledByOffline") : i18n.t("updates.installTitle", { version: info.version })}
+          title={offline
+            ? i18n.t("common.disabledByOffline")
+            : i18n.t("updates.installTitle", { version: info.version })}
         >
-          <Download size={14} /> {i18n.t("updates.install")}
+          <Download size={14} />
+          {i18n.t("updates.install")}
         </button>
       {/if}
 
@@ -284,9 +306,16 @@
     cursor: pointer;
     user-select: none;
   }
-  .toggle input { position: absolute; opacity: 0; pointer-events: none; }
+  .toggle input {
+    position: absolute;
+    opacity: 0;
+    pointer-events: none;
+  }
   /* Inert "Install updates automatically" row — visible, clearly off. */
-  .toggle.is-disabled { opacity: 0.55; cursor: not-allowed; }
+  .toggle.is-disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+  }
   .toggle-track {
     width: 36px;
     height: 20px;
@@ -294,7 +323,8 @@
     border: 1px solid var(--color-border);
     border-radius: 999px;
     position: relative;
-    transition: background-color var(--motion-duration-fast) var(--motion-ease-out);
+    transition: background-color var(--motion-duration-fast)
+      var(--motion-ease-out);
   }
   .toggle-track::after {
     content: "";
@@ -355,15 +385,25 @@
     background: var(--color-accent, #b8542a);
     color: white;
   }
-  .btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
-  .btn-primary:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-primary:hover:not(:disabled) {
+    filter: brightness(1.05);
+  }
+  .btn-primary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
   .btn-secondary {
     background: var(--color-surface-raised);
     color: var(--color-text-primary);
     border: 1px solid var(--color-border);
   }
-  .btn-secondary:hover:not(:disabled) { background: var(--color-surface); }
-  .btn-secondary:disabled { opacity: 0.6; cursor: not-allowed; }
+  .btn-secondary:hover:not(:disabled) {
+    background: var(--color-surface);
+  }
+  .btn-secondary:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
 
   /* ---------- Notice card (when update is available) ---------- */
   .notice {
@@ -396,9 +436,12 @@
     text-decoration: underline;
     text-underline-offset: 2px;
   }
-  .link:hover { filter: brightness(1.1); }
+  .link:hover {
+    filter: brightness(1.1);
+  }
   .link:focus-visible {
-    outline: 2px solid var(--color-focus, var(--color-brand, var(--color-accent)));
+    outline: 2px solid
+      var(--color-focus, var(--color-brand, var(--color-accent)));
     outline-offset: 2px;
     border-radius: var(--radius-sm);
   }
@@ -412,8 +455,12 @@
     font-size: var(--text-body-sm);
     color: var(--color-text-primary);
   }
-  .result.success { color: #2e7d32; }
-  .result.error { color: var(--color-warning-strong, #b45309); }
+  .result.success {
+    color: #2e7d32;
+  }
+  .result.error {
+    color: var(--color-warning-strong, #b45309);
+  }
 
   /* Release notes body — the manifest's free-form `notes` text. */
   .notes-body {
@@ -432,10 +479,16 @@
     animation: spin 1s linear infinite;
   }
   @keyframes spin {
-    from { transform: rotate(0deg); }
-    to   { transform: rotate(360deg); }
+    from {
+      transform: rotate(0deg);
+    }
+    to {
+      transform: rotate(360deg);
+    }
   }
   @media (prefers-reduced-motion: reduce) {
-    .spin { animation: none; }
+    .spin {
+      animation: none;
+    }
   }
 </style>

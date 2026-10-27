@@ -147,12 +147,12 @@ mkdir -p "$DIST_DIR"
 # the manifest generator and the release notes editorial step separate
 # is the simpler shape than wiring CHANGELOG parsing here.
 PUB_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-URL="https://github.com/msitarzewski/agency-agents-app/releases/download/v${VERSION}/${ARTIFACT_RELEASE_NAME}"
+URL="https://github.com/deuriib/agency-agents-app/releases/download/v${VERSION}/${ARTIFACT_RELEASE_NAME}"
 
 cat > "$MANIFEST_PATH" <<EOF
 {
   "version": "${VERSION}",
-  "notes": "See https://github.com/msitarzewski/agency-agents-app/releases/tag/v${VERSION} for release notes.",
+  "notes": "See https://github.com/deuriib/agency-agents-app/releases/tag/v${VERSION} for release notes.",
   "pub_date": "${PUB_DATE}",
   "platforms": {
     "darwin-aarch64": {

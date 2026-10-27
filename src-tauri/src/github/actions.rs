@@ -80,7 +80,7 @@ const API_BASE: &str = "https://api.github.com";
 const USER_AGENT: &str = concat!(
     "agency-agents-app/",
     env!("CARGO_PKG_VERSION"),
-    " (+https://github.com/msitarzewski/agency-agents-app)"
+    " (+https://github.com/deuriib/agency-agents-app)"
 );
 
 // ---------- DTOs ----------

@@ -704,7 +704,7 @@ fn build_oauth_client() -> Result<reqwest::Client, AppError> {
         .user_agent(concat!(
             "agency-agents-app/",
             env!("CARGO_PKG_VERSION"),
-            " (+https://github.com/msitarzewski/agency-agents-app)"
+            " (+https://github.com/deuriib/agency-agents-app)"
         ))
         .build()
         .map_err(|e| AppError::Network {

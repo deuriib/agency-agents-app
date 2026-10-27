@@ -16,7 +16,7 @@
   import { safeOpenUrl } from "$lib/util/url";
   import { i18n } from "$lib/stores/i18n.svelte";
 
-  const REPO_URL = "https://github.com/msitarzewski/agency-agents-app";
+  const REPO_URL = "https://github.com/deuriib/agency-agents-app";
   const CATALOG_URL = "https://github.com/msitarzewski/agency-agents";
 
   let version = $state<string | null>(null);
@@ -46,8 +46,12 @@
     <div class="row">
       <dt>{i18n.t("settings.about.app")}</dt>
       <dd>
-        <button class="link" type="button" onclick={() => void safeOpenUrl(REPO_URL)}>
-          <code>github.com/msitarzewski/agency-agents-app</code>
+        <button
+          class="link"
+          type="button"
+          onclick={() => void safeOpenUrl(REPO_URL)}
+        >
+          <code>github.com/deuriib/agency-agents-app</code>
           <ExternalLink size={12} />
         </button>
       </dd>
@@ -55,7 +59,11 @@
     <div class="row">
       <dt>{i18n.t("settings.about.catalog")}</dt>
       <dd>
-        <button class="link" type="button" onclick={() => void safeOpenUrl(CATALOG_URL)}>
+        <button
+          class="link"
+          type="button"
+          onclick={() => void safeOpenUrl(CATALOG_URL)}
+        >
           <code>github.com/msitarzewski/agency-agents</code>
           <ExternalLink size={12} />
         </button>
@@ -70,7 +78,12 @@
 </div>
 
 <style>
-  .section { display: flex; flex-direction: column; gap: var(--space-5); max-width: 560px; }
+  .section {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-5);
+    max-width: 560px;
+  }
   h2 {
     font-size: var(--text-h1);
     font-weight: var(--fw-semibold);
@@ -102,7 +115,10 @@
     font-size: var(--text-body);
     color: var(--color-text-primary);
   }
-  .mono { font-family: var(--font-mono); font-size: var(--text-mono); }
+  .mono {
+    font-family: var(--font-mono);
+    font-size: var(--text-mono);
+  }
   .link {
     display: inline-flex;
     align-items: center;
@@ -113,7 +129,9 @@
     background: transparent;
     padding: 0;
   }
-  .link:hover { text-decoration: underline; }
+  .link:hover {
+    text-decoration: underline;
+  }
   .link code {
     font-family: var(--font-mono);
     font-size: var(--text-mono);

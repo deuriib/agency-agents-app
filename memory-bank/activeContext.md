@@ -10,7 +10,7 @@ notarisation come from the Keychain, so Mac builds cannot come from CI), then th
 **Landed 2026-09-14 — the release push.** Seven PRs verified *together* in a throwaway worktree before any of them
 touched `main` (279 Rust tests, `svelte-check` 322 files / 0 errors), then merged in order: #95 `brew trust` in the
 README, #69 embed the WebView2 bootstrapper, #77 correct `TAURI_CONFIG` for the CLI, #85 no Windows console flashes,
-#99 AppArmor unconfined for the Linux release container, #98 in-range dependency bumps, #101 Turkish localisation.
+# 99 AppArmor unconfined for the Linux release container, #98 in-range dependency bumps, #101 Turkish localisation.
 Issues #96, #87 and #84 closed; **#65 deliberately left open** — #69 is a strong candidate but nobody has reproduced
 it on a clean Windows box, and closing on reasoning alone would be claiming a fix we have not demonstrated.
 
@@ -31,6 +31,7 @@ No `nghttp2` error. **A harness lesson came with it**: the first capture read em
 `cat /proc/self/environ | tr` works. Always prove a fixture can show the failure before trusting its silence.
 
 **Two live bugs found and not yet fixed.**
+
 - **`PYTHONHOME`/`PYTHONPATH` leak into AppImage children** — the same class as #94 at different variables, and the
   sanitiser does not cover them. The bundle contains no Python (`usr/bin` holds exactly `agency-agents-app` and
   `xdg-open`), so a Python child dies with `ModuleNotFoundError: No module named 'encodings'`. **`aider` is a
@@ -67,6 +68,7 @@ confirmed silent after, `brew audit --cask --strict` exits 0. #96 was the more s
 untrusted third-party casks outright, so the documented install path failed at the first command until #95.
 
 **Landed today (PR #102)** — two Linux bugs that compounded each other, both reported by @mrKlar:
+
 - **#94 — AppImage child processes inherited the bundle library path.** linuxdeploy's `AppRun.wrapped` exports
   `LD_LIBRARY_PATH` with the bundle's dirs **first** and the caller's original appended, saving **no copy** of the
   original, so there is nothing to restore — the fix must remove. Every spawned child inherited it, so a *host*
@@ -87,6 +89,7 @@ release fix, #100 `cargo fmt` the whole backend), @HBBTR #101 Turkish i18n, @el-
 cask trust). @mrKlar filed #92/#93/#94 in one sitting — high-quality, mechanism-level reports.
 
 **Open issues clustered by platform** (fix them in one release, not one at a time):
+
 - *Windows*: #65 "installs, runs, window never opens, no error" — our own **#69** (WebView2 bootstrapper, +3 lines)
   is the likely fix and has been sitting since 07-12; #66 Antigravity not detected; #84 terminal flash, fixed by
   @ROTl24's **#85**.
@@ -120,7 +123,7 @@ not started. 8 open PRs, all mergeable (#81 RTL, #82 healthcare label, #85, #80,
 launch (the internally-tracked "0.1.1"/"0.1.2" milestones were never cut separately — they ship here), and
 **auto-update is now LIVE** at [`agencyagents.app/updater.json`](https://agencyagents.app/updater.json) for
 **both Mac arches** (`darwin-aarch64` + `darwin-x86_64`). Release at
-[releases/tag/v0.2.0](https://github.com/msitarzewski/agency-agents-app/releases/tag/v0.2.0): **9 assets** (macOS
+[releases/tag/v0.2.0](https://github.com/deuriib/agency-agents-app/releases/tag/v0.2.0): **9 assets** (macOS
 aarch64+x64 signed/notarized DMGs **+ updater tarballs**, Linux deb/rpm/AppImage, Windows x64/arm64). Homebrew:
 `brew tap msitarzewski/agency-agents && brew install --cask agency-agents` (cask @ 0.2.0). Cross-platform CI in
 `.github/workflows/` (linux-build, windows-build) fires on `v*` tags; macOS DMGs build locally via
@@ -129,6 +132,7 @@ aarch64+x64 signed/notarized DMGs **+ updater tarballs**, Linux deb/rpm/AppImage
 **Workflow (from 2026-06-16):** ALL changes go through a **branch → PR → merge to `main`**. No direct commits to main.
 
 ## ✅ v0.2.0 — first feature release + LIVE auto-update — SHIPPED (2026-06-23, PRs #21 + #22; `main` @ 16182e5)
+
 - **Auto-update is on.** Endpoint `agencyagents.app/updater.json` (Caddy on `umacbookpro` from `~/Sites/agency-agents/`,
   sibling vhost to the live `brew-browser.zerologic.com` manifest). **Dedicated agency signing key `ABF5AFD8`**
   (embedded pubkey in `tauri.conf.json`; private key + password in the **macOS Keychain**, services
@@ -154,12 +158,14 @@ aarch64+x64 signed/notarized DMGs **+ updater tarballs**, Linux deb/rpm/AppImage
   svelte-check 0, signed+notarized, CI green.
 
 ## ✅ v0.1.2 — Tool registry + Osaurus + Playbook + Projects dashboard — SHIPPED (2026-06-21, PRs #18 + #19; `main` @ 1df932c)
+
 **Tool knowledge is now a single source of truth.** It consolidated to the single canonical `tools.json` the
 upstream `agency-agents` repo OWNS (twin of `divisions.json`, CI-guarded by its no-jq `check-tools.sh`); both the
 Rust backend (`registry.rs`, `include_str!`) and the frontend (`toolRegistry.ts`) read it. **The Rust `Tool` enum
 is GONE** — a tool is a string id; `label`/`detect`/`version`/`dests`/`scope` are registry lookups; `render()`
 dispatches on the JSON `format` key. Frontend deleted ACCENTS/ICONS_SVG/SHORT/hardcoded SUPPORTED_TOOLS.
 **Adding a tool = editing one JSON file** (+ a Rust formatter only for a brand-new output format).
+
 - **All 13 tools** modeled (incl. Kimi, Osaurus); Tools panel shows installable + recognized-only (dimmed). Real
   brand logos (Lobe Icons, MIT) under `assets/tools/`, letter fallback otherwise.
 - **Installability derived, not stored:** `installable(tool) = format ∈ IMPLEMENTED_FORMATS` ({identity,
@@ -179,7 +185,9 @@ Green: cargo 264/0, svelte-check 0, build clean. Upstream `agency-agents` (same 
 `tools.json` + `check-tools.sh` + `check-tools.yml` landed (aa PRs #605/#606).
 
 ## ✅ v0.1.1 IA arc — SHIPPED (2026-06-17 → 06-20, PRs #15 + #16, + the deploy-browser PR)
+
 The whole "how people think about agents" reorganization landed:
+
 - **Divisions landing** — the Agents tab opens on divisions; select-mode → bulk deploy.
 - **Install-state lens** — filter the agent list by deployment state (In sync / Outdated / Untracked / Missing /
   Not installed), counts scoped to the division.
@@ -200,6 +208,7 @@ The whole "how people think about agents" reorganization landed:
 **Four-pillar model (drives IA copy):** Agents = *who* · Tools = *how* · Teams = *which* · Projects = *where*.
 
 ## 🔵 Backlog (next — full list in `docs/PLAN.md` post-0.2.0 punch list)
+
 - **Opt-in automatic install** — the v0.2.0 "Install updates automatically" toggle is inert; wire it to a real
   off-by-default background download → verify → install (live updater is check → notify → one-click install today).
 - **Refresh `tools.json` from the catalog clone** (vs. the bundled baseline) — like the corpus + `divisions.json`;
@@ -221,6 +230,7 @@ in the shim though it works natively.
 **Last updated**: 2026-06-23
 
 ## ✅ Pre-release polish (2026-06-15) — committed + pushed on `release-planning`
+
 - **brew vestige cleanup**: error-type rename (`BrewError*`→`AppError*`), removed dead `catalogAutoRefresh`
   setting, removed the dead error codes (`brew_*`, `job_not_found`, `canceled`, `feature_disabled`,
   `vulns_not_installed`), and **deleted the brew-era Python pipeline** (`tools/{catalog,categorize,enrich,
@@ -261,6 +271,7 @@ in the shim though it works natively.
 - **Green throughout**: svelte-check 0 errors, cargo 258/0 (macOS + Linux), config validation all-pass.
 
 ## ✅ Phase C (2026-06-14) — both red items closed
+
 - **Renderer parity VERIFIED.** `render/mod.rs` mirrors the upstream shell converter byte-for-byte
   (`source_field`/`source_body`/`slugify`/`output_slug`); new `--ignored` test diffs the real
   `scripts/convert.sh` → **232 agents × 5 transform tools = 1160/1160 byte-identical**. The
@@ -275,6 +286,7 @@ in the shim though it works natively.
   (the re-org landed). Green: cargo 258/0 + parity 1/0, svelte-check 0, build clean.
 
 ## 🟣 Tahoe app icon (read first if touching icons)
+
 macOS 26 renders icons from a compiled **`Assets.car`** (Icon Composer Liquid Glass), NOT `.icns` — `.icns`
 -only = blank/gray squircle ("icon jail"). FIXED: `actool` (full Xcode only, by path) compiles
 `docs/icon/AppIcon.icon` → `src-tauri/Assets.car` (in `bundle.resources`) + Tahoe-aware
@@ -282,8 +294,8 @@ macOS 26 renders icons from a compiled **`Assets.car`** (Icon Composer Liquid Gl
 **Don't run `npm run tauri icon`** (clobbers the glass icns). Full recipe: `docs/icon/README-liquid-glass.md`.
 Dev Dock hack REMOVED (lib.rs plain `.run()`, objc2 deps dropped).
 
-
 ## Current state (read NEXT-SESSION.md for the full picture + IMMEDIATE backlog)
+
 - **Phase B + nav + Tools (2026-06-09):** Dashboard has 4 dependency-free charts (`HealthDonut`,
   `CoverageMatrix` category×tool, coverage-by-tool bars, category distribution). **Back/forward nav**
   (titlebar ◀▶, ⌘[/], mouse 3/4) over a `ui` NavLocation history; `agentsCategory`+`agentsSelected`
@@ -312,6 +324,7 @@ Dev Dock hack REMOVED (lib.rs plain `.run()`, objc2 deps dropped).
   (2) **uninstall safety** — RESOLVED (backup-first for modified, none for byte-identical, abort-on-fail).
 
 ## (historical) Earlier this arc
+
 - **Adopt → Track**: destructive Adopt gone. `track_agent` records provenance, writes nothing; every
   write backs up first (`<app_data>/backups/`); `agent_diff` for review-before-Update.
 - **categories from tooling**: `discover_categories` parses `AGENT_DIRS` from
@@ -331,12 +344,14 @@ Dev Dock hack REMOVED (lib.rs plain `.run()`, objc2 deps dropped).
 > gotchas: `NEXT-SESSION.md`. Build spec: `contracts.md`. Architecture: `systemPatterns.md`.
 
 ## How to run (dev)
+
 - `npm run tauri dev` from repo root. **Dev server is on port 1430** (NOT 1420 — that's
   brew-browser; sharing it makes one app load the other's frontend). HMR for frontend; Rust changes
   recompile. The app opens on **Agents** (personas).
 - Reference clones (read-only): `/tmp/brew-browser-inspect`, `/tmp/agency-agents-inspect`.
 
 ## What works (verified)
+
 - **Agents** catalog (210 agents / 16 categories), search, persona detail with an **Install** menu.
 - **Library** — flat list of installs; your ~184 `install.sh` agents show as `foreign` with Adopt.
 - **Tools**, **Loadouts** (Agentfile), **Dashboard** (agency rollup), Activity, Settings (⌘,).
@@ -345,16 +360,19 @@ Dev Dock hack REMOVED (lib.rs plain `.run()`, objc2 deps dropped).
 - New brain-circuit **app icon** (dark shipped; light master in `docs/icon/`). About window rebranded.
 
 ## Immediate next: Michael runs it, then #2 / #3
+
 **#1 slices 1–4 ✅ done.** Remaining for #1 (deferred refinements, non-blocking):
+
 - `aliases.json` (slug renames across catalog versions) — not yet honored.
 - Explicit **orphan** surfacing (ledger rows whose slug left the catalog) + unique-slug enforcement.
 - `.agency-cache/` convention + add to the agency-agents repo `.gitignore` (cache not yet written).
 - Symlink-aware reconcile (the `~/.claude` alias case) — still the old behavior.
 
 Then: **#2 Track-all / Update-all**; **#3 tool-grouped Library IA** (L1 tools+counts → L2 per-tool)
-+ wire `agent_diff` into a review-before-Update UI.
+- wire `agent_diff` into a review-before-Update UI.
 
 ## Decisions locked (this session)
+
 - Build order: **Both, Track first** → Track DONE, now #1.
 - Clone detection: **picker-primary + a "Find Agency Agents" button** (opt-in scan, not auto).
 - Existing clone: **manage-with-permission**. Managed path: **`~/.agency-agents`**.
@@ -362,5 +380,6 @@ Then: **#2 Track-all / Update-all**; **#3 tool-grouped Library IA** (L1 tools+co
 - Categories: **parse from repo tooling** (`AGENT_DIRS` in convert.sh), not a frontmatter heuristic.
 
 ## ✅ RESOLVED: "Adopt" is no longer unsafe
+
 Adopt → **Track** (non-destructive) + backup-on-write shipped this session. The old clobber path is
 gone.
