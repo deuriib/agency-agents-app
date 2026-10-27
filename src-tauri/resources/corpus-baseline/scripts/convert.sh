@@ -151,6 +151,7 @@ convert_antigravity() {
 ---
 name: $(yaml_quote "$slug")
 description: $(yaml_quote "$description")
+subagent: true
 ---
 ${body}
 HEREDOC
