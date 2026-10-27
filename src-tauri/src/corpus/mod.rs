@@ -103,17 +103,17 @@ fn parse_agent_dirs(script: &str) -> Option<Vec<String>> {
 /// GitHub `codeload` tarball for the live corpus. Streamed, gunzipped,
 /// and unpacked on [`corpus_refresh`]. No git binary required.
 const CORPUS_TARBALL_URL: &str =
-    "https://codeload.github.com/msitarzewski/agency-agents/tar.gz/refs/heads/main";
+    "https://codeload.github.com/deuriib/agency-agents/tar.gz/refs/heads/main";
 
 /// Git remote used to clone/pull a managed catalog when `git` is available.
-const CATALOG_GIT_URL: &str = "https://github.com/msitarzewski/agency-agents.git";
+const CATALOG_GIT_URL: &str = "https://github.com/deuriib/agency-agents.git";
 
 /// Dev-root directory names scanned (under `$HOME`) by the "Find Agency Agents"
 /// button when looking for an existing clone.
 const SCAN_ROOTS: [&str; 7] = ["Software", "Projects", "git", "Developer", "code", "dev", "src"];
 
 /// User-Agent for the refresh fetch. Mirrors the catalog refresh style.
-const USER_AGENT: &str = "agency-agents/0.1 (+https://github.com/msitarzewski/agency-agents)";
+const USER_AGENT: &str = "agency-agents/0.1 (+https://github.com/deuriib/agency-agents)";
 
 /// Whole-request timeout for the tarball fetch. The repo is small (a few
 /// hundred small markdown files) so 60s is generous.

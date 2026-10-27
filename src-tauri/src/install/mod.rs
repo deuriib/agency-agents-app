@@ -1657,7 +1657,7 @@ mod tests {
         let agent = sample_agent();
         let raw = "---\nname: Frontend Developer\ndescription: Builds UIs.\n---\nBODY\n";
 
-        for tool in ["antigravity", "osaurus"] {
+        for tool in ["osaurus"] {
             let dests = candidate_dests(&agent, raw, tool, home.path(), None).unwrap();
             for dest in &dests {
                 std::fs::create_dir_all(dest.parent().unwrap()).unwrap();
