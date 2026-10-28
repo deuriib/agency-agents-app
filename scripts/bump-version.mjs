@@ -56,18 +56,19 @@ const files = {
   lock: resolve(ROOT, "src-tauri/Cargo.lock"),
 };
 
-// 1. package.json
-const pkg = readJSON(files.package);
-const prevPkg = pkg.version;
-pkg.version = version;
-writeJSON(files.package, pkg);
+// 1. package.json — targeted replacement to preserve formatting.
+const pkgText = readFileSync(files.package, "utf8");
+const pkgRe = /("version"\s*:\s*")[^"]*(")/;
+if (!pkgRe.test(pkgText)) die("could not find version in package.json");
+const newPkg = pkgText.replace(pkgRe, `$1${version}$2`);
+writeFileSync(files.package, newPkg);
 
-// 2. tauri.conf.json
-const tauri = readJSON(files.tauri);
-const prevTauri = tauri.version ?? tauri.package?.version;
-if (tauri.version !== undefined) tauri.version = version;
-if (tauri.package?.version !== undefined) tauri.package.version = version;
-writeJSON(files.tauri, tauri);
+// 2. tauri.conf.json — targeted replacement to preserve formatting.
+const tauriText = readFileSync(files.tauri, "utf8");
+const tauriRe = /("version"\s*:\s*")[^"]*(")/;
+if (!tauriRe.test(tauriText)) die("could not find version in tauri.conf.json");
+const newTauri = tauriText.replace(tauriRe, `$1${version}$2`);
+writeFileSync(files.tauri, newTauri);
 
 // 3. Cargo.toml — only the [package] version line.
 const cargoText = readFileSync(files.cargo, "utf8");
@@ -79,15 +80,24 @@ writeFileSync(files.cargo, newCargo);
 
 // 4. Cargo.lock — update the agency-agents-app package entry only.
 const lockText = readFileSync(files.lock, "utf8");
-const lockRe = /(name = "agency-agents-app"\nversion = ")[^"]*(")/;
+const lockRe = /(name = "agency-agents-app"\r?\nversion = ")[^"]*(")/;
 if (!lockRe.test(lockText)) die("could not find agency-agents-app entry in Cargo.lock");
 const newLock = lockText.replace(lockRe, `$1${version}$2`);
 writeFileSync(files.lock, newLock);
 
-console.log(`bumped: ${prevPkg} -> ${version}`);
+// 5. package-lock.json — update the root package entries (top-level + packages[""]).
+const lockJsonPath = resolve(ROOT, "package-lock.json");
+const lockJsonText = readFileSync(lockJsonPath, "utf8");
+const lockJsonRe = /("name": "agency-agents-app",\r?\n\s+"version": ")[^"]*(")/g;
+if (!lockJsonRe.test(lockJsonText)) die("could not find agency-agents-app entries in package-lock.json");
+const newLockJson = lockJsonText.replace(lockJsonRe, `$1${version}$2`);
+writeFileSync(lockJsonPath, newLockJson);
+
+console.log(`bumped to ${version}`);
 console.log("  package.json");
 console.log("  src-tauri/tauri.conf.json");
 console.log("  src-tauri/Cargo.toml");
 console.log("  src-tauri/Cargo.lock");
+console.log("  package-lock.json");
 console.log("");
 console.log("Next: open a PR with these changes; release.yml creates the tag + draft release once merged.");
