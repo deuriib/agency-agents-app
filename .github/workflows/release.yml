@@ -1,11 +1,17 @@
 name: Release
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - "package.json"
+      - "src-tauri/Cargo.toml"
+      - "src-tauri/tauri.conf.json"
   workflow_dispatch:
     inputs:
       version:
-        description: "Version to release (e.g. 0.4.0) — must already be on main"
-        required: true
+        description: "Version to release (e.g. 0.4.0) — must already be on main. Leave empty to auto-detect."
+        required: false
         type: string
 
 permissions:
@@ -17,6 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.v.outputs.tag }}
+      version: ${{ steps.v.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -26,6 +33,9 @@ jobs:
         run: |
           set -euo pipefail
           V="${{ inputs.version }}"
+          if [ -z "$V" ]; then
+            V=$(node -e "console.log(require('./package.json').version)")
+          fi
           if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "invalid version: $V"; exit 1
           fi
@@ -33,14 +43,21 @@ jobs:
           if [ "$PKG" != "$V" ]; then
             echo "package.json ($PKG) != $V"; exit 1
           fi
+          # Skip if this version is already released.
+          if git rev-parse "v$V" >/dev/null 2>&1; then
+            echo "version $V already released (tag v$V exists); nothing to do."
+            exit 0
+          fi
           TAG="v$V"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
           # Release notes file must exist.
           test -f "docs/release-notes/$V.md" || { echo "missing docs/release-notes/$V.md"; exit 1; }
 
   tag:
     name: Create annotated tag
     needs: validate
+    if: needs.validate.outputs.tag != ''
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,6 +80,7 @@ jobs:
   release:
     name: Create draft release
     needs: [validate, tag]
+    if: needs.validate.outputs.tag != ''
     runs-on: ubuntu-latest
     outputs:
       upload_url: ${{ steps.create.outputs.upload_url }}
@@ -77,7 +95,7 @@ jobs:
         with:
           tag_name: ${{ needs.validate.outputs.tag }}
           name: ${{ needs.validate.outputs.tag }}
-          body_path: docs/release-notes/${{ inputs.version }}.md
+          body_path: docs/release-notes/${{ needs.validate.outputs.version }}.md
           draft: true
           prerelease: false
 
