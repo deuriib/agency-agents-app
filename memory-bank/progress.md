@@ -2,8 +2,9 @@
 
 ## Version 0.5.x (Current)
 - [x] v0.5.0: Version bump and release notes setup.
+- [x] v0.5.1: Added `antigravity-md` format support and multi-file schema fixes.
 
-### Pending for v0.5.1 / Next Milestone
+### Pending for v0.5.2 / Next Milestone
 - [ ] Implement multi-file reconcile logic (detect drift across multiple files).
 - [ ] Implement multi-file uninstall logic.
 - [ ] Enable Aider/Windsurf roster aggregation.
