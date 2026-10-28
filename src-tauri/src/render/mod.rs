@@ -653,7 +653,7 @@ mod tests {
         let out = render(&agent(), raw(), "antigravity").unwrap();
         assert_eq!(
             out,
-            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
+            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\nsubagent: true\n---\nYou are a frontend dev.\n"
         );
         assert_eq!(output_slug(&agent(), raw(), "antigravity"), "frontend-developer");
         // user-scope → ~/.gemini/config/agents/<name>.md
