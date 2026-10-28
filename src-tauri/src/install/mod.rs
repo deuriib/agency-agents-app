@@ -41,9 +41,18 @@ fn ledger_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 async fn load_ledger(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
     let path = ledger_path(app)?;
     match tokio::fs::read(&path).await {
-        Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
-            message: format!("parse installs.json: {e}"),
-        }),
+        Ok(bytes) => {
+            let mut recs: Vec<InstallRecord> = serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
+                message: format!("parse installs.json: {e}"),
+            })?;
+            // Backfill dests for older ledgers written before multi-file support.
+            for r in &mut recs {
+                if r.dests.is_empty() {
+                    r.dests = vec![r.dest.clone()];
+                }
+            }
+            Ok(recs)
+        }
         Err(_) => Ok(Vec::new()), // no ledger yet — nothing installed
     }
 }
@@ -131,13 +140,23 @@ fn record_for(
     body_hash: &str,
     corpus_version: &str,
     installed_at: &str,
+    dests: Vec<String>,
+    file_hashes: std::collections::BTreeMap<String, String>,
 ) -> InstallRecord {
+    let dests = if dests.is_empty() {
+        vec![primary_dest.to_string_lossy().to_string()]
+    } else {
+        dests
+    };
     InstallRecord {
         slug: agent.slug.clone(),
         tool: tool.to_string(),
         scope: render::scope_for(project_root),
         project_path: project_root.map(|p| p.to_string_lossy().to_string()),
         dest: primary_dest.to_string_lossy().to_string(),
+        dests,
+        file_hashes,
+        aggregate_slugs: Vec::new(),
         source_hash: source_hash.to_string(),
         body_hash: body_hash.to_string(),
         rendered_hash,
@@ -445,12 +464,19 @@ async fn write_agent_files_to(
     installed_at: &str,
     preferred_dest: Option<&Path>,
 ) -> Result<InstallRecord, AppError> {
-    let (bytes, rendered_hash) = render::render_with_hash(agent, raw, tool)?;
+    // Render all files (single or multi). Fall back to render_with_hash for
+    // tools not yet in render_files (keeps backward compat).
+    let rendered = match render::render_files(agent, raw, tool) {
+        Ok(files) => files,
+        Err(_) => {
+            let (bytes, _) = render::render_with_hash(agent, raw, tool)?;
+            vec![render::RenderedFile {
+                relative: String::new(),
+                bytes,
+            }]
+        }
+    };
     let mut paths = render::dests(tool, &agent.slug, home, project_root)?;
-    // Keep an existing install's filename variant (source slug vs converted
-    // slug), but only while that path is still a valid destination for the
-    // tool. A path the tool no longer reads (ZCode's user dir moved from
-    // ~/.config/zcode/agents to ~/.zcode/agents) must not pin updates there.
     let valid = candidate_dests(agent, raw, tool, home, project_root)?;
     let preferred_dest = preferred_dest.filter(|p| valid.iter().any(|v| v == p));
     if let Some(preferred) = preferred_dest {
@@ -460,17 +486,55 @@ async fn write_agent_files_to(
             paths.swap(0, index);
         }
     }
-    for dest in &paths {
+
+    // Map each dest path to its rendered bytes by filename suffix.
+    let mut file_hashes: std::collections::BTreeMap<String, String> =
+        std::collections::BTreeMap::new();
+    // Composite hash input: length-prefixed (relative, bytes) pairs.
+    let mut composite: Vec<u8> = Vec::new();
+    for rf in &rendered {
+        composite.extend_from_slice(rf.relative.as_bytes());
+        composite.push(0);
+        composite.extend_from_slice(rf.bytes.as_bytes());
+        composite.push(0);
+        file_hashes.insert(rf.relative.clone(), render::sha256_hex(rf.bytes.as_bytes()));
+    }
+    let rendered_hash = render::sha256_hex(&composite);
+
+    for (i, dest) in paths.iter().enumerate() {
+        // Find matching rendered file by basename.
+        let bytes = if rendered.len() == 1 {
+            rendered[0].bytes.as_bytes()
+        } else {
+            let name = dest
+                .file_name()
+                .map(|s| s.to_string_lossy().to_string())
+                .unwrap_or_default();
+            rendered
+                .iter()
+                .find(|rf| {
+                    rf.relative == name
+                        || rf
+                            .relative
+                            .rsplit('/')
+                            .next()
+                            .map(|s| s == name)
+                            .unwrap_or(false)
+                })
+                .map(|rf| rf.bytes.as_bytes())
+                .unwrap_or(rendered.get(i).map(|r| r.bytes.as_bytes()).unwrap_or(b""))
+        };
         if let Some(bdir) = backup_dir {
-            backup_if_differs(dest, bytes.as_bytes(), bdir, installed_at).await?;
+            backup_if_differs(dest, bytes, bdir, installed_at).await?;
         }
         if let Some(parent) = dest.parent() {
             tokio::fs::create_dir_all(parent).await.map_err(|e| AppError::Io {
                 message: format!("create {}: {e}", parent.display()),
             })?;
         }
-        atomic_write(dest, bytes.as_bytes()).await?;
+        atomic_write(dest, bytes).await?;
     }
+    let dests: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
     Ok(record_for(
         agent,
         &paths[0],
@@ -481,6 +545,8 @@ async fn write_agent_files_to(
         body_hash,
         corpus_version,
         installed_at,
+        dests,
+        file_hashes,
     ))
 }
 
