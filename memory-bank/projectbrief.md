@@ -2,7 +2,7 @@
 
 **Product**: Agency Agents
 **Bundle ID**: `com.zerologic.agency-agents-app`
-**Repo**: github:msitarzewski/agency-agents-app
+**Repo**: github:deuriib/agency-agents-app
 **Author**: Michael Sitarzewski / Zerologic
 **License**: MIT · No telemetry · No accounts
 
