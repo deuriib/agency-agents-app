@@ -85,10 +85,19 @@ if (!lockRe.test(lockText)) die("could not find agency-agents-app entry in Cargo
 const newLock = lockText.replace(lockRe, `$1${version}$2`);
 writeFileSync(files.lock, newLock);
 
+// 5. package-lock.json — update the root package entries (top-level + packages[""]).
+const lockJsonPath = resolve(ROOT, "package-lock.json");
+const lockJsonText = readFileSync(lockJsonPath, "utf8");
+const lockJsonRe = /("name": "agency-agents-app",\r?\n\s+"version": ")[^"]*(")/g;
+if (!lockJsonRe.test(lockJsonText)) die("could not find agency-agents-app entries in package-lock.json");
+const newLockJson = lockJsonText.replace(lockJsonRe, `$1${version}$2`);
+writeFileSync(lockJsonPath, newLockJson);
+
 console.log(`bumped to ${version}`);
 console.log("  package.json");
 console.log("  src-tauri/tauri.conf.json");
 console.log("  src-tauri/Cargo.toml");
 console.log("  src-tauri/Cargo.lock");
+console.log("  package-lock.json");
 console.log("");
 console.log("Next: open a PR with these changes; release.yml creates the tag + draft release once merged.");
