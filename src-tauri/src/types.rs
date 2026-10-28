@@ -203,8 +203,20 @@ pub struct InstallRecord {
     pub tool: Tool,
     pub scope: Scope,
     pub project_path: Option<String>,
-    /// Absolute path written.
+    /// Absolute path written (primary; kept for backward compat with older ledgers).
     pub dest: String,
+    /// All absolute paths written for this install (multi-file tools). Empty on
+    /// older ledgers; backfilled to `[dest]` at load time.
+    #[serde(default)]
+    pub dests: Vec<String>,
+    /// Per-file SHA-256 for multi-file installs (relative path -> hash). Empty
+    /// for single-file tools. `#[serde(default)]` for backward compat.
+    #[serde(default)]
+    pub file_hashes: std::collections::BTreeMap<String, String>,
+    /// For roster/aggregate tools: slugs included in the combined file.
+    /// `#[serde(default)]` for backward compat.
+    #[serde(default)]
+    pub aggregate_slugs: Vec<String>,
     pub source_hash: String,
     /// SHA-256 of the agent body at install time. Lets reconciliation label an
     /// available update cosmetic (body unchanged) vs substantive. `#[serde(default)]`

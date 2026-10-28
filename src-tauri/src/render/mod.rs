@@ -231,6 +231,119 @@ fn unsupported(tool: &str) -> AppError {
     }
 }
 
+/// A single file produced by a (possibly multi-file) renderer. `relative` is
+/// the path suffix under the tool's dest root (e.g. `agent.yaml` for Kimi,
+/// empty/`""` for single-file tools). `bytes` is the exact content to write.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedFile {
+    pub relative: String,
+    pub bytes: String,
+}
+
+/// Render ALL files for `tool` from `agent` (+ raw corpus source). Single-file
+/// tools return a one-element vector; multi-file tools (Kimi, OpenClaw, Vibe)
+/// return several. Roster/aggregate tools (Aider, Windsurf) are NOT handled
+/// here — they need corpus-wide aggregation and live in the install layer.
+/// Deterministic. This is the foundation for multi-file installability.
+pub fn render_files(
+    _agent: &Agent,
+    raw_source: &str,
+    tool: &str,
+) -> Result<Vec<RenderedFile>, AppError> {
+    let name = source_field(raw_source, "name");
+    let description = source_field(raw_source, "description");
+    let body = source_body(raw_source);
+    let slug = slugify(&name);
+    let format = registry::get(tool).and_then(|m| m.format.as_deref());
+
+    match format {
+        // Single-file formats: delegate to render() and wrap.
+        Some("identity")
+        | Some("cursor-mdc")
+        | Some("codex-toml")
+        | Some("gemini-md")
+        | Some("qwen-md")
+        | Some("zcode-md")
+        | Some("skill-md")
+        | Some("opencode-md") => {
+            let bytes = render(_agent, raw_source, tool)?;
+            Ok(vec![RenderedFile {
+                relative: String::new(),
+                bytes,
+            }])
+        }
+
+        // Kimi: per-agent dir with agent.yaml + system.md.
+        Some("kimi-agent") => {
+            let color = source_field(raw_source, "color");
+            let yaml = format!(
+                "name: {name}\ndescription: {desc}\n",
+                name = yaml_quote(&name),
+                desc = yaml_quote(&description),
+            );
+            let system = format!("{body}\n");
+            let _ = color;
+            let _ = slug;
+            Ok(vec![
+                RenderedFile {
+                    relative: "agent.yaml".to_string(),
+                    bytes: yaml,
+                },
+                RenderedFile {
+                    relative: "system.md".to_string(),
+                    bytes: system,
+                },
+            ])
+        }
+
+        // Vibe: per-agent .toml + prompts/.md.
+        Some("vibe-toml") => {
+            let toml = format!(
+                "name = \"{name}\"\ndescription = \"{desc}\"\n",
+                name = toml_escape(&name),
+                desc = toml_escape(&description),
+            );
+            Ok(vec![
+                RenderedFile {
+                    relative: format!("{slug}.toml"),
+                    bytes: toml,
+                },
+                RenderedFile {
+                    relative: format!("prompts/{slug}.md"),
+                    bytes: format!("{body}\n"),
+                },
+            ])
+        }
+
+        // OpenClaw: per-agent dir with three files.
+        Some("openclaw-workspace") => {
+            let vibe = source_field(raw_source, "vibe");
+            Ok(vec![
+                RenderedFile {
+                    relative: "SOUL.md".to_string(),
+                    bytes: format!("# {name}\n\n{vibe}\n", name = name, vibe = vibe),
+                },
+                RenderedFile {
+                    relative: "AGENTS.md".to_string(),
+                    bytes: format!("{body}\n"),
+                },
+                RenderedFile {
+                    relative: "IDENTITY.md".to_string(),
+                    bytes: format!("name: {name}\ndescription: {desc}\n", name = name, desc = description),
+                },
+            ])
+        }
+
+        // Roster/aggregate tools need corpus-wide context; not per-agent.
+        Some("aider-conventions") | Some("windsurf-rules") => Err(unsupported(tool)),
+
+        // hermes is plugin (CLI-only) — not renderable.
+        Some("hermes-router-plugin") => Err(unsupported(tool)),
+
+        _ => Err(unsupported(tool)),
+    }
+}
+
 /// Render the file content for `tool` from `agent` (+ the raw corpus `.md`
 /// source, used verbatim by identity tools). Deterministic.
 pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, AppError> {
@@ -870,5 +983,32 @@ mod tests {
             dests("cursor", "x", home, Some(proj)).unwrap()[0],
             proj.join(".cursor/rules/x.mdc")
         );
+    }
+
+    #[test]
+    fn render_files_kimi_is_multi() {
+        let files = render_files(&agent(), raw(), "kimi").unwrap();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().any(|f| f.relative == "agent.yaml"));
+        assert!(files.iter().any(|f| f.relative == "system.md"));
+    }
+
+    #[test]
+    fn render_files_vibe_is_multi() {
+        let files = render_files(&agent(), raw(), "vibe").unwrap();
+        assert_eq!(files.len(), 2);
+    }
+
+    #[test]
+    fn render_files_openclaw_is_multi() {
+        let files = render_files(&agent(), raw(), "openclaw").unwrap();
+        assert_eq!(files.len(), 3);
+    }
+
+    #[test]
+    fn render_files_single_wraps_one() {
+        let files = render_files(&agent(), raw(), "claudeCode").unwrap();
+        assert_eq!(files.len(), 1);
+        assert_eq!(files[0].relative, "");
     }
 }
