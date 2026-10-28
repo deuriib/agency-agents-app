@@ -45,12 +45,17 @@
   const agents = $derived<Agent[]>(corpus.agents.filter((a) => slugSet.has(a.slug)));
   const total = $derived(agents.length);
 
-  // Columns = every wired (installable) tool that can take an agent in SOME
-  // scope. Detection is a status, not a gate: an install creates the tool's
-  // directory on demand, so a tool that isn't (yet) detected on this machine
-  // must still be installable — otherwise newly supported tools (or tools used
-  // via an editor like VS Code Copilot) can never receive their first agent.
-  const cols = $derived(SUPPORTED_TOOLS.filter((t) => t.supportsUser || t.supportsProject));
+  // Columns = tools present on this device (detected, or already holding an
+  // install of this set), that can take an agent in SOME scope.
+  function detected(t: ToolDef): boolean {
+    return (
+      install.tools.length === 0 ||
+      install.tools.some((ti) => ti.tool === t.id && ti.detected) ||
+      install.installed.some((r) => r.tool === t.id && r.state !== "removed" && slugSet.has(r.slug))
+    );
+  }
+
+  const cols = $derived(SUPPORTED_TOOLS.filter((t) => (t.supportsUser || t.supportsProject) && detected(t)));
 
   // Rows = Global + each registered/used project.
   type Row = { kind: "global" } | { kind: "project"; path: string; label: string };
