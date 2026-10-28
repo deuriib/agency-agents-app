@@ -15,7 +15,7 @@
 - **Seed**: a bundled baseline corpus ships inside the app bundle (resources) so first
   launch works offline. On first run it is extracted to `corpus/`.
 - **Refresh**: fetch the GitHub tarball
-  `https://codeload.github.com/msitarzewski/agency-agents/tar.gz/refs/heads/main`,
+  `https://codeload.github.com/deuriib/agency-agents/tar.gz/refs/heads/main`,
   extract, atomically swap `corpus/`, rebuild `corpus-index.json`. Record the resolved
   commit SHA / tag as `corpus_version`. **No runtime git dependency.**
 - This mirrors brew-browser's bundled-catalog + live-refresh pattern, but the served

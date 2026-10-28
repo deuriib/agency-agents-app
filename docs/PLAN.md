@@ -1,8 +1,8 @@
 # Agency Agents App Plan
 
 **Product:** Agency Agents  
-**Repo:** `github:msitarzewski/agency-agents-app`  
-**Catalog:** `github:msitarzewski/agency-agents`  
+**Repo:** `github:deuriib/agency-agents-app`  
+**Catalog:** `github:deuriib/agency-agents`  
 **Stack:** Tauri 2, Rust, SvelteKit, Svelte 5, TypeScript  
 **License:** MIT
 

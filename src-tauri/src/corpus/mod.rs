@@ -15,7 +15,7 @@
 //!   (`resources/corpus-baseline/<category>/<slug>.md`). On first run it is
 //!   copied to `<app_data_dir>/corpus/` so the app works offline.
 //! - **Refresh** ([`corpus_refresh`]): fetch the GitHub tarball
-//!   `https://codeload.github.com/msitarzewski/agency-agents/tar.gz/refs/heads/main`,
+//!   `https://codeload.github.com/deuriib/agency-agents/tar.gz/refs/heads/main`,
 //!   extract the category dirs over the working copy, and rebuild
 //!   `corpus-index.json`. No runtime git dependency.
 //!
@@ -1116,6 +1116,19 @@ async fn provision_managed() -> Result<PathBuf, AppError> {
         message: "cannot resolve home directory".into(),
     })?;
     if looks_like_catalog(&path) {
+        // Migrate legacy clones provisioned from the upstream `msitarzewski/agency-agents`
+        // repo so the managed catalog tracks the `deuriib/agency-agents` default. Best
+        // effort: a failure here must not block an otherwise valid catalog.
+        if path.join(".git").exists() && git_available().await {
+            let origin = run_git(&["remote", "get-url", "origin"], Some(&path)).await.ok();
+            if origin.as_deref().map(str::trim) != Some(CATALOG_GIT_URL) {
+                let _ = run_git(
+                    &["remote", "set-url", "origin", CATALOG_GIT_URL],
+                    Some(&path),
+                )
+                .await;
+            }
+        }
         return Ok(path); // already provisioned
     }
 

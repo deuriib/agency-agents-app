@@ -64,7 +64,7 @@
           type="button"
           onclick={() => void safeOpenUrl(CATALOG_URL)}
         >
-          <code>github.com/msitarzewski/agency-agents</code>
+          <code>github.com/deuriib/agency-agents</code>
           <ExternalLink size={12} />
         </button>
       </dd>
