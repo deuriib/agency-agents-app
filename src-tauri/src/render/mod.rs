@@ -380,6 +380,13 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
             desc = yaml_quote(&description),
         ),
 
+        // Antigravity (CLI, IDE) subagent `.md`: name(=slug) + description + subagent frontmatter.
+        Some("antigravity-md") => format!(
+            "---\nname: {name}\ndescription: {desc}\nsubagent: true\n---\n{body}\n",
+            name = yaml_quote(&slug),
+            desc = yaml_quote(&description),
+        ),
+
         // Qwen Code SubAgent `.md`: the optional tool list is renamed to Qwen's
         // own tool names (see `qwen_tools`).
         Some("qwen-md") => {
@@ -424,7 +431,7 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
 
         // Agent-Skills `SKILL.md`: name (namespaced) + description frontmatter,
         // persona as the body. Mirrors upstream `convert_osaurus`,
-        // `convert_antigravity` and `convert_dsh`. The `agency-` prefix on
+        // `convert_dsh`. The `agency-` prefix on
         // `name` comes from the tool's `slugPrefix`.
         Some("skill-md") => {
             let prefix = registry::get(tool).and_then(|m| m.slug_prefix.as_deref()).unwrap_or("");
