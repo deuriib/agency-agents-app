@@ -36,7 +36,10 @@ use crate::util::fs::{atomic_write, read_capped};
 
 /// Hard cap on a single GitHub API response body. 1 MiB is generous —
 /// the `/repos/{owner}/{repo}` payload is ~3-5 KiB, releases ~1-2 KiB.
-const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
+///
+/// `pub(crate)` so the release-source module (`github::releases`) reuses
+/// the same bound instead of introducing a second, drifting constant.
+pub(crate) const MAX_RESPONSE_BYTES: u64 = 1024 * 1024;
 
 /// Disk cache TTL — 24 hours. Aligns with the GitHub stats refresh
 /// cadence we want the UI to feel: opening a package page twice in a
@@ -53,7 +56,10 @@ const USER_AGENT: &str = concat!(
 );
 
 /// API base — overridable in tests so we can point at a mock server.
-const API_BASE: &str = "https://api.github.com";
+///
+/// `pub(crate)` so `github::releases` talks to the same host (the CSP
+/// allowlist and the security review pin this origin).
+pub(crate) const API_BASE: &str = "https://api.github.com";
 
 /// Wire shape returned to the frontend.
 ///
@@ -274,7 +280,10 @@ async fn fetch_latest_release(
 
 // ---------- HTTP helpers ----------
 
-async fn send_with_optional_auth(
+/// Shared GET helper for the GitHub REST surface. `pub(crate)` so the
+/// release-source module reuses the exact same headers, auth handling,
+/// and error mapping instead of duplicating them.
+pub(crate) async fn send_with_optional_auth(
     client: &reqwest::Client,
     url: &str,
     auth_token: Option<&Token>,
@@ -298,7 +307,10 @@ async fn send_with_optional_auth(
 
 /// Inspect rate-limit headers on a 403 response and build the
 /// appropriate typed error.
-fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> AppError {
+///
+/// `pub(crate)` so the release check surfaces the same
+/// `github_rate_limited` code (and the same "no retry" contract).
+pub(crate) fn maybe_rate_limited(resp: &reqwest::Response, url: &str) -> AppError {
     let remaining = resp
         .headers()
         .get("x-ratelimit-remaining")

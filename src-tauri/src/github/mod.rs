@@ -59,6 +59,7 @@
 
 pub mod actions;
 pub mod auth;
+pub mod releases;
 pub mod stats;
 pub mod url;
 
@@ -75,6 +76,23 @@ pub use auth::{
     read_scopes, DeviceFlowStart, GithubStatusDto, PollResult, PollResultDto, Token,
     GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_SCOPES, KEYCHAIN_ACCOUNT_TOKEN, KEYCHAIN_SERVICE,
 };
+pub use releases::{fetch_latest_release, ReleaseInfo};
 pub use stats::{fetch_repo_stats, RepoStats};
 #[allow(unused_imports)]
 pub use url::{extract_github_repo, parse_github_url, GithubRepo};
+
+/// The repository whose GitHub Releases are the update channel.
+///
+/// This is deliberately a constant, not a user-editable setting: the
+/// update source is part of the app's trust boundary. Changing it is a
+/// code change, reviewed like any other security-relevant change.
+pub const APP_REPO_OWNER: &str = "deuriib";
+pub const APP_REPO_NAME: &str = "agency-agents-app";
+
+/// The validated `GithubRepo` for the update channel.
+pub fn app_repo() -> GithubRepo {
+    GithubRepo {
+        owner: APP_REPO_OWNER.to_string(),
+        repo: APP_REPO_NAME.to_string(),
+    }
+}

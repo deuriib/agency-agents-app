@@ -77,11 +77,7 @@
       this link goes to the canonical GH release page so users can
       see the changelog + assets even when the manifest snippet is
       terse. */
-  let releaseNotesUrl = $derived(
-    info
-      ? `https://github.com/deuriib/agency-agents-app/releases/tag/v${info.version}`
-      : null,
-  );
+  let releaseNotesUrl = $derived(info?.releaseUrl ?? null);
 
   function onOpenReleaseNotes() {
     if (releaseNotesUrl) void safeOpenUrl(releaseNotesUrl);
@@ -231,6 +227,17 @@
         >
           <RotateCw size={14} />
           {i18n.t("common.tryAgain")}
+        </button>
+      {:else if !info.installable}
+        <button
+          type="button"
+          class="btn-secondary"
+          onclick={onOpenReleaseNotes}
+          disabled={offline}
+          title={i18n.t("updates.viewReleaseTitle", { version: info.version })}
+        >
+          <ExternalLink size={14} />
+          {i18n.t("updates.viewRelease")}
         </button>
       {:else}
         <button

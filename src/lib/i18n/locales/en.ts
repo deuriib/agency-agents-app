@@ -568,6 +568,8 @@ const en = {
   "updates.retryTitle": "Retry the install",
   "updates.installTitle": "Download and install Agency Agents v{version}",
   "updates.install": "Install update",
+  "updates.viewRelease": "View release",
+  "updates.viewReleaseTitle": "Open the GitHub release page for Agency Agents v{version}",
   "updates.indicatorAvailable": "Update available",
   "updates.installing": "Installing update",
   "updates.skipVersion": "Skip this version",

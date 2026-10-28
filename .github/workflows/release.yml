@@ -1,0 +1,109 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release (e.g. 0.4.0) — must already be on main"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  validate:
+    name: Validate version on main
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.v.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Validate version
+        id: v
+        run: |
+          set -euo pipefail
+          V="${{ inputs.version }}"
+          if ! [[ "$V" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "invalid version: $V"; exit 1
+          fi
+          PKG=$(node -e "console.log(require('./package.json').version)")
+          if [ "$PKG" != "$V" ]; then
+            echo "package.json ($PKG) != $V"; exit 1
+          fi
+          TAG="v$V"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          # Release notes file must exist.
+          test -f "docs/release-notes/$V.md" || { echo "missing docs/release-notes/$V.md"; exit 1; }
+
+  tag:
+    name: Create annotated tag
+    needs: validate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+      - name: Create tag if missing
+        run: |
+          set -euo pipefail
+          TAG="${{ needs.validate.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "tag $TAG already exists"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$TAG" -m "Release $TAG"
+            git push origin "$TAG"
+          fi
+
+  release:
+    name: Create draft release
+    needs: [validate, tag]
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create.outputs.upload_url }}
+      release_id: ${{ steps.create.outputs.id }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Create draft release
+        id: create
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.validate.outputs.tag }}
+          name: ${{ needs.validate.outputs.tag }}
+          body_path: docs/release-notes/${{ inputs.version }}.md
+          draft: true
+          prerelease: false
+
+  linux:
+    name: Build Linux bundles
+    needs: [validate, release]
+    uses: ./.github/workflows/linux-build.yml
+    with:
+      upload_release: true
+      tag: ${{ needs.validate.outputs.tag }}
+
+  windows:
+    name: Build Windows bundles
+    needs: [validate, release]
+    uses: ./.github/workflows/windows-build.yml
+    with:
+      upload_release: true
+      tag: ${{ needs.validate.outputs.tag }}
+
+  manifest:
+    name: Publish updater manifest
+    needs: [validate, release, linux, windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Note
+        run: |
+          echo "macOS assets are uploaded manually via scripts/release.sh (Keychain signing)."
+          echo "Once macOS DMGs + latest.json land on the draft release, publish it."

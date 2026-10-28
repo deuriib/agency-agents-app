@@ -29,6 +29,7 @@
   "plugins": {
     "updater": {
       "endpoints": [
+        "https://github.com/deuriib/agency-agents-app/releases/latest/download/latest.json",
         "https://agencyagents.app/updater.json"
       ],
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEFCRjVBRkQ4ODhFRDI5QkQKUldTOUtlMkkySy8xcTlyRnNjM1pkMy9sc2NkMzdOOVlhTEd5OTVoNFIwWDI4VUROUGhVbFNuMzMK"

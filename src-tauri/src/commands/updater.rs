@@ -1,39 +1,60 @@
 //! Phase 15 — in-app updater commands.
 //!
-//! Wraps `tauri-plugin-updater` behind the `state.require_network` chokepoint
-//! and adds three defense-in-depth gates on top of the plugin's existing
-//! signature verification:
+//! ## Version decision vs. installation
 //!
-//! 1. **Paranoid mode** — every IPC entry consults `require_network("update_check")`
-//!    so the master Offline-Mode switch kills the update path even if the
-//!    plugin would otherwise reach the manifest endpoint.
+//! The two halves of the updater have different sources of truth:
+//!
+//! - **Is there a newer version?** → `github::releases::fetch_latest_release`
+//!   reads `GET /repos/deuriib/agency-agents-app/releases/latest`. The
+//!   published GitHub Release is the source of truth; the app compares
+//!   its tag with `CARGO_PKG_VERSION`.
+//! - **How is it installed?** → `tauri-plugin-updater` downloads the
+//!   signed `latest.json` manifest attached to that same release,
+//!   verifies the artifact (sha256 + minisign), and swaps the bundle.
+//!
+//! Keeping the check independent of the manifest means a release that
+//! ships without `latest.json` can still be announced (the UI links to
+//! the release page) instead of failing silently. `ReleaseInfo.installable`
+//! carries that distinction across the IPC boundary.
+//!
+//! ## Defense-in-depth gates
+//!
+//! 1. **Paranoid mode** — every IPC entry consults
+//!    `require_network("update_check")` so the master Offline-Mode switch
+//!    kills the update path before any outbound request.
 //! 2. **Stale-version sanity check** — `update_install(version)` validates
 //!    that `version` matches the most recently-seen `Available` entry on
 //!    `AppState.updater_state`. If the UI requested an install of a
-//!    version we no longer have in memory (e.g. user kept Settings open
-//!    while a newer manifest landed via the auto-check), the call returns
-//!    `AppError::InvalidArgument` rather than installing the wrong thing.
+//!    version we no longer have in memory (e.g. the user kept Settings
+//!    open while a newer release landed via the auto-check), the call
+//!    returns `AppError::InvalidArgument` rather than installing the
+//!    wrong thing.
 //! 3. **Explicit downgrade rejection** — refuses to install a target whose
 //!    semver is less-than-or-equal to the running version. The plugin
 //!    already refuses semver-older targets via its default comparator,
 //!    but we re-check here so a future plugin behaviour change cannot
 //!    reopen the hole.
+//! 4. **Installability gate** — a release without a `latest.json` asset is
+//!    announced but not installable. `update_install` refuses it with a
+//!    typed error instead of handing the plugin a manifest that isn't
+//!    there.
 //!
-//! The plugin itself handles the manifest fetch (8 KiB recommended cap
-//! via the plugin's own JSON path), the artifact download, the sha256
-//! hash verification (when the manifest carries one), and the minisign
-//! signature verification against the embedded public key. The plugin's
-//! verify-then-install pipeline is the load-bearing crypto chokepoint;
-//! our wrapper surfaces typed errors when it fails so the frontend can
-//! route the toast through the same channel as every other typed error.
+//! The plugin's verify-then-install pipeline is the load-bearing crypto
+//! chokepoint; our wrapper surfaces typed errors when it fails so the
+//! frontend can route the toast through the same channel as every other
+//! typed error.
 //!
 //! ## Testability
 //!
 //! Real plugin invocations require a `tauri::App` and a live network
-//! call to the manifest endpoint, neither of which we want in unit
-//! tests. The [`UpdaterBackend`] trait is the abstraction: production
-//! uses [`PluginBackend`] (which calls the real plugin), tests use
-//! [`MockBackend`] (which returns canned outcomes). Mirrors the
+//! call, neither of which we want in unit tests. Two small traits are
+//! the abstraction:
+//!
+//! - [`ReleaseSource`] — "what does the release channel say?"
+//! - [`InstallBackend`] — "download + verify + install this version."
+//!
+//! Production uses [`GithubReleaseSource`] and [`PluginBackend`]; tests
+//! use the mocks in this module's `tests` submodule. Mirrors the
 //! `KeychainSlot` pattern in `github::auth`.
 
 use std::sync::Arc;
@@ -43,7 +64,10 @@ use tauri::State;
 use tokio::sync::RwLock;
 
 use crate::error::AppError;
+use crate::github::auth::Token;
+use crate::github::{self, GithubRepo, ReleaseInfo};
 use crate::state::AppState;
+use crate::util::semver;
 
 // ---------- IPC payloads ----------
 
@@ -71,9 +95,17 @@ pub enum UpdateCheckOutcome {
         /// Release-notes body from the manifest. Optional.
         #[serde(skip_serializing_if = "Option::is_none")]
         notes: Option<String>,
-        /// Publish date (RFC 3339), if present in the manifest.
+        /// Publish date (RFC 3339), if present in the release.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub_date: Option<String>,
+        /// Validated `https://github.com/...` release page. The UI uses
+        /// this for the "Release notes" link and for the "View release"
+        /// action when the release is not installable in-app.
+        release_url: String,
+        /// True when the release carries a `latest.json` asset. False
+        /// means the UI should offer "View release" (manual download)
+        /// instead of "Install update".
+        installable: bool,
         /// True iff the user has already skipped this version via the
         /// title-bar indicator's `×`. UI uses this to suppress the
         /// re-display of the indicator (Settings panel still shows the
@@ -82,7 +114,7 @@ pub enum UpdateCheckOutcome {
     },
 }
 
-/// Subset of plugin Update fields we cache for the `update_install`
+/// Subset of a published release we cache for the `update_install`
 /// stale-version sanity check + the auto-check scheduler's "last
 /// available" state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +123,8 @@ pub struct CachedUpdate {
     pub current_version: String,
     pub notes: Option<String>,
     pub pub_date: Option<String>,
+    pub release_url: String,
+    pub installable: bool,
 }
 
 // ---------- State ----------
@@ -111,27 +145,31 @@ pub struct UpdaterState {
     pub cached_available: Option<CachedUpdate>,
 }
 
-// ---------- Backend abstraction ----------
+// ---------- Backend abstractions ----------
 
-/// Trait-object façade around the `tauri-plugin-updater` so unit tests
-/// can swap in a mock. Production uses [`PluginBackend`]; tests use
-/// `MockBackend` in this module's `tests` submodule.
+/// "What does the release channel say?" abstraction. Production uses
+/// [`GithubReleaseSource`]; tests use `MockReleaseSource`.
 ///
-/// Mirrors the `KeychainSlot` pattern in `github::auth` — the plugin is
-/// not unit-testable in isolation (requires a live `App` and HTTP), so
-/// we abstract its surface to the minimum we actually call.
+/// The check is deliberately independent of the signed manifest: a
+/// release can exist without a `latest.json` asset, and the UI should
+/// still be able to announce it and link to the release page.
 #[async_trait::async_trait]
-pub trait UpdaterBackend: Send + Sync {
-    /// Run a fresh manifest fetch. `Ok(None)` means "no update available",
-    /// `Ok(Some(_))` means the plugin found a newer version. Errors are
-    /// surfaced as `AppError` so the IPC contract stays uniform.
-    async fn check(&self) -> Result<Option<CachedUpdate>, AppError>;
+pub trait ReleaseSource: Send + Sync {
+    /// Latest published release, or `None` when there is no published
+    /// release and when the tag is not semver-shaped.
+    async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError>;
+}
 
+/// "Download + verify + install this version" abstraction around
+/// `tauri-plugin-updater`. Production uses [`PluginBackend`]; tests use
+/// `MockInstallBackend`.
+#[async_trait::async_trait]
+pub trait InstallBackend: Send + Sync {
     /// Download + verify (sha256 + minisign) + install the update. The
     /// `version` arg is for sanity checking only; the plugin uses its
-    /// own internal `Update` handle (cached from the most recent
-    /// `check()` call) so we don't have to round-trip the full Update
-    /// state through the trait boundary.
+    /// own internal `Update` handle (cached from its own manifest check)
+    /// so we don't have to round-trip the full Update state through the
+    /// trait boundary.
     async fn download_and_install(&self, version: &str) -> Result<(), AppError>;
 }
 
@@ -142,7 +180,57 @@ pub fn current_app_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
-// ---------- Production backend ----------
+// ---------- Production release source ----------
+
+/// GitHub Releases API adapter. Holds the reqwest client + optional
+/// token so the scheduler can build it once per wake without re-reading
+/// the Keychain inside the request path.
+pub struct GithubReleaseSource {
+    client: reqwest::Client,
+    repo: GithubRepo,
+    token: Option<Token>,
+}
+
+impl GithubReleaseSource {
+    pub fn new(client: reqwest::Client, repo: GithubRepo, token: Option<Token>) -> Self {
+        Self {
+            client,
+            repo,
+            token,
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ReleaseSource for GithubReleaseSource {
+    async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError> {
+        github::fetch_latest_release(&self.client, &self.repo, self.token.as_ref()).await
+    }
+}
+
+/// Build the production release source: fixed app repo, the shared
+/// GitHub client, and an optional Keychain token.
+///
+/// A Keychain failure must not break update checks — anonymous access is
+/// enough for one request per day — so the error is logged and the call
+/// proceeds anonymously. This is the one place where an auth failure is
+/// downgraded instead of surfaced: the alternative is an update check
+/// that fails because the user's keychain is locked, which is worse.
+pub fn build_release_source() -> Result<GithubReleaseSource, AppError> {
+    let client = github::stats::build_client()?;
+    let token = match github::auth::read_token() {
+        Ok(token) => token,
+        Err(e) => {
+            tracing::warn!(
+                "updater: keychain token unavailable; using anonymous GitHub API: {e:?}"
+            );
+            None
+        }
+    };
+    Ok(GithubReleaseSource::new(client, github::app_repo(), token))
+}
+
+// ---------- Production install backend ----------
 
 /// Production backend that delegates to `tauri-plugin-updater`.
 ///
@@ -177,24 +265,7 @@ impl<R: tauri::Runtime> PluginBackend<R> {
 
 #[cfg(not(test))]
 #[async_trait::async_trait]
-impl<R: tauri::Runtime> UpdaterBackend for PluginBackend<R> {
-    async fn check(&self) -> Result<Option<CachedUpdate>, AppError> {
-        let updater = self.updater()?;
-        let opt = updater
-            .check()
-            .await
-            .map_err(|e| translate_plugin_error(e, "update check"))?;
-        let Some(update) = opt else {
-            return Ok(None);
-        };
-        Ok(Some(CachedUpdate {
-            version: update.version.clone(),
-            current_version: update.current_version.clone(),
-            notes: update.body.clone(),
-            pub_date: update.date.map(|d| d.to_string()),
-        }))
-    }
-
+impl<R: tauri::Runtime> InstallBackend for PluginBackend<R> {
     async fn download_and_install(&self, version: &str) -> Result<(), AppError> {
         let updater = self.updater()?;
         let opt = updater
@@ -261,65 +332,38 @@ fn translate_plugin_error(e: tauri_plugin_updater::Error, context: &str) -> AppE
 
 // ---------- Public API ----------
 
-/// Compare two semver strings; returns `true` when `target` is greater
-/// than `current`. Used by the explicit downgrade-rejection check in
-/// `update_install`. Falls back to lexicographic comparison if either
-/// string fails semver parsing (defensive — the plugin's own version
-/// comparator handles the normal case, this is a final-line check).
-pub fn is_strict_upgrade(current: &str, target: &str) -> bool {
-    // Strip a leading `v` if present so "v0.3.1" parses cleanly.
-    let trim = |s: &str| s.trim_start_matches('v').to_string();
-    let cur = trim(current);
-    let tgt = trim(target);
-    match (parse_semver(&cur), parse_semver(&tgt)) {
-        (Some(c), Some(t)) => t > c,
-        // Any unparseable input: refuse the upgrade. Safer to fall back
-        // to "manual install" than to ship the wrong binary.
-        _ => false,
-    }
-}
-
-/// Minimal three-tuple semver parser. We don't need pre-release /
-/// metadata handling for our own release cadence (numeric major.minor.patch
-/// only); a full semver crate is overkill.
-fn parse_semver(s: &str) -> Option<(u32, u32, u32)> {
-    let mut iter = s.splitn(3, '.');
-    let major: u32 = iter.next()?.parse().ok()?;
-    let minor: u32 = iter.next()?.parse().ok()?;
-    let patch_raw = iter.next()?;
-    // Drop pre-release / metadata suffix (`0.3.1-beta.1`).
-    let patch_str = patch_raw
-        .split(['-', '+'])
-        .next()
-        .unwrap_or(patch_raw);
-    let patch: u32 = patch_str.parse().ok()?;
-    Some((major, minor, patch))
-}
-
-/// Inner: run a single check via the supplied backend, updating
-/// `state.updater_state` with the cached result + timestamp. Extracted
-/// so the auto-check scheduler can call it without going through the
-/// IPC layer.
+/// Inner: ask the release channel for the latest published release and
+/// turn it into an [`UpdateCheckOutcome`], caching the result on
+/// `state.updater_state`. Extracted so the auto-check scheduler can
+/// call it without going through the IPC layer.
+///
+/// Only a strictly newer version is surfaced. A same-version release
+/// (re-published asset), an older release (rollback), no published
+/// release, and a non-semver tag all collapse to `UpToDate`: the app
+/// never offers a downgrade affordance.
 pub async fn run_check(
     state: &AppState,
-    backend: &dyn UpdaterBackend,
+    source: &dyn ReleaseSource,
 ) -> Result<UpdateCheckOutcome, AppError> {
     state.require_network("update_check").await?;
-    let raw = backend.check().await?;
+    let latest = source.latest().await?;
     let now = chrono::Utc::now().timestamp();
+    let current = current_app_version();
 
-    let outcome = match raw {
-        None => UpdateCheckOutcome::UpToDate,
-        Some(update) => {
-            let skipped = is_version_skipped(state, &update.version).await;
+    let outcome = match latest {
+        Some(release) if semver::is_strict_upgrade(current, &release.version) => {
+            let skipped = is_version_skipped(state, &release.version).await;
             UpdateCheckOutcome::Available {
-                version: update.version.clone(),
-                current_version: update.current_version.clone(),
-                notes: update.notes.clone(),
-                pub_date: update.pub_date.clone(),
+                version: release.version,
+                current_version: current.to_string(),
+                notes: release.notes,
+                pub_date: release.published_at,
+                release_url: release.html_url,
+                installable: release.installable,
                 skipped,
             }
         }
+        _ => UpdateCheckOutcome::UpToDate,
     };
 
     // Persist into AppState so subsequent install requests can validate.
@@ -329,14 +373,22 @@ pub async fn run_check(
         guard.last_checked_at = Some(now);
         guard.cached_available = match &outcome {
             UpdateCheckOutcome::UpToDate => None,
-            UpdateCheckOutcome::Available { version, current_version, notes, pub_date, .. } => {
-                Some(CachedUpdate {
-                    version: version.clone(),
-                    current_version: current_version.clone(),
-                    notes: notes.clone(),
-                    pub_date: pub_date.clone(),
-                })
-            }
+            UpdateCheckOutcome::Available {
+                version,
+                current_version,
+                notes,
+                pub_date,
+                release_url,
+                installable,
+                ..
+            } => Some(CachedUpdate {
+                version: version.clone(),
+                current_version: current_version.clone(),
+                notes: notes.clone(),
+                pub_date: pub_date.clone(),
+                release_url: release_url.clone(),
+                installable: *installable,
+            }),
         };
     }
 
@@ -357,11 +409,12 @@ async fn is_version_skipped(state: &AppState, version: &str) -> bool {
 }
 
 /// Inner: run an install via the supplied backend, after validating the
-/// caller's `version` arg against the cached `Available` payload and
-/// rejecting downgrades.
+/// caller's `version` arg against the cached `Available` payload,
+/// rejecting downgrades, and refusing releases that are not installable
+/// in place.
 pub async fn run_install(
     state: &AppState,
-    backend: &dyn UpdaterBackend,
+    backend: &dyn InstallBackend,
     version: &str,
 ) -> Result<(), AppError> {
     state.require_network("update_check").await?;
@@ -389,24 +442,36 @@ pub async fn run_install(
         });
     }
 
-    // 2. Explicit downgrade rejection (defense in depth; the plugin's
+    // 2. Installability gate. A published release without a
+    // `latest.json` asset can be announced, but the plugin has nothing
+    // to fetch. Refuse with a message that points at the manual path.
+    if !cached.installable {
+        return Err(AppError::InvalidArgument {
+            message: format!(
+                "release {version} has no in-app update manifest; \
+                 open the release page to download it manually"
+            ),
+        });
+    }
+
+    // 3. Explicit downgrade rejection (defense in depth; the plugin's
     // own version comparator already does this, but a future plugin
     // behaviour change cannot reopen the hole if we re-check here).
     let current = current_app_version();
-    if !is_strict_upgrade(current, version) {
+    if !semver::is_strict_upgrade(current, version) {
         return Err(AppError::DowngradeRejected {
             current: current.to_string(),
             target: version.to_string(),
         });
     }
 
-    // 3. Delegate to the plugin via the backend trait. The plugin
+    // 4. Delegate to the plugin via the backend trait. The plugin
     // performs the download + sha256 verification (when the manifest
     // carries a hash) + minisign verification + atomic .app bundle
     // replacement in a single call.
     backend.download_and_install(version).await?;
 
-    // 4. Clear the cached available payload so a re-render of the
+    // 5. Clear the cached available payload so a re-render of the
     // indicator + the Settings card doesn't re-offer the same
     // install. The new binary is on disk; the only remaining action
     // is the relaunch, which `update_relaunch` handles.
@@ -446,8 +511,11 @@ pub async fn update_check_now(
     }
     #[cfg(not(test))]
     {
-        let backend = PluginBackend::new(app);
-        run_check(&state, &backend).await
+        // The release source is built per call: the Keychain token can
+        // change between checks (sign-in / sign-out) and building it
+        // here keeps the `run_check` signature free of Tauri types.
+        let source = build_release_source()?;
+        run_check(&state, &source).await
     }
 }
 
@@ -685,8 +753,22 @@ pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                     continue;
                 }
 
-                let backend = PluginBackend::new(app.clone());
-                match run_check(&state, &backend).await {
+                // Build the release source per wake: the Keychain token
+                // can change between cycles, and a stale source would
+                // keep using (or keep lacking) auth.
+                let source = match build_release_source() {
+                    Ok(source) => source,
+                    Err(e) => {
+                        tracing::warn!("updater: auto-check source build failed (non-fatal): {e:?}");
+                        sleep_for = AUTO_CHECK_BACKOFF
+                            .get(backoff_idx)
+                            .copied()
+                            .unwrap_or(AUTO_CHECK_INTERVAL);
+                        backoff_idx = (backoff_idx + 1).min(AUTO_CHECK_BACKOFF.len() - 1);
+                        continue;
+                    }
+                };
+                match run_check(&state, &source).await {
                     Ok(_) => {
                         sleep_for = AUTO_CHECK_INTERVAL;
                         backoff_idx = 0;
@@ -751,40 +833,64 @@ mod tests {
     use crate::commands::settings::{Settings, SettingsLoadState};
     use std::sync::Mutex;
 
-    /// In-memory mock backend.
+    /// In-memory mock that satisfies both halves of the updater surface:
+    /// the release channel ([`ReleaseSource`]) and the installer
+    /// ([`InstallBackend`]). One struct keeps the existing test bodies
+    /// readable — a check and the install that follows it share the same
+    /// canned wiring.
     struct MockBackend {
-        check_result: Mutex<Result<Option<CachedUpdate>, AppError>>,
+        release_result: Mutex<Result<Option<ReleaseInfo>, AppError>>,
         install_result: Mutex<Result<(), AppError>>,
         check_calls: Mutex<u32>,
     }
 
     impl MockBackend {
-        fn returning(check: Result<Option<CachedUpdate>, AppError>) -> Self {
+        fn returning(release: Result<Option<ReleaseInfo>, AppError>) -> Self {
             Self {
-                check_result: Mutex::new(check),
+                release_result: Mutex::new(release),
                 install_result: Mutex::new(Ok(())),
                 check_calls: Mutex::new(0),
             }
         }
 
         fn install_returning(
-            check: Result<Option<CachedUpdate>, AppError>,
+            release: Result<Option<ReleaseInfo>, AppError>,
             install: Result<(), AppError>,
         ) -> Self {
             Self {
-                check_result: Mutex::new(check),
+                release_result: Mutex::new(release),
                 install_result: Mutex::new(install),
                 check_calls: Mutex::new(0),
             }
         }
     }
 
-    #[async_trait::async_trait]
-    impl UpdaterBackend for MockBackend {
-        async fn check(&self) -> Result<Option<CachedUpdate>, AppError> {
-            *self.check_calls.lock().unwrap() += 1;
-            self.check_result.lock().unwrap().clone()
+    /// Build a published-release fixture. Defaults to installable so the
+    /// happy paths don't need to spell every field.
+    fn release(version: &str) -> ReleaseInfo {
+        ReleaseInfo {
+            version: version.into(),
+            tag: format!("v{version}"),
+            name: Some(format!("Agency Agents v{version}")),
+            notes: None,
+            published_at: None,
+            html_url: format!(
+                "https://github.com/deuriib/agency-agents-app/releases/tag/v{version}"
+            ),
+            installable: true,
         }
+    }
+
+    #[async_trait::async_trait]
+    impl ReleaseSource for MockBackend {
+        async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError> {
+            *self.check_calls.lock().unwrap() += 1;
+            self.release_result.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl InstallBackend for MockBackend {
         async fn download_and_install(&self, _version: &str) -> Result<(), AppError> {
             self.install_result.lock().unwrap().clone()
         }
@@ -815,22 +921,36 @@ mod tests {
         assert!(guard.cached_available.is_none());
     }
 
-    /// Phase 15 §Tests #2 — available path: plugin returns a version,
-    /// command returns `Available { ... }` with the right fields.
+    /// Phase 15 §Tests #2 — available path: the release channel publishes
+    /// a newer version, command returns `Available { ... }` with the
+    /// right fields plus the release metadata the UI needs.
     #[tokio::test]
-    async fn check_now_returns_available_when_plugin_returns_some() {
+    async fn check_now_returns_available_when_release_is_newer() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
-        let backend = MockBackend::returning(Ok(Some(CachedUpdate {
-            version: "9.9.9".into(),
-            current_version: current_app_version().to_string(),
+        let backend = MockBackend::returning(Ok(Some(ReleaseInfo {
             notes: Some("hotfix".into()),
-            pub_date: Some("2026-05-24T00:00:00Z".into()),
+            published_at: Some("2026-05-24T00:00:00Z".into()),
+            ..release("9.9.9")
         })));
         let outcome = run_check(&state, &backend).await.expect("check");
         match outcome {
-            UpdateCheckOutcome::Available { version, notes, skipped, .. } => {
+            UpdateCheckOutcome::Available {
+                version,
+                current_version,
+                notes,
+                release_url,
+                installable,
+                skipped,
+                ..
+            } => {
                 assert_eq!(version, "9.9.9");
+                assert_eq!(current_version, current_app_version());
                 assert_eq!(notes.as_deref(), Some("hotfix"));
+                assert_eq!(
+                    release_url,
+                    "https://github.com/deuriib/agency-agents-app/releases/tag/v9.9.9"
+                );
+                assert!(installable);
                 assert!(!skipped, "fresh version must not be marked skipped");
             }
             other => panic!("expected Available, got {other:?}"),
@@ -840,6 +960,47 @@ mod tests {
         let guard = state.updater_state.read().await;
         let cached = guard.cached_available.clone().expect("cached");
         assert_eq!(cached.version, "9.9.9");
+        assert!(cached.installable);
+    }
+
+    /// A release whose tag matches the running version is not an update.
+    /// Re-publishing the same version (asset rebuild) must never surface
+    /// an install affordance.
+    #[tokio::test]
+    async fn check_now_returns_up_to_date_for_same_version() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::returning(Ok(Some(release(current_app_version()))));
+        let outcome = run_check(&state, &backend).await.expect("check");
+        assert_eq!(outcome, UpdateCheckOutcome::UpToDate);
+
+        let guard = state.updater_state.read().await;
+        assert!(guard.cached_available.is_none());
+        assert!(guard.last_checked_at.is_some());
+    }
+
+    /// An older published release (rollback scenario) is not an update.
+    #[tokio::test]
+    async fn check_now_returns_up_to_date_for_older_version() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::returning(Ok(Some(release("0.0.1"))));
+        let outcome = run_check(&state, &backend).await.expect("check");
+        assert_eq!(outcome, UpdateCheckOutcome::UpToDate);
+    }
+
+    /// A release without a `latest.json` asset is announced but flagged
+    /// not installable, so the UI can offer "View release" instead.
+    #[tokio::test]
+    async fn check_now_marks_release_without_manifest_not_installable() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::returning(Ok(Some(ReleaseInfo {
+            installable: false,
+            ..release("9.9.9")
+        })));
+        let outcome = run_check(&state, &backend).await.expect("check");
+        match outcome {
+            UpdateCheckOutcome::Available { installable, .. } => assert!(!installable),
+            other => panic!("expected Available, got {other:?}"),
+        }
     }
 
     /// Available + version is in the skip-list → `skipped: true`.
@@ -850,12 +1011,7 @@ mod tests {
             ..Settings::default()
         };
         let state = build_state_with(SettingsLoadState::Loaded(s)).await;
-        let backend = MockBackend::returning(Ok(Some(CachedUpdate {
-            version: "9.9.9".into(),
-            current_version: current_app_version().to_string(),
-            notes: None,
-            pub_date: None,
-        })));
+        let backend = MockBackend::returning(Ok(Some(release("9.9.9"))));
         let outcome = run_check(&state, &backend).await.expect("check");
         match outcome {
             UpdateCheckOutcome::Available { skipped, .. } => assert!(skipped),
@@ -890,12 +1046,7 @@ mod tests {
     async fn install_rejects_stale_version_arg() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
         // Seed the cache with an Available 9.9.9.
-        let backend = MockBackend::returning(Ok(Some(CachedUpdate {
-            version: "9.9.9".into(),
-            current_version: current_app_version().to_string(),
-            notes: None,
-            pub_date: None,
-        })));
+        let backend = MockBackend::returning(Ok(Some(release("9.9.9"))));
         run_check(&state, &backend).await.expect("check");
 
         // UI requests install of an OLDER version than the cache (stale UI).
@@ -923,20 +1074,30 @@ mod tests {
     }
 
     /// Install of a same-or-older version → DowngradeRejected.
+    ///
+    /// The check path can never produce this cache state (it only caches
+    /// strictly-newer releases), so the cache is seeded directly. That is
+    /// exactly the scenario the gate defends against: an in-memory cache
+    /// written by an earlier build whose running version was higher.
     #[tokio::test]
     async fn install_rejects_downgrade() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
-        // Seed cache pointing at the *current* version (same-version is
-        // also a downgrade for our purposes — strict upgrade required).
         let current = current_app_version().to_string();
-        let backend = MockBackend::returning(Ok(Some(CachedUpdate {
-            version: current.clone(),
-            current_version: current.clone(),
-            notes: None,
-            pub_date: None,
-        })));
-        run_check(&state, &backend).await.expect("check");
+        {
+            let mut guard = state.updater_state.write().await;
+            guard.cached_available = Some(CachedUpdate {
+                version: current.clone(),
+                current_version: current.clone(),
+                notes: None,
+                pub_date: None,
+                release_url: format!(
+                    "https://github.com/deuriib/agency-agents-app/releases/tag/v{current}"
+                ),
+                installable: true,
+            });
+        }
 
+        let backend = MockBackend::returning(Ok(None));
         let r = run_install(&state, &backend, &current).await;
         match r {
             Err(AppError::DowngradeRejected { current: c, target: t }) => {
@@ -947,18 +1108,36 @@ mod tests {
         }
     }
 
+    /// A release that exists but ships no `latest.json` cannot be
+    /// installed in place; the command refuses before touching the plugin.
+    #[tokio::test]
+    async fn install_rejects_non_installable_release() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::install_returning(
+            Ok(Some(ReleaseInfo {
+                installable: false,
+                ..release("9.9.9")
+            })),
+            Ok(()),
+        );
+        run_check(&state, &backend).await.expect("check");
+
+        let r = run_install(&state, &backend, "9.9.9").await;
+        match r {
+            Err(AppError::InvalidArgument { message }) => {
+                assert!(message.contains("no in-app update manifest"), "got: {message}");
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+    }
+
     /// Phase 15 §Tests #8 — signature verification failure surfaces
     /// as the typed `SignatureVerificationFailed` error.
     #[tokio::test]
     async fn install_surfaces_signature_verification_failed() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
         let backend = MockBackend::install_returning(
-            Ok(Some(CachedUpdate {
-                version: "9.9.9".into(),
-                current_version: current_app_version().to_string(),
-                notes: None,
-                pub_date: None,
-            })),
+            Ok(Some(release("9.9.9"))),
             Err(AppError::SignatureVerificationFailed {
                 message: "minisign rejected".into(),
             }),
@@ -980,12 +1159,7 @@ mod tests {
     async fn install_surfaces_hash_mismatch() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
         let backend = MockBackend::install_returning(
-            Ok(Some(CachedUpdate {
-                version: "9.9.9".into(),
-                current_version: current_app_version().to_string(),
-                notes: None,
-                pub_date: None,
-            })),
+            Ok(Some(release("9.9.9"))),
             Err(AppError::HashMismatch {
                 expected: "deadbeef".into(),
                 actual: "cafef00d".into(),
@@ -1057,12 +1231,7 @@ mod tests {
     async fn install_clears_cached_available_on_success() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
         let backend = MockBackend::install_returning(
-            Ok(Some(CachedUpdate {
-                version: "9.9.9".into(),
-                current_version: current_app_version().to_string(),
-                notes: None,
-                pub_date: None,
-            })),
+            Ok(Some(release("9.9.9"))),
             Ok(()),
         );
         run_check(&state, &backend).await.expect("check");
@@ -1177,56 +1346,11 @@ mod tests {
         assert_eq!(AUTO_CHECK_INTERVAL.as_secs(), 24 * 60 * 60);
     }
 
-    // ---------- semver helpers ----------
-
-    #[test]
-    fn parse_semver_round_trips_basic() {
-        assert_eq!(parse_semver("0.3.1"), Some((0, 3, 1)));
-        assert_eq!(parse_semver("1.0.0"), Some((1, 0, 0)));
-        assert_eq!(parse_semver("12.345.6789"), Some((12, 345, 6789)));
-    }
-
-    #[test]
-    fn parse_semver_strips_prerelease() {
-        assert_eq!(parse_semver("0.3.1-beta.1"), Some((0, 3, 1)));
-        assert_eq!(parse_semver("0.3.1+build.7"), Some((0, 3, 1)));
-    }
-
-    #[test]
-    fn parse_semver_rejects_garbage() {
-        assert_eq!(parse_semver("not a version"), None);
-        assert_eq!(parse_semver("1.2"), None);
-        assert_eq!(parse_semver(""), None);
-    }
-
-    #[test]
-    fn is_strict_upgrade_basic() {
-        assert!(is_strict_upgrade("0.3.0", "0.3.1"));
-        assert!(is_strict_upgrade("0.3.0", "0.4.0"));
-        assert!(is_strict_upgrade("0.3.0", "1.0.0"));
-    }
-
-    #[test]
-    fn is_strict_upgrade_rejects_same_or_older() {
-        assert!(!is_strict_upgrade("0.3.0", "0.3.0"));
-        assert!(!is_strict_upgrade("0.3.1", "0.3.0"));
-        assert!(!is_strict_upgrade("1.0.0", "0.99.99"));
-    }
-
-    #[test]
-    fn is_strict_upgrade_handles_v_prefix() {
-        assert!(is_strict_upgrade("v0.3.0", "v0.3.1"));
-        assert!(is_strict_upgrade("0.3.0", "v0.3.1"));
-    }
-
-    #[test]
-    fn is_strict_upgrade_unparseable_rejects() {
-        assert!(!is_strict_upgrade("garbage", "0.3.1"));
-        assert!(!is_strict_upgrade("0.3.0", "also garbage"));
-    }
+    // ---------- wire shape ----------
 
     /// UpdateCheckOutcome serializes with the `kind` tag in camelCase
-    /// and `Available` carries the fields the frontend expects.
+    /// and `Available` carries the fields the frontend expects —
+    /// including the two release-channel additions.
     #[test]
     fn update_check_outcome_wire_shape() {
         let v = serde_json::to_value(UpdateCheckOutcome::UpToDate).unwrap();
@@ -1237,6 +1361,9 @@ mod tests {
             current_version: "0.3.0".into(),
             notes: Some("changelog".into()),
             pub_date: Some("2026-05-24T00:00:00Z".into()),
+            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1"
+                .into(),
+            installable: false,
             skipped: false,
         })
         .unwrap();
@@ -1245,6 +1372,11 @@ mod tests {
         assert_eq!(v["currentVersion"], "0.3.0");
         assert_eq!(v["notes"], "changelog");
         assert_eq!(v["pubDate"], "2026-05-24T00:00:00Z");
+        assert_eq!(
+            v["releaseUrl"],
+            "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1"
+        );
+        assert_eq!(v["installable"], false);
         assert_eq!(v["skipped"], false);
     }
 
@@ -1252,6 +1384,6 @@ mod tests {
     #[test]
     fn current_app_version_is_semver_shaped() {
         let v = current_app_version();
-        assert!(parse_semver(v).is_some(), "{v} did not parse as semver");
+        assert!(semver::parse(v).is_some(), "{v} did not parse as semver");
     }
 }
