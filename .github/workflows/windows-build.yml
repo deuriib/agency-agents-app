@@ -18,6 +18,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      upload_release:
+        type: boolean
+        default: false
+      tag:
+        type: string
+        required: false
 
 jobs:
   build:
@@ -73,3 +81,12 @@ jobs:
           name: agency-agents-windows-arm64
           path: src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: ${{ inputs.upload_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe

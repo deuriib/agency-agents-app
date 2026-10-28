@@ -197,6 +197,8 @@ export interface UpdateInfo {
   currentVersion: string;
   notes: string | null;
   pubDate: string | null;
+  releaseUrl: string;
+  installable: boolean;
   skipped: boolean;
 }
 
@@ -224,6 +226,8 @@ export type UpdateCheckOutcome =
       currentVersion: string;
       notes: string | null;
       pubDate: string | null;
+      releaseUrl: string;
+      installable: boolean;
       skipped: boolean;
     };
 

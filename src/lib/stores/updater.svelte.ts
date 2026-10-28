@@ -83,6 +83,8 @@ class UpdaterStore {
             currentVersion: outcome.currentVersion,
             notes: outcome.notes,
             pubDate: outcome.pubDate,
+            releaseUrl: outcome.releaseUrl,
+            installable: outcome.installable,
             skipped: outcome.skipped,
           };
           break;

@@ -19,6 +19,14 @@ on:
     tags:
       - "v*"
   workflow_dispatch:
+  workflow_call:
+    inputs:
+      upload_release:
+        type: boolean
+        default: false
+      tag:
+        type: string
+        required: false
 
 jobs:
   build:
@@ -129,3 +137,13 @@ jobs:
           name: agency-agents-appimage
           path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
+
+      - name: Attach to GitHub Release
+        if: ${{ inputs.upload_release == true }}
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.tag }}
+          files: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
