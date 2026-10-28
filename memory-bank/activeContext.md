@@ -1,14 +1,17 @@
 ## Active Context — Agency Agents
 
-**State (2026-10-28)**: **v0.4.3 is shipped.** `main` is current. 
+**State (2026-10-28)**: **v0.5.0 is released.** `main` is current.
 The app has transitioned from a single-file agent model to a multi-file renderer architecture.
+
+- **Landed in v0.5.0**:
+- **Version bump**: Bumped project to v0.5.0.
+- **Release Documentation**: Established standardized release notes in `docs/release-notes/`.
 
 **Landed in v0.4.3**:
 - **Multi-file renderers**: First-class support for Kimi, OpenClaw, and Mistral Vibe.
 - **Multi-file Install Ledger**: Ledger now tracks `dests` and per-file hashes with composite hash validation.
 - **Enterprise-Ready**: Phases 1-4 of Enterprise Feature development completed (UX research, architecture, and backlog).
 - **Infrastructure**: Release workflow automated on push to main.
-
 **Current Focus (Post-v0.4.3)**:
 1. **Multi-file Reconcile/Removal**: Implement logic to detect drift and uninstall agents that occupy multiple files.
 2. **Roster Aggregation**: Enable installation flows for Aider and Windsurf.
