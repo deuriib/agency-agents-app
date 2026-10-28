@@ -262,6 +262,7 @@ pub fn render_files(
         | Some("cursor-mdc")
         | Some("codex-toml")
         | Some("gemini-md")
+        | Some("antigravity-md")
         | Some("qwen-md")
         | Some("zcode-md")
         | Some("skill-md")
