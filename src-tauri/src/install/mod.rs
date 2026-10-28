@@ -305,6 +305,7 @@ fn track_agent_record(
     let (_bytes, rendered_hash) = render::render_with_hash(agent, raw, tool)?;
     let paths = candidate_dests(agent, raw, tool, home, project_root)?;
     let primary = paths.iter().find(|p| p.exists()).unwrap_or(&paths[0]);
+    let dests: Vec<String> = paths.iter().map(|p| p.to_string_lossy().to_string()).collect();
     Ok(record_for(
         agent,
         primary,
@@ -315,6 +316,8 @@ fn track_agent_record(
         body_hash,
         corpus_version,
         installed_at,
+        dests,
+        std::collections::BTreeMap::new(),
     ))
 }
 
@@ -1266,6 +1269,9 @@ mod tests {
             scope: render::scope_for(project.map(Path::new)),
             project_path: project.map(String::from),
             dest: format!("/dest/{slug}"),
+            dests: Vec::new(),
+            file_hashes: std::collections::BTreeMap::new(),
+            aggregate_slugs: Vec::new(),
             source_hash: String::new(),
             body_hash: String::new(),
             rendered_hash: String::new(),
@@ -1797,6 +1803,9 @@ mod tests {
             scope: crate::types::Scope::Project,
             project_path: Some("/p".into()),
             dest: "/p/.cursor/rules/a.mdc".into(),
+            dests: vec!["/p/.cursor/rules/a.mdc".into()],
+            file_hashes: std::collections::BTreeMap::new(),
+            aggregate_slugs: Vec::new(),
             source_hash: "sh".into(),
             body_hash: "bh".into(),
             rendered_hash: "rh".into(),
