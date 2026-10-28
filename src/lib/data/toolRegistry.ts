@@ -51,6 +51,7 @@ const IMPLEMENTED_FORMATS = new Set([
   "zcode-md",
   "cursor-mdc",
   "opencode-md",
+  "antigravity-md",
   "skill-md",
   "kimi-agent",
   "openclaw-workspace",
