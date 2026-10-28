@@ -278,5 +278,8 @@ accepted as **x64-only on Windows**; any ARM64 Windows build must pass `--bundle
 satisfies because the runner image ships LLVM; and a from-scratch Windows build host cannot produce installers.
 **References**: `activeContext.md` § Windows build box.
 
+
+### 2026-10-28: Release v0.5.1
+**Status**: Approved. **Context**: Necessary to ship `antigravity-md` support and fix multi-file ledger record consistency. **Decision**: Bump to v0.5.1. **Consequences**: Antigravity tool is now installable; multi-file schema is consistent across call sites.
 ### 2026-10-27: In-app update check reads the latest GitHub Release
 **Status**: Approved (branch feat/github-releases-updater). **Context**: app update checks used agencyagents.app/updater.json as the version source. **Decision**: the version decision now comes from GET /repos/deuriib/agency-agents-app/releases/latest; the signed latest.json attached to that release remains the install artifact; the legacy endpoint stays as a one-cycle fallback. **Consequences**: installability is detected from the asset list (View release vs Install); release automation (tag + draft release) added via release.yml; version bumps go through PRs via scripts/bump-version.mjs.

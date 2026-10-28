@@ -1,12 +1,15 @@
 ## Active Context — Agency Agents
 
-**State (2026-10-28)**: **v0.5.0 is released.** `main` is current.
+**State (2026-10-28)**: **v0.5.1 is released.** `main` is current.
 The app has transitioned from a single-file agent model to a multi-file renderer architecture.
 
+- **Landed in v0.5.1**:
+- **Version bump**: Bumped project to v0.5.1.
+- **Tool Support**: Added `antigravity-md` format support.
+- **Fixes**: Multi-file schema `record_for` call site corrections.
 - **Landed in v0.5.0**:
 - **Version bump**: Bumped project to v0.5.0.
 - **Release Documentation**: Established standardized release notes in `docs/release-notes/`.
-
 **Landed in v0.4.3**:
 - **Multi-file renderers**: First-class support for Kimi, OpenClaw, and Mistral Vibe.
 - **Multi-file Install Ledger**: Ledger now tracks `dests` and per-file hashes with composite hash validation.
