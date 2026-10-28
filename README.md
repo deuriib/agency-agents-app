@@ -64,8 +64,11 @@ The app currently installs to the renderer-backed targets that have deterministi
 | Cursor | project | `.cursor/rules/*.mdc` |
 | opencode | project | `.opencode/agents/*.md` |
 | Osaurus | user | `~/.osaurus/skills/agency-<slug>/SKILL.md` |
+| Antigravity | user | `~/.gemini/config/agents/*.md` |
+| Pi Agent | user | `~/.pi/agent/agents/*.md` |
+| Oh My Pi | user | `~/.omp/agent/agents/*.md` |
 
-The upstream AA repo also contains integrations for Antigravity, Aider, Windsurf, OpenClaw, and Kimi. Those output shapes need additional app work before they should be exposed as first-class app installs — they appear in the Tools panel as recognized-only.
+The upstream AA repo also contains integrations for Aider, Windsurf, OpenClaw, and Kimi. Those output shapes need additional app work before they should be exposed as first-class app installs — they appear in the Tools panel as recognized-only.
 
 ## What This Isn't
 

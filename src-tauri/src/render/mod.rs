@@ -262,6 +262,7 @@ pub fn render_files(
         | Some("cursor-mdc")
         | Some("codex-toml")
         | Some("gemini-md")
+        | Some("antigravity-md")
         | Some("qwen-md")
         | Some("zcode-md")
         | Some("skill-md")
@@ -673,6 +674,68 @@ mod tests {
         assert_eq!(
             proj,
             vec![PathBuf::from("/proj/.agents/agents/frontend-developer.md")]
+        );
+    }
+
+    #[test]
+    fn pi_agent_native_agents_shape_and_dests() {
+        // Pi Agent native agents use the gemini-md renderer shape. Global
+        // agents load from ~/.pi/agent/agents/, project agents from
+        // <project>/.pi/agents/.
+        let out = render(&agent(), raw(), "pi-agent").unwrap();
+        assert_eq!(
+            out,
+            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
+        );
+        assert_eq!(output_slug(&agent(), raw(), "pi-agent"), "frontend-developer");
+        // user-scope → ~/.pi/agent/agents/<name>.md
+        let user = dests("pi-agent", "frontend-developer", Path::new("/home"), None).unwrap();
+        assert_eq!(
+            user,
+            vec![PathBuf::from("/home/.pi/agent/agents/frontend-developer.md")]
+        );
+        // project-scope → <project>/.pi/agents/<name>.md
+        let proj = dests(
+            "pi-agent",
+            "frontend-developer",
+            Path::new("/home"),
+            Some(Path::new("/proj")),
+        )
+        .unwrap();
+        assert_eq!(
+            proj,
+            vec![PathBuf::from("/proj/.agents/agents/frontend-developer.md")]
+        );
+    }
+
+    #[test]
+    fn oh_my_pi_native_agents_shape_and_dests() {
+        // Oh My Pi native agents use the gemini-md renderer shape. Global
+        // agents load from ~/.omp/agent/agents/, project agents from
+        // <project>/.omp/agents/.
+        let out = render(&agent(), raw(), "oh-my-pi").unwrap();
+        assert_eq!(
+            out,
+            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
+        );
+        assert_eq!(output_slug(&agent(), raw(), "oh-my-pi"), "frontend-developer");
+        // user-scope → ~/.pi/agent/agents/<name>.md
+        let user = dests("oh-my-pi", "frontend-developer", Path::new("/home"), None).unwrap();
+        assert_eq!(
+            user,
+            vec![PathBuf::from("/home/.omp/agent/agents/frontend-developer.md")]
+        );
+        // project-scope → <project>/.pi/agents/<name>.md
+        let proj = dests(
+            "oh-my-pi",
+            "frontend-developer",
+            Path::new("/home"),
+            Some(Path::new("/proj")),
+        )
+        .unwrap();
+        assert_eq!(
+            proj,
+            vec![PathBuf::from("/proj/.omp/agents/frontend-developer.md")]
         );
     }
 
