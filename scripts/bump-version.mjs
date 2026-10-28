@@ -60,7 +60,6 @@ const files = {
 const pkgText = readFileSync(files.package, "utf8");
 const pkgRe = /("version"\s*:\s*")[^"]*(")/;
 if (!pkgRe.test(pkgText)) die("could not find version in package.json");
-const prevPkg = (pkgText.match(pkgRe) || [])[0];
 const newPkg = pkgText.replace(pkgRe, `$1${version}$2`);
 writeFileSync(files.package, newPkg);
 
@@ -86,7 +85,7 @@ if (!lockRe.test(lockText)) die("could not find agency-agents-app entry in Cargo
 const newLock = lockText.replace(lockRe, `$1${version}$2`);
 writeFileSync(files.lock, newLock);
 
-console.log(`bumped: ${prevPkg} -> ${version}`);
+console.log(`bumped to ${version}`);
 console.log("  package.json");
 console.log("  src-tauri/tauri.conf.json");
 console.log("  src-tauri/Cargo.toml");
