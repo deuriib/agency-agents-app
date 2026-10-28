@@ -188,7 +188,7 @@ mod tests {
         // The tools whose format we render are installable.
         for id in [
             "claudeCode", "codex", "geminiCli", "copilot", "qwen", "zcode", "cursor", "opencode",
-            "osaurus", "antigravity",
+            "osaurus", "antigravity", "pi-agent", "oh-my-pi"
         ] {
             let m = get(id).unwrap_or_else(|| panic!("missing tool {id}"));
             assert!(m.installable(), "{id} should be installable");
