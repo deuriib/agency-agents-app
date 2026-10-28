@@ -175,7 +175,7 @@ npm run build:phase-c
 Renderer parity:
 
 ```sh
-AGENCY_AGENTS_PARITY_ROOT=/Users/michael/Software/AgentLand/agency-agents \
+AGENCY_AGENTS_PARITY_ROOT=/Users/deuriib/Software/AgentLand/agency-agents \
 cargo test --manifest-path src-tauri/Cargo.toml upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored
 ```
 

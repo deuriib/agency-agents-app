@@ -3,8 +3,11 @@
   "version": "0.4.0",
   "description": "Agency Agents — a native macOS app store for AI agents. Browse, install, and track 251+ specialized agents across every AI coding tool.",
   "type": "module",
-  "author": "Michael Sitarzewski",
-  "repository": "github:msitarzewski/agency-agents-app",
+  "author": {
+    "email": "deuriib@gmail.com",
+    "name": "Deuri Vasquez"
+  },
+  "repository": "github:deuriib/agency-agents-app",
   "scripts": {
     "dev": "vite dev",
     "build": "vite build",
