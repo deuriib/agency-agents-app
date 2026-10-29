@@ -682,21 +682,21 @@ mod tests {
         // Pi Agent native agents use the gemini-md renderer shape. Global
         // agents load from ~/.pi/agent/agents/, project agents from
         // <project>/.pi/agents/.
-        let out = render(&agent(), raw(), "pi-agent").unwrap();
+        let out = render(&agent(), raw(), "piAgent").unwrap();
         assert_eq!(
             out,
             "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
         );
-        assert_eq!(output_slug(&agent(), raw(), "pi-agent"), "frontend-developer");
+        assert_eq!(output_slug(&agent(), raw(), "piAgent"), "frontend-developer");
         // user-scope → ~/.pi/agent/agents/<name>.md
-        let user = dests("pi-agent", "frontend-developer", Path::new("/home"), None).unwrap();
+        let user = dests("piAgent", "frontend-developer", Path::new("/home"), None).unwrap();
         assert_eq!(
             user,
             vec![PathBuf::from("/home/.pi/agent/agents/frontend-developer.md")]
         );
         // project-scope → <project>/.pi/agents/<name>.md
         let proj = dests(
-            "pi-agent",
+            "piAgent",
             "frontend-developer",
             Path::new("/home"),
             Some(Path::new("/proj")),
@@ -704,7 +704,7 @@ mod tests {
         .unwrap();
         assert_eq!(
             proj,
-            vec![PathBuf::from("/proj/.agents/agents/frontend-developer.md")]
+            vec![PathBuf::from("/proj/.pi/agents/frontend-developer.md")]
         );
     }
 
@@ -713,21 +713,21 @@ mod tests {
         // Oh My Pi native agents use the gemini-md renderer shape. Global
         // agents load from ~/.omp/agent/agents/, project agents from
         // <project>/.omp/agents/.
-        let out = render(&agent(), raw(), "oh-my-pi").unwrap();
+        let out = render(&agent(), raw(), "ohMyPi").unwrap();
         assert_eq!(
             out,
             "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\n---\nYou are a frontend dev.\n"
         );
-        assert_eq!(output_slug(&agent(), raw(), "oh-my-pi"), "frontend-developer");
+        assert_eq!(output_slug(&agent(), raw(), "ohMyPi"), "frontend-developer");
         // user-scope → ~/.pi/agent/agents/<name>.md
-        let user = dests("oh-my-pi", "frontend-developer", Path::new("/home"), None).unwrap();
+        let user = dests("ohMyPi", "frontend-developer", Path::new("/home"), None).unwrap();
         assert_eq!(
             user,
             vec![PathBuf::from("/home/.omp/agent/agents/frontend-developer.md")]
         );
         // project-scope → <project>/.pi/agents/<name>.md
         let proj = dests(
-            "oh-my-pi",
+            "ohMyPi",
             "frontend-developer",
             Path::new("/home"),
             Some(Path::new("/proj")),
