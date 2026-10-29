@@ -7,6 +7,7 @@
   import { activity } from "$lib/stores/activity.svelte";
   import { settings } from "$lib/stores/settings.svelte";
   import { catalog } from "$lib/stores/catalog.svelte";
+  import { updater } from "$lib/stores/updater.svelte";
   import { i18n } from "$lib/stores/i18n.svelte";
   import CatalogFirstRun from "$lib/components/CatalogFirstRun.svelte";
 
@@ -63,11 +64,18 @@
     void listen("menu:about", () => { ui.openAbout(); }).then((u) => { unlistenAbout = u; });
     void listen("menu:settings", () => { ui.openSettings(); }).then((u) => { unlistenSettings = u; });
 
+    // Phase 3 — background auto-install. Subscribed at the app root, not in
+    // Settings, because the backend scheduler owns the install: the user can
+    // be on any view (or never open Settings) and still get the progress,
+    // the relaunch prompt, and the Activity Journal row.
+    void updater.attachAutoInstallListener();
+
     const unwatch = watchSystemTheme(() => ui.theme);
     return () => {
       unwatch();
       unlistenAbout?.();
       unlistenSettings?.();
+      updater.detachAutoInstallListener();
     };
   });
 </script>

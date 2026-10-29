@@ -516,7 +516,7 @@ const zhCN = {
   "updates.autoCheck": "每日自动检查",
   "updates.autoCheckHint": "启用后，Agency Agents 每 24 小时检查一次清单，并在标题栏中显示通知（如果有新版本可用）。离线模式开启时自动暂停。",
   "updates.autoInstall": "自动安装更新",
-  "updates.autoInstallHint": "更新频道上线后即可使用。启用后，批准的更新将在后台下载、验证和安装 — 只会提示您重新启动。",
+  "updates.autoInstallHint": "启用后，已批准的更新将在后台下载、验证并安装。只会提示您重新启动。离线模式开启时会自动暂停。",
   "updates.channel": "更新频道",
   "updates.stable": "稳定版",
   "updates.noBeta": "此版本中没有测试版频道。",

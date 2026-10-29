@@ -152,6 +152,9 @@ pub fn run() {
             update_install,
             update_skip,
             update_relaunch,
+            // Phase 3 — cooperative cancel for an in-flight background
+            // auto-install (consulted between verify and the bundle swap).
+            update_auto_install_cancel,
             // Phase 1 — corpus subsystem (contracts.md §C). These live in
             // the `corpus` module rather than `commands::*`; register them
             // fully-qualified alongside the other commands.

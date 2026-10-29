@@ -516,7 +516,7 @@ const ko = {
   "updates.autoCheck": "매일 자동 확인",
   "updates.autoCheckHint": "켜져 있으면 Agency Agents는 24시간마다 매니페스트를 확인하고 최신 버전을 사용할 수 있으면 제목 표시줄에 알림을 표시합니다. 오프라인 모드가 켜져 있는 동안 자동으로 정지됩니다.",
   "updates.autoInstall": "자동으로 업데이트 설치",
-  "updates.autoInstallHint": "업데이트 채널이 활성화되면 사용할 수 있습니다. 활성화되면 승인된 업데이트가 백그라운드에서 다운로드, 확인 및 설치됩니다. 다시 실행하라는 메시지만 표시됩니다.",
+  "updates.autoInstallHint": "활성화하면 승인된 업데이트가 백그라운드에서 다운로드, 확인 및 설치됩니다. 다시 실행하라는 메시지만 표시됩니다. 오프라인 모드가 켜져 있는 동안에는 자동으로 일시 중지됩니다.",
   "updates.channel": "채널 업데이트",
   "updates.stable": "안정적인",
   "updates.noBeta": "이 릴리스에는 베타 채널이 없습니다.",

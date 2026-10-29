@@ -90,6 +90,27 @@ pub enum AppError {
     /// the currently-running build — the explicit downgrade-attack defense.
     #[error("update would downgrade {current} to {target}; refusing")]
     DowngradeRejected { current: String, target: String },
+
+    /// A background (auto-install) download was aborted on purpose: the user
+    /// revoked consent, turned Offline Mode on, or asked to cancel. **Fail
+    /// closed**: the artifact is dropped after verification and before the
+    /// bundle swap, so nothing on disk changes and the cached "available"
+    /// entry stays intact for a manual install.
+    ///
+    /// Not an error condition from the user's point of view — callers surface
+    /// it as a neutral "canceled" state, never as a failure toast.
+    #[error("update install canceled before the bundle swap")]
+    InstallCanceled,
+
+    /// A second install was requested while one was already in flight. **Fail
+    /// closed**: the bundle swap is not re-entrant, so the second caller is
+    /// refused rather than racing the first for the same `.app` path.
+    ///
+    /// Both entry points (the manual `update_install` command and the background
+    /// scheduler) claim the same slot, so this is reachable from either. The
+    /// running install is untouched and keeps reporting its own progress.
+    #[error("an update install is already in progress")]
+    InstallInProgress,
 }
 
 // ---------- From impls ----------
@@ -274,6 +295,23 @@ mod tests {
         };
         let v: Value = serde_json::to_value(&err).unwrap();
         assert_eq!(v["code"], "downgrade_rejected");
+    }
+
+    #[test]
+    fn install_canceled_serializes_to_install_canceled_code() {
+        assert_eq!(code_of(&AppError::InstallCanceled), "install_canceled");
+    }
+
+    /// The single-flight refusal is a distinct wire code: the UI must not
+    /// confuse "an install is already running" (wait for it) with "the install
+    /// failed" (retry) or "canceled" (nothing happened).
+    #[test]
+    fn install_in_progress_serializes_to_install_in_progress_code() {
+        let err = AppError::InstallInProgress;
+        assert_eq!(code_of(&err), "install_in_progress");
+        // No fields: the renderer only needs the code to pick its message.
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v.as_object().map(|o| o.len()), Some(1));
     }
 
     #[test]

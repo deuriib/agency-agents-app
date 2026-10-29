@@ -39,6 +39,32 @@
 //!    typed error instead of handing the plugin a manifest that isn't
 //!    there.
 //!
+//! ## Background auto-install (Phase 3)
+//!
+//! Two independent opt-ins must both hold: `update_auto_install` is on (explicit
+//! consent, prompted the first time in Settings) *and* Offline Mode is off. When
+//! they do, a successful auto-check hands the discovered version to
+//! [`run_auto_install`], which re-reads the live settings, honours the
+//! skip-list, and enforces single-flight. The download is split from the
+//! install so a cancel — consent revoked, Offline Mode flipped on, or the
+//! explicit cancel command — can land after signature verification but before
+//! the bundle swap, leaving the disk untouched.
+//!
+//! Every step emits [`AUTO_INSTALL_EVENT`]: `started`, `verified`, then one of
+//! `installed` / `failed` / `canceled`. The same facts go to the tracing log as
+//! the audit trail. The relaunch is never automatic — `update_relaunch` stays
+//! user-gated, so an unattended install can never restart the app under the
+//! user's feet.
+//!
+//! **Discovery boundary.** The scheduler is the only trigger for auto-install: a
+//! manual "Check for updates now" reports the outcome and never starts an
+//! install, even with the toggle on. The manual button means "tell me"; the
+//! toggle means "handle it unattended". The scheduler's first wake is
+//! [`AUTO_CHECK_STARTUP_DELAY`] after launch, then [`AUTO_CHECK_INTERVAL`] while
+//! the process stays up — `last_checked_at` is memory-only, so a first wake of
+//! one full interval meant a user who restarts the app daily never got a check
+//! at all, and therefore never an install.
+//!
 //! The plugin's verify-then-install pipeline is the load-bearing crypto
 //! chokepoint; our wrapper surfaces typed errors when it fails so the
 //! frontend can route the toast through the same channel as every other
@@ -57,6 +83,7 @@
 //! use the mocks in this module's `tests` submodule. Mirrors the
 //! `KeychainSlot` pattern in `github::auth`.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
@@ -129,6 +156,65 @@ pub struct CachedUpdate {
 
 // ---------- State ----------
 
+/// Cooperative cancellation flag for a background auto-install.
+///
+/// Shared by reference (cheap `Arc` clone) between three owners that cannot
+/// otherwise talk to each other without a lock:
+///
+/// 1. the scheduler, which arms a fresh token before each attempt;
+/// 2. `settings_set`, which requests cancellation the moment the user turns
+///    auto-install off (consent revocation must not wait for a 24h wake);
+/// 3. `PluginBackend`, which consults it **after** the artifact is downloaded
+///    and signature-verified but **before** the bundle swap — the last point
+///    where aborting leaves the disk untouched.
+///
+/// Deliberately an atomic rather than a `tokio::sync` primitive: the check
+/// happens inside a synchronous callback slot in the plugin pipeline, so it
+/// must not need `.await`.
+#[derive(Debug, Clone, Default)]
+pub struct CancelToken(Arc<AtomicBool>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Ask the in-flight install (if any) to stop before the bundle swap.
+    /// Idempotent — repeated requests are free.
+    pub fn request(&self) {
+        self.0.store(true, Ordering::SeqCst);
+    }
+
+    /// Clear the flag. Called by the scheduler immediately before it starts a
+    /// new attempt so a cancel from a previous cycle cannot leak forward.
+    pub fn reset(&self) {
+        self.0.store(false, Ordering::SeqCst);
+    }
+
+    pub fn is_requested(&self) -> bool {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
+/// Lifecycle of the background auto-install, mirrored for the UI and used as
+/// the scheduler's in-flight guard (ENG-11: at most one install at a time).
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[serde(tag = "phase", rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum AutoInstallStatus {
+    /// No background install has run since launch.
+    #[default]
+    Idle,
+    /// Download + verify + install in progress for `version`.
+    Running { version: String },
+    /// Installed; waiting for the user to accept the relaunch prompt.
+    Installed { version: String },
+    /// Attempt failed. `message` is the typed error text shown in Settings.
+    Failed { version: String, message: String },
+    /// Aborted before the bundle swap (consent revoked, Offline Mode on, or
+    /// explicit cancel). `cached_available` is left intact for a manual retry.
+    Canceled { version: String },
+}
+
 /// In-memory mirror of the latest update check result. Stored on
 /// `AppState.updater_state` so the auto-check scheduler and the
 /// `update_install` validator share the same view.
@@ -143,6 +229,11 @@ pub struct UpdaterState {
     /// Cached `Available` payload for the install-arg sanity check.
     /// Cleared when the outcome flips back to `UpToDate`.
     pub cached_available: Option<CachedUpdate>,
+    /// Background auto-install lifecycle. `Running` doubles as the
+    /// single-flight guard for the scheduler.
+    pub auto_install: AutoInstallStatus,
+    /// Cancellation flag for an in-flight background install.
+    pub auto_install_cancel: CancelToken,
 }
 
 // ---------- Backend abstractions ----------
@@ -241,12 +332,37 @@ pub fn build_release_source() -> Result<GithubReleaseSource, AppError> {
 #[cfg(not(test))]
 pub struct PluginBackend<R: tauri::Runtime> {
     app: tauri::AppHandle<R>,
+    /// Consulted between download-verify and the bundle swap.
+    cancel: CancelToken,
+    /// Notified once the artifact is downloaded AND signature-verified,
+    /// immediately before the install swaps the bundle. `None` on the manual
+    /// path so a user-initiated install emits no background-install events.
+    on_verified: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 #[cfg(not(test))]
 impl<R: tauri::Runtime> PluginBackend<R> {
+    /// Manual-install backend: nothing can cancel it and it emits no events.
     pub fn new(app: tauri::AppHandle<R>) -> Self {
-        Self { app }
+        Self {
+            app,
+            cancel: CancelToken::new(),
+            on_verified: None,
+        }
+    }
+
+    /// Background-install backend: cancellable, and reports the
+    /// "downloaded + verified" milestone so the scheduler can emit it.
+    pub fn auto(
+        app: tauri::AppHandle<R>,
+        cancel: CancelToken,
+        on_verified: impl Fn() + Send + Sync + 'static,
+    ) -> Self {
+        Self {
+            app,
+            cancel,
+            on_verified: Some(Box::new(on_verified)),
+        }
     }
 
     /// Borrow the plugin's `Updater` value. Built fresh on each call —
@@ -296,12 +412,37 @@ impl<R: tauri::Runtime> InstallBackend for PluginBackend<R> {
             });
         }
 
-        // Download + verify (sha256 + minisign) → install. The plugin's
-        // `download_and_install` runs both crypto checks; any failure
-        // is translated to our typed `AppError` family.
-        update
-            .download_and_install(|_, _| {}, || {})
+        // Download and install are split on purpose. `Update::download`
+        // fetches the artifact AND runs the minisign verification;
+        // `Update::install` only swaps the bundle. Splitting them puts the
+        // cancellation check exactly where it belongs: after the bytes are
+        // proven authentic, before anything on disk changes. A cancelled
+        // download therefore leaves no partial artifact and no swapped
+        // bundle — the cached "available" entry stays valid for a manual
+        // retry.
+        let bytes = update
+            .download(|_, _| {}, || {})
             .await
+            .map_err(|e| translate_plugin_error(e, "update download"))?;
+
+        // Cancellation checkpoint: after the bytes are proven authentic, before
+        // anything on disk changes. Checked *before* the `verified`
+        // notification so that phase means "verified and proceeding" — notifying
+        // first told the UI "signature verified, installing…" and then went
+        // silent when the cancel landed.
+        if self.cancel.is_requested() {
+            tracing::info!(
+                "updater: install of {version} canceled after verification; discarding artifact"
+            );
+            return Err(AppError::InstallCanceled);
+        }
+
+        if let Some(notify) = &self.on_verified {
+            notify();
+        }
+
+        update
+            .install(bytes)
             .map_err(|e| translate_plugin_error(e, "update install"))?;
 
         Ok(())
@@ -484,6 +625,317 @@ pub async fn run_install(
     Ok(())
 }
 
+// ---------- Auto-install (Phase 3) ----------
+
+/// Tauri event emitted for every observable step of a background auto-install.
+///
+/// The renderer listens once at the app root (`+layout.svelte`) and folds the
+/// phases into `updater.autoInstalling` / `installComplete` / `error`, plus a
+/// single Activity Journal row on a terminal phase. Emitting from the backend
+/// rather than driving the install from the renderer is what makes the feature
+/// survive navigation: the user can be in any view (or no view at all) and the
+/// install still completes.
+///
+/// `#[allow(dead_code)]` because the test build never reaches the emitter (see
+/// `emit_auto_install`); the constant still documents the contract for the
+/// renderer mirror in `updater.svelte.ts`.
+#[allow(dead_code)]
+pub const AUTO_INSTALL_EVENT: &str = "update:auto-install";
+
+/// Observable phases of a background auto-install.
+///
+/// `Verified` is a distinct phase from `Installed` because the two happen at
+/// different points in the pipeline: the artifact's authenticity is proven at
+/// `Verified` (download complete + minisign check passed), and the disk only
+/// changes at `Installed` (bundle swap). Collapsing them would hide the only
+/// interval in which a cancel can still prevent a write.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum AutoInstallPhase {
+    Started,
+    Verified,
+    Installed,
+    Failed,
+    Canceled,
+}
+
+/// Wire payload for [`AUTO_INSTALL_EVENT`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AutoInstallEvent {
+    pub phase: AutoInstallPhase,
+    pub version: String,
+    /// Typed error text, present only on `Failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
+}
+
+/// Emit one [`AutoInstallEvent`] and mirror it into the tracing log.
+///
+/// The log line is the audit trail required by the Phase 1 compliance gate:
+/// phase + version + timestamp, no PII. A failed emit is a warning — losing a
+/// notification must never abort or roll back an install.
+///
+/// `#[allow(dead_code)]` because both this and [`AUTO_INSTALL_EVENT`] are only
+/// reachable from `#[cfg(not(test))]` code (`maybe_auto_install` /
+/// `PluginBackend::auto`). The test build still covers the wire shape directly
+/// via `AutoInstallEvent`, which is what the renderer actually parses.
+#[allow(dead_code)]
+fn emit_auto_install<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    phase: AutoInstallPhase,
+    version: &str,
+    message: Option<String>,
+) {
+    use tauri::Emitter;
+    tracing::info!(phase = ?phase, version, "updater: auto-install event");
+    let payload = AutoInstallEvent {
+        phase,
+        version: version.to_string(),
+        message,
+    };
+    if let Err(e) = app.emit(AUTO_INSTALL_EVENT, payload) {
+        tracing::warn!("updater: auto-install event emit failed (non-fatal): {e:?}");
+    }
+}
+
+/// Why an auto-install attempt stopped without installing.
+///
+/// A skip is never surfaced as an error: every variant here means "the
+/// preconditions for an unattended install were not met", which is the correct
+/// steady state, not a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AutoInstallSkip {
+    /// `update_auto_install` is off — never opted in, or consent revoked.
+    Disabled,
+    /// Offline Mode is on, or settings are corrupt (fail closed).
+    Offline,
+    /// The version is on the user's skip-list.
+    SkippedVersion,
+    /// A background install is already in flight (single-flight guard).
+    AlreadyRunning,
+    /// No cached entry, no in-app manifest, or a downgrade — the cases
+    /// `run_install` refuses with a typed gate error.
+    NotInstallable,
+}
+
+/// Result of one background auto-install attempt.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutoInstallResult {
+    Installed,
+    Canceled,
+    Skipped(AutoInstallSkip),
+}
+
+/// Evaluate every gate that can block an unattended install for `version`.
+///
+/// Reads the live settings rather than accepting a snapshot: the user can flip
+/// the toggle or Offline Mode at any moment, and consent revocation must win
+/// over a flag read milliseconds earlier. `None` means "clear to proceed".
+///
+/// Kept separate from [`run_auto_install`] so the scheduler can decide whether
+/// emitting a `Started` event is even truthful before it does so.
+pub async fn auto_install_blocker(state: &AppState, version: &str) -> Option<AutoInstallSkip> {
+    use crate::commands::settings::SettingsLoadState;
+
+    let (enabled, paranoid_on) = {
+        let guard = state.settings.read().await;
+        match &*guard {
+            SettingsLoadState::Loaded(s) => (s.update_auto_install, s.paranoid_mode),
+            // No settings file yet → defaults, and the default is off.
+            SettingsLoadState::FirstLaunch => (false, false),
+            // Corrupt → fail closed, exactly like `require_network`.
+            SettingsLoadState::Corrupt { .. } => (false, true),
+        }
+    };
+    // Offline Mode (and corrupt-settings fail-closed) is the hard gate and is
+    // reported first: when both conditions hold, "offline" is the reason that
+    // matters, because it is the one the user must change to proceed.
+    if paranoid_on {
+        return Some(AutoInstallSkip::Offline);
+    }
+    if !enabled {
+        return Some(AutoInstallSkip::Disabled);
+    }
+    if is_version_skipped(state, version).await {
+        return Some(AutoInstallSkip::SkippedVersion);
+    }
+    if matches!(
+        state.updater_state.read().await.auto_install,
+        AutoInstallStatus::Running { .. }
+    ) {
+        return Some(AutoInstallSkip::AlreadyRunning);
+    }
+    None
+}
+
+/// Inner: run one background auto-install attempt for `version`.
+///
+/// Gates, in order: [`auto_install_blocker`] (opt-in, Offline Mode, skip-list,
+/// single-flight) and then `run_install`'s own defense-in-depth checks (cached
+/// version match, installability, downgrade rejection, `require_network`).
+///
+/// The relaunch is deliberately *not* triggered here: `update_relaunch` stays
+/// user-gated, so an unattended install can never restart the app under the
+/// user's feet.
+pub async fn run_auto_install(
+    state: &AppState,
+    backend: &dyn InstallBackend,
+    version: &str,
+) -> Result<AutoInstallResult, AppError> {
+    if let Some(skip) = auto_install_blocker(state, version).await {
+        return Ok(AutoInstallResult::Skipped(skip));
+    }
+    // Claim the slot atomically. `auto_install_blocker` already reports
+    // `AlreadyRunning`, but its read is separated from this write by an
+    // `.await`, so a manual install can slip in between. Only the single
+    // write-lock section in `claim_install_slot` makes single-flight real.
+    if !claim_install_slot(state, version).await {
+        return Ok(AutoInstallResult::Skipped(AutoInstallSkip::AlreadyRunning));
+    }
+
+    let outcome = match run_install(state, backend, version).await {
+        Ok(()) => {
+            set_auto_install_status(state, AutoInstallStatus::Installed { version: version.to_string() })
+                .await;
+            AutoInstallResult::Installed
+        }
+        Err(AppError::InstallCanceled) => {
+            set_auto_install_status(state, AutoInstallStatus::Canceled { version: version.to_string() })
+                .await;
+            AutoInstallResult::Canceled
+        }
+        // Gate refusals are skips: nothing actionable happened, so the user
+        // gets no error toast for them.
+        Err(AppError::ParanoidModeBlocked { .. }) => {
+            set_auto_install_status(state, AutoInstallStatus::Idle).await;
+            AutoInstallResult::Skipped(AutoInstallSkip::Offline)
+        }
+        Err(AppError::InvalidArgument { .. }) | Err(AppError::DowngradeRejected { .. }) => {
+            set_auto_install_status(state, AutoInstallStatus::Idle).await;
+            AutoInstallResult::Skipped(AutoInstallSkip::NotInstallable)
+        }
+        Err(e) => {
+            set_auto_install_status(
+                state,
+                AutoInstallStatus::Failed {
+                    version: version.to_string(),
+                    message: e.to_string(),
+                },
+            )
+            .await;
+            return Err(e);
+        }
+    };
+    Ok(outcome)
+}
+
+/// Inner: run one **manual** install under the shared single-flight slot.
+///
+/// Extracted from the `update_install` command so the guard is compiled into
+/// the test build. F-02 lived in `#[cfg(not(test))]` code and was therefore
+/// invisible to the suite; keeping the claim/release here means a regression
+/// fails a test instead of shipping.
+///
+/// `run_install` records no terminal auto-install status, so every exit must
+/// free the slot explicitly — otherwise a single failed install would make
+/// every later install report "already running".
+pub async fn run_manual_install(
+    state: &AppState,
+    backend: &dyn InstallBackend,
+    version: &str,
+) -> Result<(), AppError> {
+    if !claim_install_slot(state, version).await {
+        return Err(AppError::InstallInProgress);
+    }
+    let result = run_install(state, backend, version).await;
+    release_install_slot(state).await;
+    result
+}
+
+async fn set_auto_install_status(state: &AppState, status: AutoInstallStatus) {
+    state.updater_state.write().await.auto_install = status;
+}
+
+/// Atomically claim the one install slot for `version`.
+///
+/// Returns `false` when an install is already running — background *or* manual.
+/// The check and the state write happen inside a single write-lock critical
+/// section on purpose: a check-then-set separated by an `.await` lets two
+/// callers both pass the gate before either records `Running`, and the bundle
+/// swap is not re-entrant.
+///
+/// `Running` is the guard *and* the UI status, so a manual install is visible as
+/// a running install for its duration and the background path cannot start
+/// underneath it.
+async fn claim_install_slot(state: &AppState, version: &str) -> bool {
+    let mut guard = state.updater_state.write().await;
+    if matches!(guard.auto_install, AutoInstallStatus::Running { .. }) {
+        return false;
+    }
+    guard.auto_install = AutoInstallStatus::Running {
+        version: version.to_string(),
+    };
+    true
+}
+
+/// Free the slot claimed by [`claim_install_slot`] when the attempt ended
+/// without recording a terminal status of its own.
+///
+/// Scoped to `Running` so it can never clobber a terminal status (`Installed`,
+/// `Failed`, `Canceled`) that the caller already set — those already free the
+/// slot, and overwriting them would erase the relaunch prompt or the error.
+async fn release_install_slot(state: &AppState) {
+    let mut guard = state.updater_state.write().await;
+    if matches!(guard.auto_install, AutoInstallStatus::Running { .. }) {
+        guard.auto_install = AutoInstallStatus::Idle;
+    }
+}
+
+/// The two consents that gate an unattended install, sampled before and after a
+/// settings write.
+///
+/// A single struct rather than loose booleans because the interesting question
+/// is always "what changed?", and a four-bool signature invites call sites that
+/// pass them in the wrong order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AutoInstallConsent {
+    pub enabled: bool,
+    pub offline: bool,
+}
+
+/// Consent-revocation hook, called by `settings_set` / `settings_reset` after a
+/// successful write.
+///
+/// Two transitions must abort an in-flight background install before the bundle
+/// swap, because waiting for the next 24h wake would let an install land that
+/// the user just forbade:
+///
+/// 1. **Auto-install turned off** — explicit withdrawal of the opt-in.
+/// 2. **Offline Mode turned on** — the user asserted "no outbound activity";
+///    honouring that only at the *start* of the next attempt would still swap
+///    the bundle under them mid-download.
+///
+/// Note the cancel point is after download-verify, so it stops the *install*,
+/// not the already-in-flight bytes. That is the honest contract: nothing on
+/// disk changes once the flag is set.
+///
+/// Returns `true` when a cancellation was requested. The return value exists so
+/// the transition is unit-testable without the Tauri `State` wrapper.
+pub async fn handle_auto_install_consent_change(
+    state: &AppState,
+    before: AutoInstallConsent,
+    after: AutoInstallConsent,
+) -> bool {
+    let revoked = before.enabled && !after.enabled;
+    let went_offline = !before.offline && after.offline;
+    if revoked || went_offline {
+        state.updater_state.read().await.auto_install_cancel.request();
+        return true;
+    }
+    false
+}
+
 // ---------- IPC commands ----------
 
 /// Run a manual update check. Frontend-callable via the "Check for
@@ -538,7 +990,12 @@ pub async fn update_install(
     #[cfg(not(test))]
     {
         let backend = PluginBackend::new(app);
-        run_install(&state, &backend, &version).await
+        // The claim lives in `run_manual_install` so it is covered by tests: the
+        // renderer also refuses a second install, but that is a boolean set by
+        // an async event after a round trip — a UI affordance, not a safety
+        // mechanism. This is what stops a manual install and a background
+        // install of the same version from both swapping the bundle.
+        run_manual_install(&state, &backend, &version).await
     }
 }
 
@@ -667,6 +1124,26 @@ pub async fn update_relaunch(app: tauri::AppHandle) -> Result<(), AppError> {
     }
 }
 
+/// Cancel an in-flight background auto-install.
+///
+/// Cooperative by design: the flag is consulted between download-verify and the
+/// bundle swap, so a cancel that lands after the swap is a harmless no-op (the
+/// update is installed and the UI shows the relaunch prompt instead).
+///
+/// No `require_network` gate — this is a purely local state mutation, and it
+/// must keep working when the user's way of stopping the install *is* turning
+/// Offline Mode on.
+#[tauri::command]
+pub async fn update_auto_install_cancel(state: State<'_, AppState>) -> Result<(), AppError> {
+    state
+        .updater_state
+        .read()
+        .await
+        .auto_install_cancel
+        .request();
+    Ok(())
+}
+
 // ---------- Auto-check scheduler ----------
 
 /// Minimum wall-clock interval between auto-checks, regardless of how
@@ -674,44 +1151,103 @@ pub async fn update_relaunch(app: tauri::AppHandle) -> Result<(), AppError> {
 /// App Store cadence (see Phase 15 plan §Resolved Decision #3).
 pub const AUTO_CHECK_INTERVAL: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
 
+/// Delay before the **first** auto-check after launch.
+///
+/// Not zero — the check is an outbound GitHub API call and the app should be
+/// interactive first. Not one full interval either: `last_checked_at` is
+/// memory-only, so every launch restarted the 24h sleep and a user who restarts
+/// the app more often than once a day never got a check at all. Since this
+/// scheduler is the only trigger for an unattended install, that made the whole
+/// feature unreachable. One check per launch is the Chrome / VS Code / Sparkle
+/// norm and costs one unauthenticated request.
+pub const AUTO_CHECK_STARTUP_DELAY: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Re-poll interval while auto-check is inactive: not opted in, or Offline Mode
+/// on (including corrupt settings, which fail closed).
+///
+/// The scheduler cannot sleep a full day while the toggle is off — a user who
+/// turns it on mid-session would wait a day for the first check, which is the
+/// dead-control failure this feature exists to remove. Five minutes is a
+/// deliberate compromise: three uncontended lock reads and no network, in
+/// exchange for a toggle flip taking effect without a relaunch.
+pub const AUTO_CHECK_IDLE_POLL: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+
+/// Upper bound of the startup jitter, in seconds.
+pub const AUTO_CHECK_STARTUP_JITTER_SECS: u64 = 30;
+
+/// First sleep of the scheduler: [`AUTO_CHECK_STARTUP_DELAY`] plus up to
+/// [`AUTO_CHECK_STARTUP_JITTER_SECS`] of jitter.
+///
+/// Jitter spreads a fleet of clients that launch together (after an OS update,
+/// say) so they do not hit the GitHub API in one burst. Derived from the wall
+/// clock rather than an RNG: no new dependency, and the value is reproducible
+/// for a given `now`, so the bound is unit-testable.
+pub fn startup_delay(now: i64) -> std::time::Duration {
+    let jitter = now.unsigned_abs() % AUTO_CHECK_STARTUP_JITTER_SECS;
+    AUTO_CHECK_STARTUP_DELAY + std::time::Duration::from_secs(jitter)
+}
+
 /// Backoff steps when an auto-check fails. Order is 1h → 6h → 24h;
 /// after the third failure the next attempt waits a full 24h window.
-///
-/// `#[allow(dead_code)]` because the constant is only read inside the
-/// `#[cfg(not(test))]` branch of `spawn_auto_check_scheduler` — the
-/// test build legitimately doesn't reach it. Pinned by
-/// `auto_check_backoff_sequence_matches_plan_spec` so the values are
-/// still test-covered.
-#[allow(dead_code)]
 pub const AUTO_CHECK_BACKOFF: &[std::time::Duration] = &[
     std::time::Duration::from_secs(60 * 60),
     std::time::Duration::from_secs(6 * 60 * 60),
     std::time::Duration::from_secs(24 * 60 * 60),
 ];
 
-/// Decide whether the auto-check scheduler should fire right now.
-/// Pure function — extracted so the schedule logic can be unit-tested
-/// without an `AppState`, network, or filesystem.
+/// Delay after a successful check: the canonical 24h cadence.
+pub fn sleep_after_success() -> std::time::Duration {
+    AUTO_CHECK_INTERVAL
+}
+
+/// Delay after a failed check: the backoff step for `attempt` (0-based),
+/// saturating at the last step so repeated failures settle at 24h.
+pub fn sleep_after_failure(attempt: usize) -> std::time::Duration {
+    AUTO_CHECK_BACKOFF
+        .get(attempt)
+        .copied()
+        .unwrap_or(AUTO_CHECK_INTERVAL)
+}
+
+/// Next backoff index, saturating at the last step.
+pub fn next_backoff_index(attempt: usize) -> usize {
+    (attempt + 1).min(AUTO_CHECK_BACKOFF.len() - 1)
+}
+
+/// Decide the scheduler's next move after a wake: `None` means "run a check
+/// now", `Some(delay)` means "sleep `delay`, then ask again".
 ///
-/// Returns `true` when **all** of:
-/// - `auto_check_enabled` is true (settings opt-in)
-/// - `paranoid_mode` is false (kill switch off)
-/// - The time since `last_checked_at` is at least `AUTO_CHECK_INTERVAL`,
-///   OR `last_checked_at` is `None` (never checked before).
-pub fn should_auto_check(
+/// Pure — extracted so the cadence is unit-testable without an `AppState`, a
+/// network, or a filesystem. This is the **only** definition of "should the
+/// scheduler fire": the loop and the tests both call it, so the tested gate and
+/// the shipped gate cannot drift.
+///
+/// Three cases:
+/// - **Inactive** (not opted in, Offline Mode on, corrupt settings) →
+///   [`AUTO_CHECK_IDLE_POLL`], so a toggle flip is noticed without a relaunch.
+/// - **Throttled** (opted in, but the 24h floor since the last check has not
+///   elapsed) → the *remaining* floor. A fresh interval here would silently
+///   stretch the cadence to 48h whenever the floor expires mid-sleep.
+/// - **Due** → `None`.
+pub fn next_sleep(
     auto_check_enabled: bool,
     paranoid_mode: bool,
     last_checked_at: Option<i64>,
     now: i64,
-) -> bool {
+) -> Option<std::time::Duration> {
     if !auto_check_enabled || paranoid_mode {
-        return false;
+        return Some(AUTO_CHECK_IDLE_POLL);
     }
     match last_checked_at {
-        None => true,
+        None => None,
         Some(prev) => {
-            let elapsed_secs = now.saturating_sub(prev);
-            elapsed_secs >= AUTO_CHECK_INTERVAL.as_secs() as i64
+            let elapsed = now.saturating_sub(prev).max(0) as u64;
+            let floor = AUTO_CHECK_INTERVAL.as_secs();
+            if elapsed >= floor {
+                None
+            } else {
+                Some(std::time::Duration::from_secs(floor - elapsed))
+            }
         }
     }
 }
@@ -719,23 +1255,26 @@ pub fn should_auto_check(
 /// Spawn the auto-check scheduler as a tokio background task. Called
 /// once at app startup from `state::initialize`. The task:
 ///
-/// 1. Sleeps for [`AUTO_CHECK_INTERVAL`].
+/// 1. Sleeps [`AUTO_CHECK_STARTUP_DELAY`] before the first wake, then
+///    [`AUTO_CHECK_INTERVAL`] between successful checks.
 /// 2. Reads the live settings (re-reads each cycle so a user who
 ///    toggles auto-check off mid-run is honoured on the next wake).
-/// 3. If `should_auto_check` returns true, runs `run_check`. Failures
-///    trigger the backoff sequence; successes reset to the 24h cadence.
-/// 4. Loops forever.
+/// 3. Asks [`next_sleep`] whether to check now or wait; an inactive
+///    scheduler re-polls at [`AUTO_CHECK_IDLE_POLL`] so flipping the
+///    toggle on takes effect without a relaunch.
+/// 4. Runs `run_check`, hands an available version to
+///    `maybe_auto_install`, and backs off on failure.
+/// 5. Loops forever.
 pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
     #[cfg(not(test))]
     {
         use tauri::Manager;
         tauri::async_runtime::spawn(async move {
-            // On the first wake we still defer one interval. Rationale:
-            // the manual button is one click away in Settings, so the
-            // user who wants an immediate check at launch has a path;
-            // the auto-check is for *unattended* update discovery, not
-            // "ping the endpoint the moment the app opens".
-            let mut sleep_for = AUTO_CHECK_INTERVAL;
+            // First wake shortly after launch (see AUTO_CHECK_STARTUP_DELAY):
+            // deferring it by a full interval meant the process was usually
+            // gone before the first check, so nothing was ever discovered and
+            // nothing could ever be auto-installed.
+            let mut sleep_for = startup_delay(chrono::Utc::now().timestamp());
             let mut backoff_idx = 0usize;
             loop {
                 tokio::time::sleep(sleep_for).await;
@@ -744,11 +1283,11 @@ pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 let (auto_on, paranoid_on, last_checked_at) = read_scheduler_inputs(&state).await;
                 let now = chrono::Utc::now().timestamp();
 
-                if !should_auto_check(auto_on, paranoid_on, last_checked_at, now) {
-                    // Try again at the canonical cadence — we don't
-                    // escalate sleep here because the user could flip
-                    // the toggle on at any point.
-                    sleep_for = AUTO_CHECK_INTERVAL;
+                if let Some(wait) = next_sleep(auto_on, paranoid_on, last_checked_at, now) {
+                    // Either inactive (poll soon so a toggle flip is noticed)
+                    // or throttled by the 24h floor (wait exactly the
+                    // remainder). No check runs, so no backoff state applies.
+                    sleep_for = wait;
                     backoff_idx = 0;
                     continue;
                 }
@@ -760,27 +1299,25 @@ pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                     Ok(source) => source,
                     Err(e) => {
                         tracing::warn!("updater: auto-check source build failed (non-fatal): {e:?}");
-                        sleep_for = AUTO_CHECK_BACKOFF
-                            .get(backoff_idx)
-                            .copied()
-                            .unwrap_or(AUTO_CHECK_INTERVAL);
-                        backoff_idx = (backoff_idx + 1).min(AUTO_CHECK_BACKOFF.len() - 1);
+                        sleep_for = sleep_after_failure(backoff_idx);
+                        backoff_idx = next_backoff_index(backoff_idx);
                         continue;
                     }
                 };
                 match run_check(&state, &source).await {
-                    Ok(_) => {
-                        sleep_for = AUTO_CHECK_INTERVAL;
+                    Ok(outcome) => {
+                        sleep_for = sleep_after_success();
                         backoff_idx = 0;
+                        // Phase 3 — hand the discovered update to the
+                        // auto-install path. It re-reads settings and owns
+                        // every gate, so a revoked opt-in is honoured even
+                        // though the check above just succeeded.
+                        maybe_auto_install(&app, &state, &outcome).await;
                     }
                     Err(e) => {
                         tracing::warn!("updater: auto-check failed (non-fatal): {e:?}");
-                        let next = AUTO_CHECK_BACKOFF
-                            .get(backoff_idx)
-                            .copied()
-                            .unwrap_or(AUTO_CHECK_INTERVAL);
-                        sleep_for = next;
-                        backoff_idx = (backoff_idx + 1).min(AUTO_CHECK_BACKOFF.len() - 1);
+                        sleep_for = sleep_after_failure(backoff_idx);
+                        backoff_idx = next_backoff_index(backoff_idx);
                     }
                 }
             }
@@ -791,21 +1328,29 @@ pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
         // Under cfg(test) we don't spawn the real scheduler — its loop
         // body references the PluginBackend which is itself cfg-gated
         // out so it can't be instantiated. Tests exercise the pure
-        // `should_auto_check` gate function directly and the IPC
+        // `next_sleep` cadence function directly and the IPC
         // commands through the trait-injected mock backend.
         let _ = app;
     }
 }
 
-/// Read the three settings the scheduler needs in a single guard
-/// acquisition. Returns `(auto_check_enabled, paranoid_mode, last_checked_at)`.
+/// Read the settings the scheduler needs in a single guard acquisition.
+/// Returns `(should_run_checks, paranoid_mode, last_checked_at)`.
+///
+/// `should_run_checks` is `update_auto_check || update_auto_install`. Auto-install
+/// cannot exist without discovery, so gating discovery on the *other* toggle
+/// would leave the auto-install toggle permanently inert — a dead control,
+/// which is the exact defect this feature set out to fix.
 #[cfg(not(test))]
 async fn read_scheduler_inputs(state: &AppState) -> (bool, bool, Option<i64>) {
     use crate::commands::settings::SettingsLoadState;
-    let (auto_on, paranoid_on) = {
+    let (should_check, paranoid_on) = {
         let guard = state.settings.read().await;
         match &*guard {
-            SettingsLoadState::Loaded(s) => (s.update_auto_check, s.paranoid_mode),
+            SettingsLoadState::Loaded(s) => (
+                s.update_auto_check || s.update_auto_install,
+                s.paranoid_mode,
+            ),
             SettingsLoadState::FirstLaunch => (false, false),
             // Corrupt: deny outbound. The require_network gate inside
             // run_check would also catch this, but short-circuiting here
@@ -817,7 +1362,84 @@ async fn read_scheduler_inputs(state: &AppState) -> (bool, bool, Option<i64>) {
         let guard = state.updater_state.read().await;
         guard.last_checked_at
     };
-    (auto_on, paranoid_on, last_checked_at)
+    (should_check, paranoid_on, last_checked_at)
+}
+
+/// Follow-up to a successful auto-check: install the discovered update in the
+/// background when the user opted in.
+///
+/// Owns the event emission and nothing else — every gate lives in
+/// [`auto_install_blocker`] / [`run_auto_install`] so there is exactly one
+/// definition of "may this install happen". Emitting `Started` only after the
+/// gates pass keeps the event stream truthful for the pre-flight case; every
+/// exit *after* `Started` emits a terminal phase, because the renderer clears
+/// its progress row only on a terminal phase.
+#[cfg(not(test))]
+async fn maybe_auto_install<R: tauri::Runtime>(
+    app: &tauri::AppHandle<R>,
+    state: &AppState,
+    outcome: &UpdateCheckOutcome,
+) {
+    let UpdateCheckOutcome::Available {
+        version,
+        installable,
+        skipped,
+        ..
+    } = outcome
+    else {
+        return;
+    };
+    // A skipped version is never auto-installed (the user dismissed it), and a
+    // release with no in-app manifest has nothing to install in place.
+    if !installable || *skipped {
+        return;
+    }
+
+    // Arm a fresh cancellation window first: a cancel requested during the
+    // previous cycle must not abort this one. Order matters — resetting *after*
+    // the gate check would erase a revocation that landed between the check and
+    // the install, and the install would proceed against the user's wish.
+    let cancel = state.updater_state.read().await.auto_install_cancel.clone();
+    cancel.reset();
+
+    if auto_install_blocker(state, version).await.is_some() {
+        return;
+    }
+
+    emit_auto_install(app, AutoInstallPhase::Started, version, None);
+
+    // The `Verified` milestone is only observable from inside the plugin
+    // pipeline, so the backend reports it back through this closure. It fires
+    // only once the cancel checkpoint has been passed.
+    let verified_app = app.clone();
+    let verified_version = version.clone();
+    let backend = PluginBackend::auto(app.clone(), cancel, move || {
+        emit_auto_install(
+            &verified_app,
+            AutoInstallPhase::Verified,
+            &verified_version,
+            None,
+        );
+    });
+
+    match run_auto_install(state, &backend, version).await {
+        Ok(AutoInstallResult::Installed) => {
+            emit_auto_install(app, AutoInstallPhase::Installed, version, None);
+        }
+        Ok(AutoInstallResult::Canceled) => {
+            emit_auto_install(app, AutoInstallPhase::Canceled, version, None);
+        }
+        // Preconditions changed between the check above and the attempt:
+        // Offline Mode flipped on, consent revoked, or a manual install claimed
+        // the slot. Reported as `canceled` because that is what happened — the
+        // attempt ended without installing — and because a `Started` with no
+        // terminal phase would leave the renderer's progress row stuck for the
+        // rest of the session, with a Cancel button that polls nothing.
+        Ok(AutoInstallResult::Skipped(_)) => {
+            emit_auto_install(app, AutoInstallPhase::Canceled, version, None);
+        }
+        Err(e) => emit_auto_install(app, AutoInstallPhase::Failed, version, Some(e.to_string())),
+    }
 }
 
 // Re-export so `AppState::build()` can construct the wrapped state slot.
@@ -842,6 +1464,7 @@ mod tests {
         release_result: Mutex<Result<Option<ReleaseInfo>, AppError>>,
         install_result: Mutex<Result<(), AppError>>,
         check_calls: Mutex<u32>,
+        install_calls: Mutex<u32>,
     }
 
     impl MockBackend {
@@ -850,6 +1473,7 @@ mod tests {
                 release_result: Mutex::new(release),
                 install_result: Mutex::new(Ok(())),
                 check_calls: Mutex::new(0),
+                install_calls: Mutex::new(0),
             }
         }
 
@@ -861,6 +1485,7 @@ mod tests {
                 release_result: Mutex::new(release),
                 install_result: Mutex::new(install),
                 check_calls: Mutex::new(0),
+                install_calls: Mutex::new(0),
             }
         }
     }
@@ -892,6 +1517,7 @@ mod tests {
     #[async_trait::async_trait]
     impl InstallBackend for MockBackend {
         async fn download_and_install(&self, _version: &str) -> Result<(), AppError> {
+            *self.install_calls.lock().unwrap() += 1;
             self.install_result.lock().unwrap().clone()
         }
     }
@@ -1272,22 +1898,24 @@ mod tests {
     // ---------- Scheduler ----------
 
     /// Phase 15 §Tests #6 — scheduler honours the 24h floor.
-    /// Repeated `should_auto_check` calls within the window do not
-    /// approve a fresh check.
+    /// Repeated wakes within the window never approve a fresh check.
     #[test]
     fn scheduler_honors_24h_floor() {
         let now: i64 = 1_700_000_000;
         let last_check = now - (23 * 3600);
-        // 23h since last check → not due yet.
-        assert!(!should_auto_check(true, false, Some(last_check), now));
+        // 23h since last check → not due yet, and the wait is the remainder.
+        assert_eq!(
+            next_sleep(true, false, Some(last_check), now),
+            Some(std::time::Duration::from_secs(3600))
+        );
         // Exactly 24h → due.
-        assert!(should_auto_check(true, false, Some(now - 24 * 3600), now));
+        assert_eq!(next_sleep(true, false, Some(now - 24 * 3600), now), None);
         // 25h → due.
-        assert!(should_auto_check(true, false, Some(now - 25 * 3600), now));
+        assert_eq!(next_sleep(true, false, Some(now - 25 * 3600), now), None);
     }
 
     /// Repeated start/stop within an hour does not fire multiple checks:
-    /// model this by checking the gate function with timestamps that
+    /// model this by checking the cadence function with timestamps that
     /// represent successive launches all within the same window.
     #[test]
     fn scheduler_does_not_refire_within_one_hour() {
@@ -1295,9 +1923,9 @@ mod tests {
         // Five "launches" all within 60 minutes of the initial check.
         for offset in &[60, 600, 1800, 3000, 3500] {
             let now = initial_check + offset;
-            let should = should_auto_check(true, false, Some(initial_check), now);
+            let next = next_sleep(true, false, Some(initial_check), now);
             assert!(
-                !should,
+                next.is_some(),
                 "scheduler must NOT fire at +{offset}s after last check"
             );
         }
@@ -1307,27 +1935,32 @@ mod tests {
     #[test]
     fn scheduler_fires_when_never_checked() {
         let now: i64 = 1_700_000_000;
-        assert!(should_auto_check(true, false, None, now));
+        assert_eq!(next_sleep(true, false, None, now), None);
     }
 
     /// Phase 15 §Tests #7 — flipping paranoid_mode on suspends the
-    /// scheduler regardless of how stale `last_checked_at` is.
+    /// scheduler regardless of how stale `last_checked_at` is, and leaves it
+    /// idle-polling so turning Offline Mode off is noticed.
     #[test]
     fn scheduler_suspends_on_paranoid_mode() {
         let now: i64 = 1_700_000_000;
-        // Even with last_checked_at well past the 24h window, the gate
-        // returns false when paranoid_mode is on.
-        assert!(!should_auto_check(true, true, Some(now - 999_999), now));
-        // And with last_checked_at None (never checked) still false.
-        assert!(!should_auto_check(true, true, None, now));
+        assert_eq!(
+            next_sleep(true, true, Some(now - 999_999), now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
+        assert_eq!(next_sleep(true, true, None, now), Some(AUTO_CHECK_IDLE_POLL));
     }
 
-    /// Off by default: auto_check_enabled=false → never fires.
+    /// Off by default: auto_check_enabled=false → never fires, but keeps
+    /// polling so enabling it mid-session takes effect.
     #[test]
     fn scheduler_does_nothing_when_disabled() {
         let now: i64 = 1_700_000_000;
-        assert!(!should_auto_check(false, false, None, now));
-        assert!(!should_auto_check(false, false, Some(now - 100_000), now));
+        assert_eq!(next_sleep(false, false, None, now), Some(AUTO_CHECK_IDLE_POLL));
+        assert_eq!(
+            next_sleep(false, false, Some(now - 100_000), now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
     }
 
     /// Pin the backoff sequence at 1h, 6h, 24h. Drift here would mean
@@ -1344,6 +1977,104 @@ mod tests {
     #[test]
     fn auto_check_interval_is_24_hours() {
         assert_eq!(AUTO_CHECK_INTERVAL.as_secs(), 24 * 60 * 60);
+    }
+
+    /// F-01 regression: the first wake must happen inside a normal session, not
+    /// a full interval after launch. `last_checked_at` is memory-only, so a
+    /// startup delay of `AUTO_CHECK_INTERVAL` meant the process was usually gone
+    /// before the first check — and the scheduler is the only trigger for an
+    /// unattended install.
+    #[test]
+    fn auto_check_startup_delay_fires_inside_a_normal_session() {
+        assert_eq!(AUTO_CHECK_STARTUP_DELAY.as_secs(), 60);
+        assert!(
+            AUTO_CHECK_STARTUP_DELAY < AUTO_CHECK_INTERVAL,
+            "the first check must not be deferred by a full interval"
+        );
+    }
+
+    /// The startup sleep is the base delay plus bounded jitter: spread enough to
+    /// avoid a thundering herd, small enough that the check still lands early in
+    /// the session.
+    #[test]
+    fn startup_delay_adds_bounded_jitter() {
+        let lo = AUTO_CHECK_STARTUP_DELAY;
+        let hi = AUTO_CHECK_STARTUP_DELAY
+            + std::time::Duration::from_secs(AUTO_CHECK_STARTUP_JITTER_SECS);
+        for now in [0i64, 1, 29, 30, 1_700_000_000, -1_700_000_000] {
+            let d = startup_delay(now);
+            assert!(d >= lo && d < hi, "startup_delay({now}) = {d:?} out of range");
+            // Deterministic for a given clock reading (no RNG to flake on).
+            assert_eq!(d, startup_delay(now));
+        }
+        // And it actually varies across clock readings.
+        assert_ne!(startup_delay(0), startup_delay(1));
+    }
+
+    /// F-01 regression: an inactive scheduler re-polls instead of sleeping a
+    /// day, so flipping the toggle on mid-session takes effect without a
+    /// relaunch (the toggle is otherwise a dead control).
+    #[test]
+    fn next_sleep_polls_soon_when_inactive() {
+        let now: i64 = 1_700_000_000;
+        assert_eq!(next_sleep(false, false, None, now), Some(AUTO_CHECK_IDLE_POLL));
+        // Offline Mode wins over a stale opt-in and an ancient last check.
+        assert_eq!(
+            next_sleep(true, true, Some(now - 999_999), now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
+        // Opted in but never checked → run now, not idle-poll.
+        assert_eq!(next_sleep(true, false, None, now), None);
+    }
+
+    /// Throttled wakes wait exactly the remaining floor. Returning a fresh
+    /// interval would silently stretch the cadence to 48h when the floor expires
+    /// mid-sleep.
+    #[test]
+    fn next_sleep_waits_the_remaining_floor_when_throttled() {
+        let now: i64 = 1_700_000_000;
+        assert_eq!(
+            next_sleep(true, false, Some(now - 60), now),
+            Some(AUTO_CHECK_INTERVAL - std::time::Duration::from_secs(60))
+        );
+        assert_eq!(
+            next_sleep(true, false, Some(now - 23 * 3600), now),
+            Some(std::time::Duration::from_secs(3600))
+        );
+        // At or past the floor → due.
+        assert_eq!(
+            next_sleep(true, false, Some(now - AUTO_CHECK_INTERVAL.as_secs() as i64), now),
+            None
+        );
+        // A clock that jumped backwards must not panic or produce a negative
+        // wait: treat it as "floor not reached" and wait the full interval.
+        assert_eq!(
+            next_sleep(true, false, Some(now + 500), now),
+            Some(AUTO_CHECK_INTERVAL)
+        );
+    }
+
+    /// The retry ladder is 1h → 6h → 24h and saturates at 24h, so a permanently
+    /// failing check settles into one attempt per day instead of escalating
+    /// forever.
+    #[test]
+    fn sleep_after_failure_walks_the_backoff_then_saturates() {
+        assert_eq!(sleep_after_failure(0), std::time::Duration::from_secs(3600));
+        assert_eq!(sleep_after_failure(1), std::time::Duration::from_secs(6 * 3600));
+        assert_eq!(sleep_after_failure(2), std::time::Duration::from_secs(24 * 3600));
+        assert_eq!(sleep_after_failure(9), AUTO_CHECK_INTERVAL);
+        assert_eq!(sleep_after_success(), AUTO_CHECK_INTERVAL);
+    }
+
+    /// Backoff index advance saturates at the last step instead of growing
+    /// unbounded (an out-of-range index would fall back to 24h anyway, but the
+    /// index is also what the loop carries between wakes).
+    #[test]
+    fn next_backoff_index_saturates() {
+        assert_eq!(next_backoff_index(0), 1);
+        assert_eq!(next_backoff_index(1), 2);
+        assert_eq!(next_backoff_index(2), 2);
+        assert_eq!(next_backoff_index(99), 2);
     }
 
     // ---------- wire shape ----------
@@ -1385,5 +2116,573 @@ mod tests {
     fn current_app_version_is_semver_shaped() {
         let v = current_app_version();
         assert!(semver::parse(v).is_some(), "{v} did not parse as semver");
+    }
+
+    // ---------- Auto-install (Phase 3) ----------
+
+    /// Settings with auto-install explicitly on and Offline Mode off — the
+    /// only state in which an unattended install is legal.
+    fn auto_install_on() -> Settings {
+        Settings {
+            update_auto_check: true,
+            update_auto_install: true,
+            ..Settings::default()
+        }
+    }
+
+    /// Seed the cache the way a preceding `run_check` would, so the
+    /// `run_install` gates can run without a second mock round-trip.
+    async fn seed_available(state: &AppState, version: &str, installable: bool) {
+        let mut guard = state.updater_state.write().await;
+        guard.cached_available = Some(CachedUpdate {
+            version: version.to_string(),
+            current_version: current_app_version().to_string(),
+            notes: None,
+            pub_date: None,
+            release_url: format!(
+                "https://github.com/deuriib/agency-agents-app/releases/tag/v{version}"
+            ),
+            installable,
+        });
+    }
+
+    #[test]
+    fn cancel_token_round_trips_request_and_reset() {
+        let token = CancelToken::new();
+        assert!(!token.is_requested(), "a fresh token starts un-cancelled");
+        token.request();
+        assert!(token.is_requested());
+        token.reset();
+        assert!(!token.is_requested(), "reset must arm the next attempt");
+    }
+
+    #[test]
+    fn cancel_token_clones_share_the_same_flag() {
+        let token = CancelToken::new();
+        let clone = token.clone();
+        clone.request();
+        assert!(
+            token.is_requested(),
+            "the scheduler and the backend must observe the same flag"
+        );
+    }
+
+    /// Default state: no opt-in → the blocker reports `Disabled` and the
+    /// backend is never touched.
+    #[tokio::test]
+    async fn auto_install_blocker_reports_disabled_by_default() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::Disabled)
+        );
+    }
+
+    /// First launch (no settings file) must be treated as "not opted in".
+    #[tokio::test]
+    async fn auto_install_blocker_reports_disabled_on_first_launch() {
+        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::Disabled)
+        );
+    }
+
+    /// Corrupt settings fail closed exactly like `require_network`.
+    #[tokio::test]
+    async fn auto_install_blocker_reports_offline_on_corrupt_settings() {
+        let state = build_state_with(SettingsLoadState::Corrupt {
+            message: "synthetic corruption".into(),
+        })
+        .await;
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::Offline)
+        );
+    }
+
+    /// Opted in, but Offline Mode is on → the hard gate wins.
+    #[tokio::test]
+    async fn auto_install_blocker_reports_offline_when_paranoid_mode_is_on() {
+        let s = Settings {
+            paranoid_mode: true,
+            ..auto_install_on()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::Offline)
+        );
+    }
+
+    /// A skipped version is never auto-installed — the user dismissed it.
+    #[tokio::test]
+    async fn auto_install_blocker_reports_skipped_version() {
+        let s = Settings {
+            skipped_update_versions: vec!["9.9.9".into()],
+            ..auto_install_on()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::SkippedVersion)
+        );
+        // A different version is not blocked by that entry.
+        assert_eq!(auto_install_blocker(&state, "9.9.10").await, None);
+    }
+
+    /// Opted in, online, not skipped, nothing in flight → clear to proceed.
+    #[tokio::test]
+    async fn auto_install_blocker_clears_when_all_gates_pass() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        assert_eq!(auto_install_blocker(&state, "9.9.9").await, None);
+    }
+
+    /// Single-flight: a second attempt while one is running is refused rather
+    /// than queued (ENG-11 — no unbounded concurrency).
+    #[tokio::test]
+    async fn auto_install_blocker_reports_already_running() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        {
+            let mut guard = state.updater_state.write().await;
+            guard.auto_install = AutoInstallStatus::Running {
+                version: "9.9.9".into(),
+            };
+        }
+        assert_eq!(
+            auto_install_blocker(&state, "9.9.9").await,
+            Some(AutoInstallSkip::AlreadyRunning)
+        );
+    }
+
+    // ---------- install slot (F-02) ----------
+
+    /// The slot is claimed at most once. `claim_install_slot` is what makes the
+    /// single-flight guarantee real: the gate read and the `Running` write happen
+    /// in one lock section, so two callers cannot both pass.
+    #[tokio::test]
+    async fn claim_install_slot_is_single_flight() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+
+        assert!(claim_install_slot(&state, "9.9.9").await, "first claim wins");
+        assert!(
+            !claim_install_slot(&state, "9.9.9").await,
+            "a second claim must be refused while one is running"
+        );
+        assert!(
+            !claim_install_slot(&state, "9.9.10").await,
+            "the slot is global, not per-version"
+        );
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Running {
+                version: "9.9.9".into()
+            },
+            "the refused claim must not overwrite the running version"
+        );
+    }
+
+    /// Releasing frees the slot for the next attempt.
+    #[tokio::test]
+    async fn release_install_slot_frees_the_slot() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+
+        assert!(claim_install_slot(&state, "9.9.9").await);
+        release_install_slot(&state).await;
+        assert_eq!(state.updater_state.read().await.auto_install, AutoInstallStatus::Idle);
+        assert!(
+            claim_install_slot(&state, "9.9.10").await,
+            "a released slot must be claimable again"
+        );
+    }
+
+    /// Releasing must not erase a terminal status the caller already recorded —
+    /// that status is what drives the relaunch prompt and the error text.
+    #[tokio::test]
+    async fn release_install_slot_preserves_terminal_status() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        set_auto_install_status(
+            &state,
+            AutoInstallStatus::Installed {
+                version: "9.9.9".into(),
+            },
+        )
+        .await;
+
+        release_install_slot(&state).await;
+
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Installed {
+                version: "9.9.9".into()
+            }
+        );
+    }
+
+    /// F-02 regression at the auto-install entry point: when a manual install
+    /// already holds the slot, the background attempt is refused *before* it
+    /// touches the backend, so two bundle swaps cannot race.
+    #[tokio::test]
+    async fn auto_install_skips_when_another_install_holds_the_slot() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        // Simulates `update_install` having claimed the slot a moment ago.
+        assert!(claim_install_slot(&state, "9.9.9").await);
+
+        let backend = MockBackend::returning(Ok(None));
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+
+        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::AlreadyRunning));
+        assert_eq!(
+            *backend.install_calls.lock().unwrap(),
+            0,
+            "a held slot must keep the background path off the bundle swap"
+        );
+        // The holder's claim survives: the refused attempt must not release it.
+        assert!(matches!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Running { .. }
+        ));
+    }
+
+    /// The manual path takes the same slot: happy path installs, then frees it.
+    #[tokio::test]
+    async fn manual_install_claims_and_releases_the_slot() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        run_manual_install(&state, &backend, "9.9.9")
+            .await
+            .expect("manual install");
+
+        assert_eq!(*backend.install_calls.lock().unwrap(), 1);
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Idle,
+            "a finished manual install must free the slot"
+        );
+        assert!(
+            state.updater_state.read().await.cached_available.is_none(),
+            "a completed install clears the cached available entry"
+        );
+    }
+
+    /// F-02 regression, manual side: a background install already holds the
+    /// slot → the manual command is refused with a typed error and never
+    /// reaches the bundle swap.
+    #[tokio::test]
+    async fn manual_install_is_refused_while_the_slot_is_held() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        // Simulates the scheduler having claimed the slot mid-download.
+        assert!(claim_install_slot(&state, "9.9.9").await);
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_manual_install(&state, &backend, "9.9.9").await;
+
+        assert!(
+            matches!(r, Err(AppError::InstallInProgress)),
+            "expected InstallInProgress, got {r:?}"
+        );
+        assert_eq!(
+            *backend.install_calls.lock().unwrap(),
+            0,
+            "a refused manual install must not touch the backend"
+        );
+        assert!(
+            matches!(
+                state.updater_state.read().await.auto_install,
+                AutoInstallStatus::Running { .. }
+            ),
+            "the holder's claim must survive a refused manual attempt"
+        );
+    }
+
+    /// A failed manual install must still free the slot, or the user could never
+    /// retry after a transient network error.
+    #[tokio::test]
+    async fn manual_install_releases_the_slot_on_failure() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::install_returning(
+            Ok(None),
+            Err(AppError::Network {
+                url: "update download".into(),
+                message: "connection reset".into(),
+            }),
+        );
+
+        let r = run_manual_install(&state, &backend, "9.9.9").await;
+
+        assert!(matches!(r, Err(AppError::Network { .. })));
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Idle,
+            "a failure must not leave the single-flight guard armed"
+        );
+    }
+
+    /// A manual install that fails a gate (stale version) also frees the slot.
+    #[tokio::test]
+    async fn manual_install_releases_the_slot_on_gate_refusal() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_manual_install(&state, &backend, "9.9.10").await;
+
+        assert!(matches!(r, Err(AppError::InvalidArgument { .. })));
+        assert_eq!(*backend.install_calls.lock().unwrap(), 0);
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Idle
+        );
+    }
+
+    /// Disabled opt-in: the install is skipped and the backend never runs.
+    #[tokio::test]
+    async fn auto_install_skips_disabled_without_calling_backend() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::Disabled));
+        assert_eq!(
+            *backend.install_calls.lock().unwrap(),
+            0,
+            "a disabled opt-in must not reach the install backend"
+        );
+    }
+
+    /// Offline Mode blocks the attempt before the backend is touched.
+    #[tokio::test]
+    async fn auto_install_skips_offline_without_calling_backend() {
+        let s = Settings {
+            paranoid_mode: true,
+            ..auto_install_on()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::Offline));
+        assert_eq!(*backend.install_calls.lock().unwrap(), 0);
+    }
+
+    /// Happy path: opted in + online + available → installed, and the cached
+    /// entry is cleared so the UI stops offering the same install.
+    #[tokio::test]
+    async fn auto_install_installs_when_all_gates_pass() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Installed);
+        assert_eq!(*backend.install_calls.lock().unwrap(), 1);
+
+        let guard = state.updater_state.read().await;
+        assert_eq!(
+            guard.auto_install,
+            AutoInstallStatus::Installed {
+                version: "9.9.9".into()
+            }
+        );
+        assert!(
+            guard.cached_available.is_none(),
+            "a completed install must clear the cached available entry"
+        );
+    }
+
+    /// Cancellation: the backend reports `InstallCanceled` → the attempt is
+    /// `Canceled`, the cache survives (so a manual install stays possible),
+    /// and no failure is recorded.
+    #[tokio::test]
+    async fn auto_install_maps_cancel_and_preserves_cache() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend =
+            MockBackend::install_returning(Ok(None), Err(AppError::InstallCanceled));
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Canceled);
+
+        let guard = state.updater_state.read().await;
+        assert_eq!(
+            guard.auto_install,
+            AutoInstallStatus::Canceled {
+                version: "9.9.9".into()
+            }
+        );
+        assert!(
+            guard.cached_available.is_some(),
+            "a canceled install must leave the manual path intact"
+        );
+    }
+
+    /// A gate refusal inside `run_install` (here: no in-app manifest) is a
+    /// skip, not a failure — the user gets no error toast for it.
+    #[tokio::test]
+    async fn auto_install_maps_gate_refusal_to_skip() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", false).await;
+        let backend = MockBackend::returning(Ok(None));
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::NotInstallable));
+        assert_eq!(*backend.install_calls.lock().unwrap(), 0);
+
+        let guard = state.updater_state.read().await;
+        assert_eq!(
+            guard.auto_install,
+            AutoInstallStatus::Idle,
+            "a skip must not leave the single-flight guard armed"
+        );
+    }
+
+    /// A real failure (signature verification) is surfaced AND recorded, so
+    /// the Settings card can show the typed message.
+    #[tokio::test]
+    async fn auto_install_records_failure_and_returns_error() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        seed_available(&state, "9.9.9", true).await;
+        let backend = MockBackend::install_returning(
+            Ok(None),
+            Err(AppError::SignatureVerificationFailed {
+                message: "minisign rejected".into(),
+            }),
+        );
+
+        let r = run_auto_install(&state, &backend, "9.9.9").await;
+        assert!(matches!(r, Err(AppError::SignatureVerificationFailed { .. })));
+
+        let guard = state.updater_state.read().await;
+        match &guard.auto_install {
+            AutoInstallStatus::Failed { version, message } => {
+                assert_eq!(version, "9.9.9");
+                assert!(message.contains("signature"), "got: {message}");
+            }
+            other => panic!("expected Failed status, got {other:?}"),
+        }
+    }
+
+    /// Revoking consent — or engaging Offline Mode — requests a cancel. Every
+    /// other transition is inert (a spurious request would abort an unrelated
+    /// future install).
+    #[tokio::test]
+    async fn auto_install_consent_change_requests_cancel_only_on_revocation() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        let on_online = AutoInstallConsent {
+            enabled: true,
+            offline: false,
+        };
+        let off_online = AutoInstallConsent {
+            enabled: false,
+            offline: false,
+        };
+        let on_offline = AutoInstallConsent {
+            enabled: true,
+            offline: true,
+        };
+
+        assert!(
+            handle_auto_install_consent_change(&state, on_online, off_online).await,
+            "auto-install on -> off must request cancellation"
+        );
+        assert!(state.updater_state.read().await.auto_install_cancel.is_requested());
+
+        // Re-arm and confirm Offline Mode engaging is a withdrawal too.
+        state.updater_state.read().await.auto_install_cancel.reset();
+        assert!(
+            handle_auto_install_consent_change(&state, on_online, on_offline).await,
+            "Offline Mode off -> on must request cancellation"
+        );
+
+        // Re-arm and confirm the inert transitions stay inert.
+        state.updater_state.read().await.auto_install_cancel.reset();
+        assert!(!handle_auto_install_consent_change(&state, off_online, on_online).await);
+        assert!(!handle_auto_install_consent_change(&state, off_online, off_online).await);
+        assert!(
+            !handle_auto_install_consent_change(&state, on_offline, on_offline).await,
+            "staying offline is not a transition"
+        );
+        assert!(
+            !state.updater_state.read().await.auto_install_cancel.is_requested(),
+            "enabling must not request a cancellation"
+        );
+    }
+
+    /// Wire shape: the frontend switches on `phase` and reads `version` /
+    /// `message`. A drift here silently breaks the pill + Settings card.
+    #[test]
+    fn auto_install_event_wire_shape() {
+        let v = serde_json::to_value(AutoInstallEvent {
+            phase: AutoInstallPhase::Verified,
+            version: "0.6.0".into(),
+            message: None,
+        })
+        .unwrap();
+        assert_eq!(v["phase"], "verified");
+        assert_eq!(v["version"], "0.6.0");
+        assert!(v.get("message").is_none(), "message is omitted when absent");
+
+        let v = serde_json::to_value(AutoInstallEvent {
+            phase: AutoInstallPhase::Failed,
+            version: "0.6.0".into(),
+            message: Some("signature rejected".into()),
+        })
+        .unwrap();
+        assert_eq!(v["phase"], "failed");
+        assert_eq!(v["message"], "signature rejected");
+    }
+
+    /// Every phase serializes to the exact lowercase token the renderer
+    /// matches on — a rename here is a silent UI regression.
+    #[test]
+    fn auto_install_phases_serialize_as_expected_tokens() {
+        let tokens: Vec<String> = [
+            AutoInstallPhase::Started,
+            AutoInstallPhase::Verified,
+            AutoInstallPhase::Installed,
+            AutoInstallPhase::Failed,
+            AutoInstallPhase::Canceled,
+        ]
+        .iter()
+        .map(|p| serde_json::to_value(p).unwrap().as_str().unwrap().to_string())
+        .collect();
+        assert_eq!(
+            tokens,
+            vec!["started", "verified", "installed", "failed", "canceled"]
+        );
+    }
+
+    /// The status enum's `phase` tag must match the event tokens so the UI can
+    /// render from either source without a translation table.
+    #[test]
+    fn auto_install_status_serializes_with_phase_tag() {
+        let v = serde_json::to_value(AutoInstallStatus::Running {
+            version: "0.6.0".into(),
+        })
+        .unwrap();
+        assert_eq!(v["phase"], "running");
+        assert_eq!(v["version"], "0.6.0");
+
+        let v = serde_json::to_value(AutoInstallStatus::Idle).unwrap();
+        assert_eq!(v["phase"], "idle");
     }
 }

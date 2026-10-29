@@ -31,7 +31,16 @@ export interface JournalEntry {
   id: string;
   /** ISO timestamp the action resolved. */
   ts: string;
-  action: "install" | "uninstall" | "update" | "track" | "switch" | "sync" | "bulk";
+  action:
+    | "install"
+    | "uninstall"
+    | "update"
+    | "track"
+    | "switch"
+    | "sync"
+    | "bulk"
+    /** Agency Agents itself was updated in the background (Phase 3). */
+    | "appUpdate";
   agentSlug?: string;
   agentName?: string;
   tool?: Tool;

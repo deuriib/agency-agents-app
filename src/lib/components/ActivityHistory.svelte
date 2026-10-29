@@ -6,6 +6,7 @@
   import PlusIcon from "@lucide/svelte/icons/plus";
   import ToggleRightIcon from "@lucide/svelte/icons/toggle-right";
   import LayersIcon from "@lucide/svelte/icons/layers";
+  import PackageCheckIcon from "@lucide/svelte/icons/package-check";
 
   import Button from "./Button.svelte";
   import EmptyState from "./EmptyState.svelte";
@@ -23,6 +24,7 @@
     switch: ToggleRightIcon,
     sync: RefreshIcon,
     bulk: LayersIcon,
+    appUpdate: PackageCheckIcon,
   } as const;
 
   /** Sentence-case verb shown at the head of each row. */
@@ -34,6 +36,7 @@
     switch: "activity.action.switch",
     sync: "activity.action.sync",
     bulk: "activity.action.bulk",
+    appUpdate: "activity.action.appUpdate",
   };
 
   /** Basename of a project path, for the " · project" suffix. */
@@ -52,6 +55,10 @@
     }
     // Batch sweeps: detail is already a self-contained phrase ("Updated 3 agents").
     if (e.action === "sync" || e.action === "bulk") {
+      return e.detail ?? i18n.t(ACTION_VERB[e.action]);
+    }
+    // App updates target the application itself — no agent, tool, or scope.
+    if (e.action === "appUpdate") {
       return e.detail ?? i18n.t(ACTION_VERB[e.action]);
     }
     // Single-agent ops: "Verb agent → Tool · project".

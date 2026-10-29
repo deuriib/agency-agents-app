@@ -10,6 +10,13 @@
  *     Updates subsection. Owns the manual "Check for updates now"
  *     button, the auto-check toggle, and the install action.
  *
+ * Background auto-install (Phase 3) is **observed**, not driven: the
+ * backend scheduler owns the install and emits `update:auto-install`
+ * phases, which `attachAutoInstallListener()` folds into this store.
+ * That split is what lets an install complete while the user is on
+ * another view — the renderer is a spectator, so navigating away (or
+ * never opening Settings) cannot interrupt it.
+ *
  * **No update info on disk in this store.** The skip-list, last-checked
  * timestamp, and the cached "available" entry all live on the backend
  * inside `settings.json`. This store just shadows the most recent
@@ -25,8 +32,30 @@
  *     to surface inline with a "Try again" button.
  */
 
-import { updateCheckNow, updateInstall, updateRelaunch, updateSkip } from "$lib/api";
-import { isAppError, type UpdateInfo, errorText } from "$lib/types";
+import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import {
+  updateAutoInstallCancel,
+  updateCheckNow,
+  updateInstall,
+  updateRelaunch,
+  updateSkip,
+} from "$lib/api";
+import {
+  isAppError,
+  type AutoInstallEvent,
+  type AutoInstallPhase,
+  type UpdateInfo,
+  errorText,
+} from "$lib/types";
+import { activity } from "$lib/stores/activity.svelte";
+import { i18n } from "$lib/stores/i18n.svelte";
+
+/**
+ * Mirrors `AUTO_INSTALL_EVENT` in `src-tauri/src/commands/updater.rs`.
+ * A rename on either side silently disables the whole background-install
+ * UI, so the two constants are pinned together by comment.
+ */
+const AUTO_INSTALL_EVENT = "update:auto-install";
 
 class UpdaterStore {
   /** Epoch millis of the most recent check (success OR error). `null`
@@ -56,9 +85,35 @@ class UpdaterStore {
       delay so the IPC response arrives before the process dies. */
   installComplete: boolean = $state(false);
 
-  /** Human-readable error from the most recent op (`checkNow` or
-      `install`), or `null`. Cleared by the next successful op. */
+  /** Human-readable error from the most recent op (`checkNow`,
+      `install`, or a failed background auto-install), or `null`.
+      Cleared by the next successful op. */
   error: string | null = $state(null);
+
+  /** True between the backend's `started` event and a terminal phase.
+      Drives the progress row in Settings and the title-bar spinner so
+      a background install is visible from any view. */
+  autoInstalling: boolean = $state(false);
+
+  /** Version the background install is working on, or `null` before the
+      first event. */
+  autoInstallVersion: string | null = $state(null);
+
+  /** Most recent phase reported by the backend, or `null` before the
+      first event. Kept for the Settings card's "verifying…" wording. */
+  autoInstallPhase: AutoInstallPhase | null = $state(null);
+
+  /** True after a background install ended in `canceled`: consent revoked,
+      Offline Mode engaged, or the Cancel button. Drives a one-line
+      acknowledgement in Settings — without it the spinner simply disappears and
+      the user cannot tell whether the cancel worked or the install failed.
+      Cleared when the next install attempt starts. */
+  autoInstallCanceled: boolean = $state(false);
+
+  /** Unlisten handle for the event subscription. Held so a hot reload
+      cannot stack duplicate listeners (each duplicate would append a
+      second Activity Journal row per install). */
+  private unlistenAutoInstall: UnlistenFn | null = null;
 
   /**
    * Manually check the manifest. Updates `available` based on the
@@ -121,9 +176,15 @@ class UpdaterStore {
    * `installing` flag so the Settings card can show its retry path.
    */
   async install(version: string): Promise<void> {
-    if (this.installing) return;
+    // A background install is already working on this same version. Two
+    // concurrent installs would race the bundle swap, so the second one is
+    // dropped rather than queued. The UI never offers the button during an
+    // auto-install (the card shows progress + Cancel instead), so this is a
+    // guard against a stale click, not a user-facing path.
+    if (this.installing || this.autoInstalling) return;
     this.installing = true;
     this.installComplete = false;
+    this.autoInstallCanceled = false;
     this.error = null;
     try {
       await updateInstall(version);
@@ -132,6 +193,111 @@ class UpdaterStore {
       this.error = errorText(e);
     } finally {
       this.installing = false;
+    }
+  }
+
+  /**
+   * Subscribe to the backend's background-install events. Called once from
+   * `+layout.svelte` so the subscription outlives every view.
+   *
+   * Idempotent: a second call returns immediately, so a hot reload cannot
+   * stack listeners.
+   */
+  async attachAutoInstallListener(): Promise<void> {
+    if (this.unlistenAutoInstall) return;
+    try {
+      this.unlistenAutoInstall = await listen<AutoInstallEvent>(
+        AUTO_INSTALL_EVENT,
+        (event) => {
+          this.handleAutoInstallEvent(event.payload);
+        },
+      );
+    } catch (e) {
+      // No Tauri event bus (plain-browser `vite dev`, or a listener rejected
+      // during shutdown). Background installs then simply go unobserved by
+      // this renderer — the backend still installs, and the Settings card's
+      // manual path remains usable on the next launch.
+      console.warn(
+        `[updater] auto-install listener unavailable: ${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+    }
+  }
+
+  /** Release the subscription. Safe to call when nothing is attached. */
+  detachAutoInstallListener(): void {
+    this.unlistenAutoInstall?.();
+    this.unlistenAutoInstall = null;
+  }
+
+  /**
+   * Fold one backend phase into the store. Exposed (not private) so the
+   * phase → UI mapping can be exercised without a live Tauri event bus.
+   *
+   * Terminal phases are the only ones that touch the Activity Journal: a
+   * `started`/`verified` pair is progress, not history.
+   */
+  handleAutoInstallEvent(payload: AutoInstallEvent): void {
+    this.autoInstallVersion = payload.version;
+    this.autoInstallPhase = payload.phase;
+
+    switch (payload.phase) {
+      case "started":
+      case "verified":
+        this.autoInstalling = true;
+        this.autoInstallCanceled = false;
+        this.error = null;
+        break;
+
+      case "installed":
+        this.autoInstalling = false;
+        this.autoInstallCanceled = false;
+        this.installComplete = true;
+        // The version is installed — leaving it in `available` would make
+        // the Settings card offer an install that already happened.
+        this.available = null;
+        activity.log({
+          action: "appUpdate",
+          outcome: "ok",
+          detail: i18n.t("updates.journalInstalled", { version: payload.version }),
+        });
+        break;
+
+      case "canceled":
+        // No error and no journal row: nothing was written, and the backend
+        // keeps `cached_available`, so the manual install path is still open.
+        // The flag exists so the UI can say so in one line instead of letting
+        // the progress row vanish without a word.
+        this.autoInstalling = false;
+        this.autoInstallCanceled = true;
+        break;
+
+      case "failed":
+        this.autoInstalling = false;
+        this.autoInstallCanceled = false;
+        this.error = payload.message ?? i18n.t("updates.autoInstallFailed");
+        activity.log({
+          action: "appUpdate",
+          outcome: "error",
+          detail: this.error,
+        });
+        break;
+    }
+  }
+
+  /**
+   * Ask the backend to abort the in-flight background install. Cooperative:
+   * the backend checks the flag between signature verification and the bundle
+   * swap, so a cancel that arrives later is a harmless no-op and the update
+   * simply installs.
+   */
+  async cancelAutoInstall(): Promise<void> {
+    if (!this.autoInstalling) return;
+    try {
+      await updateAutoInstallCancel();
+    } catch (e) {
+      this.error = errorText(e);
     }
   }
 

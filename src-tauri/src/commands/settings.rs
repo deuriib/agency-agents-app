@@ -36,6 +36,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
+use crate::commands::updater::AutoInstallConsent;
 use crate::error::AppError;
 use crate::state::AppState;
 use crate::util::fs::{atomic_write, read_capped};
@@ -106,6 +107,21 @@ pub struct Settings {
     #[serde(default)]
     pub update_auto_check: bool,
 
+    /// Opt-in background auto-install. When true (and Offline Mode is off and
+    /// the version is not on the skip-list), an update discovered by the
+    /// auto-check scheduler is downloaded, verified, and installed in the
+    /// background; the user is only prompted to relaunch. Default **false** —
+    /// auto-install is never implicit, and it is a separate opt-in from
+    /// `update_auto_check` so a user can learn about releases without
+    /// consenting to unattended installs.
+    ///
+    /// `update_auto_check` is **not** required: the scheduler runs when either
+    /// toggle is on, precisely so this one is never a dead control. Only
+    /// scheduler-discovered updates auto-install — a manual "Check now" reports
+    /// its result and never starts an install.
+    #[serde(default)]
+    pub update_auto_install: bool,
+
     /// Phase 15 — versions the user explicitly dismissed via the
     /// title-bar indicator's `×` button. Bounded at 10 entries with
     /// oldest-evicted-on-push (see [`Settings::push_skipped_version`]).
@@ -168,6 +184,9 @@ impl Default for Settings {
             // stays cold until the user explicitly opts in (or hits the
             // manual "Check for updates" button).
             update_auto_check: false,
+            // Off by default: auto-install is a stronger opt-in than
+            // auto-check and must never be enabled implicitly.
+            update_auto_install: false,
             // Empty by default — populated as the user dismisses
             // individual versions via the title-bar indicator's `×`.
             skipped_update_versions: Vec::new(),
@@ -494,11 +513,26 @@ pub async fn settings_set(
     settings: Settings,
     state: State<'_, AppState>,
 ) -> Result<Settings, AppError> {
+    // Phase 3 — snapshot the auto-install consents before the write replaces
+    // them. Turning the toggle off (or Offline Mode on) while a background
+    // install is downloading must abort that install before the bundle swap;
+    // waiting for the next 24h scheduler wake would let it land after
+    // permission was withdrawn.
+    let before = current_auto_install_consent(&state).await;
     let clamped = persist(&state.app_data_dir, settings).await?;
     {
         let mut guard = state.settings.write().await;
         *guard = SettingsLoadState::Loaded(clamped.clone());
     }
+    crate::commands::updater::handle_auto_install_consent_change(
+        &state,
+        before,
+        AutoInstallConsent {
+            enabled: clamped.update_auto_install,
+            offline: clamped.paranoid_mode,
+        },
+    )
+    .await;
     Ok(clamped)
 }
 
@@ -507,13 +541,47 @@ pub async fn settings_set(
 /// the file is corrupt or the user just wants to start fresh.
 #[tauri::command]
 pub async fn settings_reset(state: State<'_, AppState>) -> Result<Settings, AppError> {
+    // Reset returns auto-install to its default (off), which is a consent
+    // revocation like any other — same abort-if-in-flight contract as
+    // `settings_set`.
+    let before = current_auto_install_consent(&state).await;
     let defaults = Settings::default();
     let clamped = persist(&state.app_data_dir, defaults).await?;
     {
         let mut guard = state.settings.write().await;
         *guard = SettingsLoadState::Loaded(clamped.clone());
     }
+    crate::commands::updater::handle_auto_install_consent_change(
+        &state,
+        before,
+        AutoInstallConsent {
+            enabled: clamped.update_auto_install,
+            offline: clamped.paranoid_mode,
+        },
+    )
+    .await;
     Ok(clamped)
+}
+
+/// Current auto-install consents. Absent or corrupt settings mean "not opted
+/// in" and "offline" respectively — the same fail-closed reading `require_network`
+/// and `auto_install_blocker` apply.
+async fn current_auto_install_consent(state: &AppState) -> AutoInstallConsent {
+    let guard = state.settings.read().await;
+    match &*guard {
+        SettingsLoadState::Loaded(s) => AutoInstallConsent {
+            enabled: s.update_auto_install,
+            offline: s.paranoid_mode,
+        },
+        SettingsLoadState::FirstLaunch => AutoInstallConsent {
+            enabled: false,
+            offline: false,
+        },
+        SettingsLoadState::Corrupt { .. } => AutoInstallConsent {
+            enabled: false,
+            offline: true,
+        },
+    }
 }
 
 /// Return the app's version string from the Tauri package info. Source of
@@ -592,6 +660,7 @@ mod tests {
             github_enabled: true,
             ai_features_enabled: false,
             update_auto_check: true,
+            update_auto_install: true,
             skipped_update_versions: vec!["0.3.0".into(), "0.3.1".into()],
             enhanced_trending_enabled: true,
             vulnerability_scanning_enabled: true,
@@ -653,6 +722,7 @@ mod tests {
             github_enabled: false,
             ai_features_enabled: true,
             update_auto_check: false,
+            update_auto_install: false,
             skipped_update_versions: Vec::new(),
             enhanced_trending_enabled: false,
             vulnerability_scanning_enabled: false,
@@ -752,6 +822,10 @@ mod tests {
                 // `update_auto_check` was added in Phase 15 — must default
                 // to false for forward compat with pre-15 settings files.
                 assert!(!s.update_auto_check);
+                // `update_auto_install` is a stronger opt-in and must
+                // default to false for forward compat with pre-existing
+                // settings files.
+                assert!(!s.update_auto_install);
                 // `skipped_update_versions` was added in Phase 15 — must
                 // default to an empty vec.
                 assert!(s.skipped_update_versions.is_empty());
@@ -854,6 +928,7 @@ mod tests {
         let tmp = tempfile::tempdir().expect("tempdir");
         let s = Settings {
             update_auto_check: true,
+            update_auto_install: true,
             skipped_update_versions: vec!["1.0.0".into()],
             ..Settings::default()
         };
@@ -865,6 +940,10 @@ mod tests {
         assert!(
             raw.contains("\"updateAutoCheck\""),
             "expected camelCase updateAutoCheck key in raw JSON, got: {raw}"
+        );
+        assert!(
+            raw.contains("\"updateAutoInstall\""),
+            "expected camelCase updateAutoInstall key in raw JSON, got: {raw}"
         );
         assert!(
             raw.contains("\"skippedUpdateVersions\""),
@@ -879,6 +958,7 @@ mod tests {
         match reloaded {
             SettingsLoadState::Loaded(loaded) => {
                 assert!(loaded.update_auto_check);
+                assert!(loaded.update_auto_install);
                 assert_eq!(loaded.skipped_update_versions, vec!["1.0.0"]);
             }
             other => panic!("expected Loaded, got {other:?}"),

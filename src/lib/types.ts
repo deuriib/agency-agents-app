@@ -45,6 +45,12 @@ export interface Settings {
       opts in via Settings → Network → Updates. Suppressed (no fetch)
       while Offline Mode is on, regardless of this flag. */
   updateAutoCheck: boolean;
+  /** Opt-in background auto-install. When true (and auto-check is on,
+      Offline Mode is off, and the version is not skipped), a discovered
+      update is downloaded, verified, and installed in the background;
+      the user is only prompted to relaunch. Default off; a stronger
+      opt-in than `updateAutoCheck`. */
+  updateAutoInstall: boolean;
   /** Legacy enhanced-trending toggle inherited from the source app.
       Retained for settings-file compatibility. */
   enhancedTrendingEnabled: boolean;
@@ -77,6 +83,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   // Auto-check for new Agency Agents releases. Off by
   // default per the "zero outbound unless user consented" posture.
   updateAutoCheck: false,
+  // Auto-install is a stronger opt-in than auto-check and must never be
+  // enabled implicitly. Off by default.
+  updateAutoInstall: false,
   // Legacy retained field. Off by default.
   enhancedTrendingEnabled: false,
   // Legacy retained field. Off by default.
@@ -231,6 +240,30 @@ export type UpdateCheckOutcome =
       skipped: boolean;
     };
 
+/**
+ * Phases of a background auto-install, emitted by the backend on the
+ * `update:auto-install` Tauri event.
+ *
+ * `verified` and `installed` are distinct on purpose: the artifact's
+ * authenticity is proven at `verified` (download complete + minisign check
+ * passed), and the disk only changes at `installed` (bundle swap). A cancel
+ * can still land between the two.
+ */
+export type AutoInstallPhase =
+  | "started"
+  | "verified"
+  | "installed"
+  | "failed"
+  | "canceled";
+
+/** Payload of the `update:auto-install` event. Mirrors `AutoInstallEvent`. */
+export interface AutoInstallEvent {
+  phase: AutoInstallPhase;
+  version: string;
+  /** Typed error text, present only on `failed`. */
+  message?: string;
+}
+
 // =========================================================
 // 3.3 Error model
 // =========================================================
@@ -249,7 +282,9 @@ export type AppErrorPayload =
   | { code: "scope_required"; scope: string }
   | { code: "hash_mismatch"; expected: string; actual: string }
   | { code: "signature_verification_failed"; message: string }
-  | { code: "downgrade_rejected"; current: string; target: string };
+  | { code: "downgrade_rejected"; current: string; target: string }
+  | { code: "install_canceled" }
+  | { code: "install_in_progress" };
 
 /** Type-narrowing helper: is the thrown value a AppErrorPayload? */
 export function isAppError(e: unknown): e is AppErrorPayload {
@@ -304,6 +339,10 @@ export function appErrorMessage(e: AppErrorPayload): string {
       return `Update aborted: signature verification failed (${e.message}).`;
     case "downgrade_rejected":
       return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
+    case "install_canceled":
+      return "Update canceled before it was installed.";
+    case "install_in_progress":
+      return "An update install is already running. It will prompt you to relaunch when it finishes.";
   }
 }
 

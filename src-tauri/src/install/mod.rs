@@ -502,7 +502,14 @@ async fn write_agent_files_to(
         composite.push(0);
         file_hashes.insert(rf.relative.clone(), render::sha256_hex(rf.bytes.as_bytes()));
     }
-    let rendered_hash = render::sha256_hex(&composite);
+    let mut rendered_hash = render::sha256_hex(&composite);
+    // Single-file renders must hash the file bytes directly so the existing
+    // reconcile contract (`classify(sha256(on_disk), rendered_hash, …)`) keeps
+    // working: the composite framing is only meaningful for multi-file tools.
+    // Without this, every single-file install would reconcile as `Modified`.
+    if rendered.len() == 1 {
+        rendered_hash = render::sha256_hex(rendered[0].bytes.as_bytes());
+    }
 
     for (i, dest) in paths.iter().enumerate() {
         // Find matching rendered file by basename.
@@ -1498,7 +1505,7 @@ mod tests {
 
         let path = home.path().join(".codex/agents").join("frontend-developer.toml");
         assert!(!path.exists(), "Track must not write the agent file");
-        assert_eq!(rec.dest, path.to_string_lossy(), "record points at the canonical dest");
+        assert_eq!(PathBuf::from(&rec.dest), path, "record points at the canonical dest");
 
         // The recorded rendered_hash equals a real render — so if the user's file
         // happens to match it, reconcile yields Current; otherwise Modified.
@@ -1539,7 +1546,7 @@ mod tests {
             "2026-06-12T00:00:00Z",
         )
         .unwrap();
-        assert_eq!(tracked.dest, conversion_dest.to_string_lossy());
+        assert_eq!(PathBuf::from(&tracked.dest), conversion_dest);
 
         write_agent_files_to(
             &agent,

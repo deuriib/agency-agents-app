@@ -557,7 +557,7 @@ const fr = {
   "updates.autoCheck": "Vérifier chaque jour",
   "updates.autoCheckHint": "Si l’option est activée, Agency Agents consulte le manifeste toutes les 24 heures et affiche un avis dans la barre de titre lorsqu’une nouvelle version est disponible. Suspendu automatiquement en mode hors ligne.",
   "updates.autoInstall": "Installer automatiquement les mises à jour",
-  "updates.autoInstallHint": "Disponible dès l’ouverture du canal de mise à jour. Une fois l’option activée, les mises à jour approuvées seront téléchargées, vérifiées et installées en arrière-plan ; il vous suffira de relancer l’app.",
+  "updates.autoInstallHint": "Une fois activé, les mises à jour approuvées sont téléchargées, vérifiées et installées en arrière-plan. Seul un redémarrage vous sera demandé. Suspendu automatiquement lorsque le mode hors ligne est activé.",
   "updates.channel": "Canal de mise à jour",
   "updates.stable": "Stable",
   "updates.noBeta": "Pas de canal bêta pour cette version.",
