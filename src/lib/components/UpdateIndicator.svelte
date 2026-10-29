@@ -25,10 +25,11 @@
    *     bubble up to the pill's onclick and open Settings on top of
    *     the dismissal.
    *
-   * Inline install state: while `updater.installing === true`, the ×
-   * is replaced with a small spinner so the user sees activity even
-   * if they navigated away from Settings. The pill remains clickable
-   * to open Settings (where the progress bar + result UI lives).
+   * Inline install state: while `updater.installing === true` (manual) or
+   * `updater.autoInstalling === true` (background auto-install), the × is
+   * replaced with a small spinner so the user sees activity even if they
+   * navigated away from Settings. The pill remains clickable to open
+   * Settings (where the progress bar + result UI lives).
    *
    * ARIA: the pill is `role="button"` (behaviorally a button, but a
    * notification by intent — we lean on role-button so screen readers
@@ -90,7 +91,7 @@
       <ArrowUp size={12} />
       <span>{i18n.t("updates.indicatorAvailable")}</span>
     </span>
-    {#if updater.installing}
+    {#if updater.installing || updater.autoInstalling}
       <span class="spinner" aria-label={i18n.t("updates.installing")} title={i18n.t("updates.installing")}>
         <Loader size={12} />
       </span>

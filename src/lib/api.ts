@@ -213,3 +213,15 @@ export function updateSkip(version: string): Promise<void> {
 export function updateRelaunch(): Promise<void> {
   return invoke<void>("update_relaunch");
 }
+
+/**
+ * Ask the backend to abort an in-flight background auto-install.
+ *
+ * Cooperative: the flag is consulted between signature verification and the
+ * bundle swap, so a cancel that lands later is a no-op and the update is
+ * simply installed. Also fired implicitly when the user turns the
+ * "Install updates automatically" toggle off.
+ */
+export function updateAutoInstallCancel(): Promise<void> {
+  return invoke<void>("update_auto_install_cancel");
+}

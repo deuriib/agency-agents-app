@@ -36,15 +36,22 @@
   import CheckCircle from "@lucide/svelte/icons/check-circle-2";
   import TriangleAlert from "@lucide/svelte/icons/triangle-alert";
   import RotateCw from "@lucide/svelte/icons/rotate-cw";
+  import X from "@lucide/svelte/icons/x";
 
   import { settings } from "$lib/stores/settings.svelte";
   import { updater } from "$lib/stores/updater.svelte";
   import { safeOpenUrl } from "$lib/util/url";
   import { i18n } from "$lib/stores/i18n.svelte";
+  import DestructiveConfirm from "$lib/components/DestructiveConfirm.svelte";
 
   /** Offline Mode gates both the manual button and the Install action.
       Tracked as a single derived for tidy template gating. */
   let offline = $derived(settings.effective.paranoidMode);
+
+  /** First-time consent dialog for the auto-install opt-in. The toggle
+      is a stronger consent than auto-check, so enabling it the first
+      time asks for explicit confirmation. */
+  let consentOpen = $state(false);
 
   /** Available-update snapshot for the conditional card. */
   let info = $derived(updater.available);
@@ -56,6 +63,26 @@
   function onToggleAutoCheck(e: Event) {
     const v = (e.currentTarget as HTMLInputElement).checked;
     void settings.save({ updateAutoCheck: v });
+  }
+
+  /** Enabling auto-install for the first time opens a consent dialog.
+      Disabling is immediate — revoking consent never needs confirmation. */
+  function onToggleAutoInstall(e: Event) {
+    const v = (e.currentTarget as HTMLInputElement).checked;
+    if (v && !settings.effective.updateAutoInstall) {
+      consentOpen = true;
+      return;
+    }
+    void settings.save({ updateAutoInstall: v });
+  }
+
+  function onConfirmAutoInstall() {
+    consentOpen = false;
+    void settings.save({ updateAutoInstall: true });
+  }
+
+  function onCancelConsent() {
+    consentOpen = false;
   }
 
   function onInstall() {
@@ -89,6 +116,30 @@
     if (updater.lastChecked === null) return "—";
     return new Date(updater.lastChecked).toLocaleString();
   });
+
+  /** Version shown in the progress row: the background install's target
+      when one is running, otherwise the manually-selected update. */
+  let progressVersion = $derived(updater.autoInstallVersion ?? info?.version ?? "");
+
+  /** Progress copy. A background install reads differently from a manual one
+      ("in the background" vs. a click the user just made), and `verified`
+      earns its own wording: the artifact is downloaded and signature-checked,
+      so the remaining wait is the bundle swap. Only an auto install can be in
+      that phase — a manual install leaves `autoInstallPhase` at its last value. */
+  let progressLabel = $derived.by(() => {
+    const version = progressVersion;
+    if (!updater.autoInstalling) {
+      return i18n.t("updates.downloading", { version });
+    }
+    if (updater.autoInstallPhase === "verified") {
+      return i18n.t("updates.autoInstallVerifying", { version });
+    }
+    return i18n.t("updates.autoInstalling", { version });
+  });
+
+  function onCancelAutoInstall() {
+    void updater.cancelAutoInstall();
+  }
 </script>
 
 <div class="section">
@@ -141,16 +192,16 @@
     <p class="hint">{i18n.t("updates.autoCheckHint")}</p>
   </div>
 
-  <!-- Row 2b: Install updates automatically — present but disabled.
-       No backing setting yet; the toggle is inert until the update
-       channel is live (endpoint provisioned + auto-install wired). It
-       ships now so the capability is visible and the layout is settled. -->
+  <!-- Row 2b: Install updates automatically. A stronger opt-in than
+       auto-check: enabling it for the first time opens a consent dialog.
+       The runtime gate still honours Offline Mode and the skip-list. -->
   <div class="field">
-    <label class="toggle is-disabled">
+    <label class="toggle">
       <input
         type="checkbox"
-        checked={false}
-        disabled
+        checked={settings.effective.updateAutoInstall}
+        onchange={onToggleAutoInstall}
+        disabled={settings.loading || settings.corruptOnDisk}
         aria-describedby="auto-install-hint"
       />
       <span class="toggle-track" aria-hidden="true"></span>
@@ -205,12 +256,22 @@
           <RotateCw size={14} />
           {i18n.t("common.relaunchNow")}
         </button>
-      {:else if updater.installing}
+      {:else if updater.installing || updater.autoInstalling}
         <div class="progress" role="status" aria-live="polite">
           <span class="spin"><Loader size={16} /></span>
-          <span>{i18n.t("updates.downloading", { version: info.version })}</span
-          >
+          <span>{progressLabel}</span>
         </div>
+        {#if updater.autoInstalling}
+          <button
+            type="button"
+            class="btn-secondary"
+            onclick={onCancelAutoInstall}
+            title={i18n.t("updates.cancelAutoInstallTitle")}
+          >
+            <X size={14} />
+            {i18n.t("updates.cancelAutoInstall")}
+          </button>
+        {/if}
       {:else if updater.error}
         <div class="result error">
           <TriangleAlert size={16} />
@@ -259,7 +320,84 @@
       {/if}
     </div>
   {/if}
+
+  <!-- Background auto-install with no notice card to host it. `available` is
+       only populated by a manual check, so a scheduler-driven install can
+       start while this pane has nothing to show. -->
+  {#if updater.autoInstalling && !info}
+    <div class="notice" role="status" aria-live="polite">
+      <div class="progress">
+        <span class="spin"><Loader size={16} /></span>
+        <span>{progressLabel}</span>
+      </div>
+      <button
+        type="button"
+        class="btn-secondary"
+        onclick={onCancelAutoInstall}
+        title={i18n.t("updates.cancelAutoInstallTitle")}
+      >
+        <X size={14} />
+        {i18n.t("updates.cancelAutoInstall")}
+      </button>
+    </div>
+  {/if}
+
+  <!-- Completion / failure from a background install, which by definition can
+       land while the user is anywhere in the app (or before they ever open
+       this pane). Kept outside `{#if info}` so the relaunch prompt survives
+       the `available` entry being cleared by the install itself.
+       `!info` guards against double-rendering on the manual path, where the
+       notice card above owns both states. -->
+  {#if updater.installComplete && !info}
+    <div class="notice" role="status" aria-live="polite">
+      <div class="result success">
+        <CheckCircle size={16} />
+        <span>{i18n.t("updates.installComplete")}</span>
+      </div>
+      <button
+        type="button"
+        class="btn-primary"
+        onclick={onRelaunch}
+        title={i18n.t("updates.relaunchTitle")}
+      >
+        <RotateCw size={14} />
+        {i18n.t("common.relaunchNow")}
+      </button>
+    </div>
+  {:else if updater.error && !info}
+    <div class="notice" role="alert">
+      <div class="result error">
+        <TriangleAlert size={16} />
+        <span>{updater.error}</span>
+      </div>
+    </div>
+  {/if}
+
+  <!-- A canceled background install needs one line of acknowledgement: the
+       progress row disappears on `canceled`, and silence reads as a failure.
+       Rendered outside the `{#if info}` card so it is visible whether or not a
+       manual check happened to populate `available`; the install action below
+       (or the card's) is the retry path. -->
+  {#if updater.autoInstallCanceled && !updater.autoInstalling}
+    <div class="notice" role="status" aria-live="polite">
+      <div class="result">
+        <X size={16} />
+        <span>{i18n.t("updates.autoInstallCanceled")}</span>
+      </div>
+    </div>
+  {/if}
 </div>
+
+<DestructiveConfirm
+  open={consentOpen}
+  title={i18n.t("updates.autoInstallConsentTitle")}
+  confirmLabel={i18n.t("updates.autoInstallEnable")}
+  confirmVariant="primary"
+  onConfirm={onConfirmAutoInstall}
+  onCancel={onCancelConsent}
+>
+  <p>{i18n.t("updates.autoInstallConsentBody")}</p>
+</DestructiveConfirm>
 
 <style>
   .section {
@@ -317,11 +455,6 @@
     position: absolute;
     opacity: 0;
     pointer-events: none;
-  }
-  /* Inert "Install updates automatically" row — visible, clearly off. */
-  .toggle.is-disabled {
-    opacity: 0.55;
-    cursor: not-allowed;
   }
   .toggle-track {
     width: 36px;
