@@ -516,7 +516,7 @@ const de = {
   "updates.autoCheck": "Tägliche automatische Überprüfung",
   "updates.autoCheckHint": "Wenn diese Option aktiviert ist, überprüft Agency Agents das Manifest alle 24 Stunden und zeigt einen Hinweis in der Titelleiste an, wenn eine neuere Version verfügbar ist. Wird automatisch angehalten, während der Offline-Modus aktiviert ist.",
   "updates.autoInstall": "Updates automatisch installieren",
-  "updates.autoInstallHint": "Verfügbar, sobald der Update-Kanal live ist. Wenn diese Option aktiviert ist, werden genehmigte Updates im Hintergrund heruntergeladen, überprüft und installiert – Sie werden lediglich zum Neustart aufgefordert.",
+  "updates.autoInstallHint": "Wenn aktiviert, werden freigegebene Updates im Hintergrund heruntergeladen, überprüft und installiert. Sie werden nur zum Neustart aufgefordert. Wird automatisch pausiert, solange der Offline-Modus aktiv ist.",
   "updates.channel": "Kanal aktualisieren",
   "updates.stable": "Stabil",
   "updates.noBeta": "In dieser Version gibt es keinen Beta-Kanal.",

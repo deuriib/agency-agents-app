@@ -516,7 +516,7 @@ const zhTW = {
   "updates.autoCheck": "每日自動檢查",
   "updates.autoCheckHint": "啟用後，Agency Agents 每 24 小時檢查一次清單，並在標題列中顯示通知（如果有新版本可用）。離線模式開啟時自動暫停。",
   "updates.autoInstall": "自動安裝更新",
-  "updates.autoInstallHint": "更新頻道上線後即可使用。啟用後，批准的更新將在背景下載、驗證和安裝 — 只會提示您重新啟動。",
+  "updates.autoInstallHint": "啟用後，已批准的更新將在背景下載、驗證並安裝。只會提示您重新啟動。離線模式開啟時會自動暫停。",
   "updates.channel": "更新頻道",
   "updates.stable": "穩定版",
   "updates.noBeta": "此版本中沒有測試版頻道。",

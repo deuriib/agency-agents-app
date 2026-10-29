@@ -516,7 +516,7 @@ const ptBR = {
   "updates.autoCheck": "Verificação automática diariamente",
   "updates.autoCheckHint": "Quando ativado, Agency Agents verifica o manifesto uma vez a cada 24 horas e exibe um aviso na barra de título se uma versão mais recente estiver disponível. Suspenso automaticamente enquanto o modo offline estiver ativado.",
   "updates.autoInstall": "Instale atualizações automaticamente",
-  "updates.autoInstallHint": "Disponível assim que o canal de atualização estiver no ar. Quando ativadas, as atualizações aprovadas serão baixadas, verificadas e instaladas em segundo plano – você só será solicitado a reiniciar.",
+  "updates.autoInstallHint": "Quando ativado, as atualizações aprovadas são baixadas, verificadas e instaladas em segundo plano. Você só será solicitado a reiniciar. Suspenso automaticamente enquanto o Modo offline estiver ativado.",
   "updates.channel": "Atualizar canal",
   "updates.stable": "Estável",
   "updates.noBeta": "Nenhum canal beta nesta versão.",

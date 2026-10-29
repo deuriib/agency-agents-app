@@ -516,7 +516,7 @@ const es = {
   "updates.autoCheck": "Comprobación automática diaria",
   "updates.autoCheckHint": "Cuando está activado, Agency Agents verifica el manifiesto una vez cada 24 horas y muestra un aviso en la barra de título si hay una versión más nueva disponible. Se suspende automáticamente mientras el modo sin conexión está activado.",
   "updates.autoInstall": "Instalar actualizaciones automáticamente",
-  "updates.autoInstallHint": "Disponible una vez que el canal de actualización esté activo. Cuando están habilitadas, las actualizaciones aprobadas se descargarán, verificarán e instalarán en segundo plano; solo se le pedirá que reinicie.",
+  "updates.autoInstallHint": "Cuando está activado, las actualizaciones aprobadas se descargan, verifican e instalan en segundo plano. Solo se le pedirá que reinicie. Se suspende automáticamente mientras el Modo sin conexión está activado.",
   "updates.channel": "Canal de actualización",
   "updates.stable": "Estable",
   "updates.noBeta": "No hay canal beta en esta versión.",

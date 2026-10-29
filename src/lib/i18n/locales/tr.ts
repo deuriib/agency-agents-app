@@ -556,7 +556,7 @@ const tr = {
   "updates.autoCheck": "Günlük otomatik kontrol",
   "updates.autoCheckHint": "Açıkken Agency Agents manifest'i 24 saatte bir kontrol eder ve daha yeni bir sürüm varsa başlık çubuğunda bir bildirim gösterir. Çevrimdışı Mod açıkken otomatik olarak askıya alınır.",
   "updates.autoInstall": "Güncellemeleri otomatik kur",
-  "updates.autoInstallHint": "Güncelleme kanalı yayına girdiğinde kullanılabilecek. Etkinleştirildiğinde onaylanan güncellemeler arka planda indirilir, doğrulanır ve kurulur — yalnızca yeniden başlatma istenir.",
+  "updates.autoInstallHint": "Etkinleştirildiğinde onaylanan güncellemeler arka planda indirilir, doğrulanır ve kurulur. Yalnızca yeniden başlatmanız istenir. Çevrimdışı Mod açıkken otomatik olarak duraklatılır.",
   "updates.channel": "Güncelleme kanalı",
   "updates.stable": "Kararlı",
   "updates.noBeta": "Bu sürümde beta kanalı yok.",
