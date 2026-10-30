@@ -331,7 +331,7 @@ pub fn build_release_source() -> Result<GithubReleaseSource, AppError> {
 /// surface.
 #[cfg(not(test))]
 pub struct PluginBackend<R: tauri::Runtime> {
-    app: tauri::AppHandle<R>,
+    // app: tauri::AppHandle<R>,
     /// Consulted between download-verify and the bundle swap.
     cancel: CancelToken,
     /// Notified once the artifact is downloaded AND signature-verified,
