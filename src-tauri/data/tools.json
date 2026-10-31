@@ -87,7 +87,7 @@
       },
       "detect": {
         "dirs": [
-          ".gemini/agents"
+          ".gemini"
         ],
         "agentsDir": ".gemini/agents"
       },
