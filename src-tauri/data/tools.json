@@ -336,8 +336,7 @@
       "detect": {
         "dirs": [
           ".gemini/antigravity-cli",
-          ".gemini/antigravity-ide",
-          ".agents/"
+          ".gemini/antigravity-ide"
         ],
         "agentsDir": ".gemini/config/agents"
       },
@@ -372,7 +371,9 @@
         "project": false
       },
       "detect": {
-        "dirs": [],
+        "dirs": [
+          ".config/kimi"
+        ],
         "agentsDir": ".config/kimi/agents"
       },
       "version": {
@@ -621,7 +622,7 @@
       },
       "detect": {
         "dirs": [
-          ".pi/"
+          ".pi"
         ],
         "agentsDir": ".pi/agent/agents"
       },
@@ -657,7 +658,7 @@
       },
       "detect": {
         "dirs": [
-          ".omp/"
+          ".omp"
         ],
         "agentsDir": ".omp/agent/agents"
       },
