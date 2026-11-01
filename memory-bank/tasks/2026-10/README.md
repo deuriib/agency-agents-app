@@ -9,6 +9,7 @@ The project has reached **v0.6.0**: multi-file renderers (v0.4.3) plus opt-in au
 - [ ] Execute full parity tests for multi-file renderers.
 
 ## Recent Achievements
+- Rendered `agents-orchestrator` as the primary/main agent (issue #22): opencode `mode: primary`, Antigravity `mainAgent: true`; specialists unchanged. See [261031_orchestrator-primary-mode.md](./261031_orchestrator-primary-mode.md).
 - Shipped v0.6.0 (opt-in automatic installs; six backend test repairs; eleven i18n hint corrections). See [261028_v0.6.0-release.md](./261028_v0.6.0-release.md).
 - Shipped v0.5.1 (manifest-drift repair; no task doc was written at the time).
 - Shipped v0.5.0 (version bump and release notes setup). See [261028_v0.5.0-release.md](./261028_v0.5.0-release.md).

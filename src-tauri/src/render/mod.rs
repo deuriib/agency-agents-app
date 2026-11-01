@@ -1,11 +1,20 @@
 //! Deterministic per-tool agent renderers + destination-path resolution.
 //!
-//! Ports agency-agents `scripts/convert.sh`. Every renderer is a PURE function
-//! of `(Agent, raw source)` — no timestamps, no randomness, stable key order —
-//! so `rendered_hash` is reproducible. That reproducibility is the load-bearing
-//! requirement for install-state reconciliation (`reconcile/`): we identify an
-//! installed file as "ours" by re-rendering its slug for its tool and matching
-//! bytes. See `memory-bank/contracts.md` §B/§E.
+//! Ports the vendored agency-agents `scripts/convert.sh` heredocs. Every
+//! renderer is a PURE function of `(Agent, raw source)` — no timestamps, no
+//! randomness, stable key order — so `rendered_hash` is reproducible. That
+//! reproducibility is the load-bearing requirement for install-state
+//! reconciliation (`reconcile/`): we identify an installed file as "ours" by
+//! re-rendering its slug for its tool and matching bytes. See
+//! `memory-bank/contracts.md` §B/§E.
+//!
+//! The *render policy* (which agent is primary) is mirrored from the current
+//! upstream `agency_agents/core/converter.py` (`PRIMARY_AGENT_SLUGS`); its
+//! output shape is NOT what this module emits. That policy is the one
+//! deliberate divergence from the vendored `convert.sh`, which predates it and
+//! still hardcodes `mode: subagent` / `subagent: true` for every agent.
+//! `antigravity-md` is outside the `convert.sh` parity gate entirely: its
+//! upstream shape moved from skill directories to per-agent `.md` files.
 //!
 //! Identity tools (claude-code, copilot) ship the agent `.md` verbatim, so their
 //! "render" is the raw corpus source. Transform tools (cursor/.mdc, codex/TOML,
@@ -186,6 +195,24 @@ fn qwen_tools(tools: &str) -> String {
     out.join(", ")
 }
 
+/// Render-level policy: roster agents promoted to the top of the hierarchy.
+///
+/// Mirrors upstream `agency_agents/core/converter.py#PRIMARY_AGENT_SLUGS` —
+/// this is a rendering decision, not agent content, so it never touches the
+/// source frontmatter. Only the orchestrator is a primary agent today: it
+/// leads a session instead of being delegated to. The flag each tool needs
+/// differs (`mode: primary` for OpenCode, `mainAgent: true` for Antigravity),
+/// so the renderers below translate this one role into the right frontmatter.
+const PRIMARY_AGENT_SLUGS: &[&str] = &["agents-orchestrator"];
+
+/// True when `slug` is declared primary by the render policy. Callers pass the
+/// slugified frontmatter `name`, matching upstream: its `agent.slug` is derived
+/// from `name` (`agency_agents/core/parser.py`), not from the filename. That
+/// keeps the role stable if the corpus file is renamed.
+fn is_primary_agent(slug: &str) -> bool {
+    PRIMARY_AGENT_SLUGS.contains(&slug)
+}
+
 /// Match `scripts/lib.sh#slugify`.
 pub fn slugify(value: &str) -> String {
     let mut out = String::with_capacity(value.len());
@@ -246,7 +273,7 @@ pub struct RenderedFile {
 /// here — they need corpus-wide aggregation and live in the install layer.
 /// Deterministic. This is the foundation for multi-file installability.
 pub fn render_files(
-    _agent: &Agent,
+    agent: &Agent,
     raw_source: &str,
     tool: &str,
 ) -> Result<Vec<RenderedFile>, AppError> {
@@ -267,7 +294,7 @@ pub fn render_files(
         | Some("zcode-md")
         | Some("skill-md")
         | Some("opencode-md") => {
-            let bytes = render(_agent, raw_source, tool)?;
+            let bytes = render(agent, raw_source, tool)?;
             Ok(vec![RenderedFile {
                 relative: String::new(),
                 bytes,
@@ -352,9 +379,13 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
     let description = source_field(raw_source, "description");
     let body = source_body(raw_source);
     let slug = slugify(&name);
+    let primary = is_primary_agent(&slug);
     // Dispatch on the registry's render `format` key rather than a Rust variant.
-    // Every template below mirrors its `convert.sh` heredoc byte for byte,
-    // including which scalars go through `yaml_quote`.
+    // Every template below mirrors the vendored `convert.sh` heredoc byte for
+    // byte, including which scalars go through `yaml_quote`. The one intentional
+    // divergence is the primary-agent role policy (upstream `PRIMARY_AGENT_SLUGS`):
+    // the vendored `convert.sh` predates it, so it still hardcodes
+    // `mode: subagent` / `subagent: true` for every agent.
     let format = registry::get(tool).and_then(|m| m.format.as_deref());
     let out = match format {
         // Identity — ship the corpus `.md` exactly as authored.
@@ -381,11 +412,24 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
             desc = yaml_quote(&description),
         ),
 
-        // Antigravity (CLI, IDE) subagent `.md`: name(=slug) + description + subagent frontmatter.
+        // Antigravity (CLI, IDE) agent `.md`: name(=slug) + description + ONE
+        // role flag. The two flags are mutually exclusive, matching upstream's
+        // *role-flag policy* in `AntigravityRenderer.frontmatter_overrides`: a
+        // primary agent is `mainAgent: true` (selectable as the main agent in
+        // the GUI/CLI and no longer a subagent), while a specialist is
+        // `subagent: true` (invocable via `invoke_subagent` only). Upstream's
+        // per-role `tools:` list is not ported yet, so this matches the flag
+        // semantics but not the full override shape. Only the orchestrator is
+        // promoted, so specialists stay out of the primary-agent picker.
         Some("antigravity-md") => format!(
-            "---\nname: {name}\ndescription: {desc}\nsubagent: true\n---\n{body}\n",
+            "---\nname: {name}\ndescription: {desc}\n{role}\n---\n{body}\n",
             name = yaml_quote(&slug),
             desc = yaml_quote(&description),
+            role = if primary {
+                "mainAgent: true"
+            } else {
+                "subagent: true"
+            },
         ),
 
         // Qwen Code SubAgent `.md`: the optional tool list is renamed to Qwen's
@@ -444,10 +488,14 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
         }
 
         // OpenCode `.md`: name + description + mode + hex color frontmatter.
+        // `mode: primary` makes the agent selectable as the session's main
+        // agent (visible in the Tab cycle); `mode: subagent` keeps a specialist
+        // delegatable only. The orchestrator leads, so it is primary.
         Some("opencode-md") => format!(
-            "---\nname: {name}\ndescription: {desc}\nmode: subagent\ncolor: '{color}'\n---\n{body}\n",
+            "---\nname: {name}\ndescription: {desc}\nmode: {mode}\ncolor: '{color}'\n---\n{body}\n",
             name = yaml_quote(&name),
             desc = yaml_quote(&description),
+            mode = if primary { "primary" } else { "subagent" },
             color = resolve_opencode_color(&source_field(raw_source, "color")),
         ),
 
@@ -594,6 +642,23 @@ mod tests {
         "---\nname: Frontend Developer\ndescription: Builds UIs.\ncolor: blue\nemoji: 🎨\nvibe: Ships pixels.\n---\nYou are a frontend dev.\n"
     }
 
+    fn orchestrator() -> Agent {
+        Agent {
+            slug: "agents-orchestrator".into(),
+            name: "Agents Orchestrator".into(),
+            description: "Runs the whole pipeline.".into(),
+            category: "specialized".into(),
+            emoji: Some("🎛️".into()),
+            color: Some("cyan".into()),
+            vibe: Some("Conducts the pipeline.".into()),
+            body: "You orchestrate.\n".into(),
+        }
+    }
+
+    fn orchestrator_raw() -> &'static str {
+        "---\nname: Agents Orchestrator\ndescription: Runs the whole pipeline.\ncolor: cyan\nemoji: 🎛️\nvibe: Conducts the pipeline.\n---\nYou orchestrate.\n"
+    }
+
     #[test]
     fn claude_code_is_identity() {
         let a = agent();
@@ -648,9 +713,9 @@ mod tests {
 
     #[test]
     fn antigravity_native_agents_shape_and_dests() {
-        // Antigravity native agents use the gemini-md renderer shape. Global
-        // agents load from ~/.gemini/config/agents/, project agents from
-        // <project>/.agents/agents/.
+        // Antigravity native agents use the antigravity-md shape (name +
+        // description + one role flag). Global agents load from
+        // ~/.gemini/config/agents/, project agents from <project>/.agents/agents/.
         let out = render(&agent(), raw(), "antigravity").unwrap();
         assert_eq!(
             out,
@@ -674,6 +739,100 @@ mod tests {
         assert_eq!(
             proj,
             vec![PathBuf::from("/proj/.agents/agents/frontend-developer.md")]
+        );
+    }
+
+    #[test]
+    fn orchestrator_is_primary_in_opencode_and_main_in_antigravity() {
+        // The orchestrator leads a session, so each tool must expose it as the
+        // primary/main agent instead of hiding it among the subagents.
+        let out = render(&orchestrator(), orchestrator_raw(), "opencode").unwrap();
+        assert!(out.contains("\nmode: primary\n"), "opencode: {out}");
+
+        let out = render(&orchestrator(), orchestrator_raw(), "antigravity").unwrap();
+        assert!(out.contains("\nmainAgent: true\n"), "antigravity: {out}");
+        // The role flags are mutually exclusive upstream: promoting the agent
+        // to main replaces `subagent: true`, it does not add to it.
+        assert!(!out.contains("\nsubagent: true\n"), "antigravity: {out}");
+    }
+
+    #[test]
+    fn specialists_are_subagents_only() {
+        // A specialist is delegated to, never selected as the main agent.
+        let out = render(&agent(), raw(), "opencode").unwrap();
+        assert!(out.contains("\nmode: subagent\n"), "opencode: {out}");
+
+        let out = render(&agent(), raw(), "antigravity").unwrap();
+        assert!(out.contains("\nsubagent: true\n"), "antigravity: {out}");
+        assert!(!out.contains("\nmainAgent:"), "antigravity: {out}");
+    }
+
+    #[test]
+    fn primary_agent_is_identified_by_frontmatter_name() {
+        // Upstream derives `agent.slug` from the frontmatter `name`, so a
+        // renamed corpus file keeps its role (and does not silently demote).
+        let mut renamed = orchestrator();
+        renamed.slug = "specialized-lead".into();
+        let out = render(&renamed, orchestrator_raw(), "opencode").unwrap();
+        assert!(out.contains("\nmode: primary\n"), "opencode: {out}");
+    }
+
+    #[test]
+    fn role_flags_do_not_leak_into_other_tools() {
+        // `primary` is computed for every render but only OpenCode and
+        // Antigravity express it. Guard against copy-paste into a shared
+        // format (gemini-md backs geminiCli / piAgent / ohMyPi).
+        for tool in [
+            "claudeCode",
+            "copilot",
+            "codex",
+            "cursor",
+            "geminiCli",
+            "piAgent",
+            "ohMyPi",
+            "qwen",
+            "zcode",
+            "osaurus",
+            "deepseekHarness",
+        ] {
+            let out = render(&orchestrator(), orchestrator_raw(), tool).unwrap();
+            // Identity tools ship the raw source verbatim, so inspect the
+            // frontmatter only — a body could legitimately mention `mode:`.
+            // Fence-less formats (codex TOML) have no body to exclude, so the
+            // whole output is the head.
+            let head = out.split("---\n").nth(1).unwrap_or(out.as_str());
+            assert!(
+                !head.contains("mainAgent:") && !head.contains("mode:"),
+                "{tool} must not carry role flags: {out}"
+            );
+        }
+    }
+
+    #[test]
+    fn bundled_orchestrator_renders_as_primary_agent() {
+        // End-to-end against the SHIPPED corpus file (not a fixture): the real
+        // orchestrator must reach the primary/main path for both tools.
+        let raw =
+            include_str!("../../resources/corpus-baseline/specialized/agents-orchestrator.md");
+        let agent = Agent {
+            slug: "agents-orchestrator".into(),
+            ..orchestrator()
+        };
+
+        let opencode = render(&agent, raw, "opencode").unwrap();
+        assert!(
+            opencode.contains("\nmode: primary\n"),
+            "bundled orchestrator must be opencode-primary: {opencode}"
+        );
+
+        let antigravity = render(&agent, raw, "antigravity").unwrap();
+        assert!(
+            antigravity.contains("\nmainAgent: true\n"),
+            "bundled orchestrator must be an antigravity main agent: {antigravity}"
+        );
+        assert!(
+            !antigravity.contains("\nsubagent: true\n"),
+            "mainAgent replaces subagent, it must not carry both: {antigravity}"
         );
     }
 
@@ -954,7 +1113,18 @@ mod tests {
                     temp.path().join(subdir).join(format!("{converted_slug}.{ext}"));
                 let expected = fs::read(&expected_path)
                     .unwrap_or_else(|e| panic!("read {}: {e}", expected_path.display()));
-                let actual = render(&agent, &raw, tool).unwrap();
+                let mut actual = render(&agent, &raw, tool).unwrap();
+                // The vendored convert.sh predates the upstream primary-agent
+                // policy: it hardcodes `mode: subagent` for every agent. The
+                // app follows the current converter, which promotes the
+                // orchestrator to `mode: primary`. Normalize that one known
+                // divergence so the byte-parity gate stays meaningful.
+                if tool == "opencode"
+                    && is_primary_agent(&converted_slug)
+                    && !String::from_utf8_lossy(&expected).contains("mode: primary")
+                {
+                    actual = actual.replacen("\nmode: primary\n", "\nmode: subagent\n", 1);
+                }
                 assert_eq!(
                     actual.as_bytes(),
                     expected,
