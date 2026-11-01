@@ -205,6 +205,52 @@ fn qwen_tools(tools: &str) -> String {
 /// so the renderers below translate this one role into the right frontmatter.
 const PRIMARY_AGENT_SLUGS: &[&str] = &["agents-orchestrator"];
 
+/// Antigravity tool set for the MAIN agent: the orchestration surface
+/// (delegation) plus every execution tool, in upstream's declared order.
+///
+/// Mirrors upstream `agency_agents/core/converter.py#AntigravityRenderer.MAIN_AGENT_TOOLS`.
+/// Antigravity grants tools from frontmatter, so the renderer emits this list
+/// instead of letting the source agent's Claude-style names through — those
+/// names match nothing in Antigravity and would grant nothing (agency-agents
+/// issue #26).
+const MAIN_AGENT_TOOLS: &[&str] = &[
+    "invoke_subagent",
+    "manage_subagents",
+    "send_message",
+    "manage_task",
+    "view_file",
+    "write_to_file",
+    "replace_file_content",
+    "grep_search",
+    "find_by_name",
+    "list_dir",
+    "run_command",
+];
+
+/// Antigravity tool set for a SUBAGENT: the main agent's execution tools minus
+/// the delegation surface. Delegation is reserved for the main agent, so a
+/// subagent must never receive `invoke_subagent` / `manage_subagents` /
+/// `send_message` / `manage_task`.
+///
+/// Mirrors upstream `agency_agents/core/converter.py#AntigravityRenderer.SUBAGENT_TOOLS`.
+const SUBAGENT_TOOLS: &[&str] = &[
+    "view_file",
+    "write_to_file",
+    "replace_file_content",
+    "grep_search",
+    "find_by_name",
+    "list_dir",
+    "run_command",
+];
+
+/// Format a tool list as a YAML flow sequence on one line (`[a, b, c]`),
+/// matching upstream's serializer (`AgentFrontmatter.to_yaml`, which joins list
+/// values into a bracketed, comma-space separated scalar). Unquoted: the names
+/// are plain scalars, so quoting would diverge from upstream bytes.
+fn flow_list(items: &[&str]) -> String {
+    format!("[{}]", items.join(", "))
+}
+
 /// True when `slug` is declared primary by the render policy. Callers pass the
 /// slugified frontmatter `name`, matching upstream: its `agent.slug` is derived
 /// from `name` (`agency_agents/core/parser.py`), not from the filename. That
@@ -413,16 +459,20 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
         ),
 
         // Antigravity (CLI, IDE) agent `.md`: name(=slug) + description + ONE
-        // role flag. The two flags are mutually exclusive, matching upstream's
-        // *role-flag policy* in `AntigravityRenderer.frontmatter_overrides`: a
-        // primary agent is `mainAgent: true` (selectable as the main agent in
-        // the GUI/CLI and no longer a subagent), while a specialist is
-        // `subagent: true` (invocable via `invoke_subagent` only). Upstream's
-        // per-role `tools:` list is not ported yet, so this matches the flag
-        // semantics but not the full override shape. Only the orchestrator is
-        // promoted, so specialists stay out of the primary-agent picker.
+        // role flag + a role-specific `tools:` list. The two flags are mutually
+        // exclusive, matching upstream's role-flag policy in
+        // `AntigravityRenderer.frontmatter_overrides`: a primary agent is
+        // `mainAgent: true` (selectable as the main agent in the GUI/CLI and no
+        // longer a subagent), while a specialist is `subagent: true` (invocable
+        // via `invoke_subagent` only). Only the orchestrator is promoted, so
+        // specialists stay out of the primary-agent picker.
+        //
+        // The emitted `tools:` list REPLACES any source `tools:` frontmatter:
+        // Antigravity grants tools by its own names, so Claude-style names
+        // (`Read`, `Bash`, …) would grant nothing and must never pass through.
+        // Delegation tools go to the main agent only (agency-agents issue #26).
         Some("antigravity-md") => format!(
-            "---\nname: {name}\ndescription: {desc}\n{role}\n---\n{body}\n",
+            "---\nname: {name}\ndescription: {desc}\n{role}\ntools: {tools}\n---\n{body}\n",
             name = yaml_quote(&slug),
             desc = yaml_quote(&description),
             role = if primary {
@@ -430,6 +480,11 @@ pub fn render(_agent: &Agent, raw_source: &str, tool: &str) -> Result<String, Ap
             } else {
                 "subagent: true"
             },
+            tools = flow_list(if primary {
+                MAIN_AGENT_TOOLS
+            } else {
+                SUBAGENT_TOOLS
+            }),
         ),
 
         // Qwen Code SubAgent `.md`: the optional tool list is renamed to Qwen's
@@ -714,12 +769,13 @@ mod tests {
     #[test]
     fn antigravity_native_agents_shape_and_dests() {
         // Antigravity native agents use the antigravity-md shape (name +
-        // description + one role flag). Global agents load from
-        // ~/.gemini/config/agents/, project agents from <project>/.agents/agents/.
+        // description + one role flag + the role's tool list). Global agents
+        // load from ~/.gemini/config/agents/, project agents from
+        // <project>/.agents/agents/.
         let out = render(&agent(), raw(), "antigravity").unwrap();
         assert_eq!(
             out,
-            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\nsubagent: true\n---\nYou are a frontend dev.\n"
+            "---\nname: 'frontend-developer'\ndescription: 'Builds UIs.'\nsubagent: true\ntools: [view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]\n---\nYou are a frontend dev.\n"
         );
         assert_eq!(output_slug(&agent(), raw(), "antigravity"), "frontend-developer");
         // user-scope → ~/.gemini/config/agents/<name>.md
@@ -751,6 +807,14 @@ mod tests {
 
         let out = render(&orchestrator(), orchestrator_raw(), "antigravity").unwrap();
         assert!(out.contains("\nmainAgent: true\n"), "antigravity: {out}");
+        // The main agent carries the delegation surface plus every execution
+        // tool (upstream `MAIN_AGENT_TOOLS`).
+        assert!(
+            out.contains(
+                "\ntools: [invoke_subagent, manage_subagents, send_message, manage_task, view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]\n"
+            ),
+            "antigravity: {out}"
+        );
         // The role flags are mutually exclusive upstream: promoting the agent
         // to main replaces `subagent: true`, it does not add to it.
         assert!(!out.contains("\nsubagent: true\n"), "antigravity: {out}");
@@ -765,6 +829,75 @@ mod tests {
         let out = render(&agent(), raw(), "antigravity").unwrap();
         assert!(out.contains("\nsubagent: true\n"), "antigravity: {out}");
         assert!(!out.contains("\nmainAgent:"), "antigravity: {out}");
+        assert!(
+            out.contains(
+                "\ntools: [view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]\n"
+            ),
+            "antigravity: {out}"
+        );
+    }
+
+    #[test]
+    fn antigravity_subagents_never_get_delegation_tools() {
+        // Leak guard: delegation is reserved for the main agent, so no subagent
+        // render may carry the orchestration surface (agency-agents issue #26).
+        let subagents = [
+            (agent(), raw()),
+            (
+                Agent {
+                    slug: "backend-architect".into(),
+                    name: "Backend Architect".into(),
+                    ..agent()
+                },
+                "---\nname: Backend Architect\ndescription: Designs APIs.\n---\nBody\n",
+            ),
+        ];
+        let expected = "[view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]";
+        for (a, source) in subagents {
+            let out = render(&a, source, "antigravity").unwrap();
+            // Inspect the frontmatter only: a body may legitimately name a
+            // delegation tool in prose, and that is not a permission grant.
+            let head = out.split("---\n").nth(1).unwrap_or(out.as_str());
+            for forbidden in [
+                "invoke_subagent",
+                "manage_subagents",
+                "send_message",
+                "manage_task",
+            ] {
+                assert!(
+                    !head.contains(forbidden),
+                    "subagent frontmatter must not carry '{forbidden}': {out}"
+                );
+            }
+            // Exactly the seven execution tools, in upstream order.
+            let tools_line = out
+                .lines()
+                .find(|l| l.starts_with("tools: "))
+                .unwrap_or_else(|| panic!("missing tools line: {out}"));
+            assert_eq!(tools_line, format!("tools: {expected}"), "{out}");
+        }
+    }
+
+    #[test]
+    fn antigravity_replaces_source_tools_frontmatter() {
+        // Antigravity grants tools by its own names: Claude-style source names
+        // (`Read`, `Write`, `Bash`) match nothing and must never pass through.
+        let source = "---\nname: Frontend Developer\ndescription: Builds UIs.\ntools: Read, Write, Bash\n---\nYou are a frontend dev.\n";
+        let out = render(&agent(), source, "antigravity").unwrap();
+        // Frontmatter only: the body is the persona and is passed through.
+        let head = out.split("---\n").nth(1).unwrap_or(out.as_str());
+        for claude_name in ["Read", "Write", "Bash"] {
+            assert!(
+                !head.contains(claude_name),
+                "source tool '{claude_name}' leaked into antigravity frontmatter: {out}"
+            );
+        }
+        assert!(
+            out.contains(
+                "\ntools: [view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]\n"
+            ),
+            "antigravity: {out}"
+        );
     }
 
     #[test]
@@ -829,6 +962,12 @@ mod tests {
         assert!(
             antigravity.contains("\nmainAgent: true\n"),
             "bundled orchestrator must be an antigravity main agent: {antigravity}"
+        );
+        assert!(
+            antigravity.contains(
+                "\ntools: [invoke_subagent, manage_subagents, send_message, manage_task, view_file, write_to_file, replace_file_content, grep_search, find_by_name, list_dir, run_command]\n"
+            ),
+            "bundled orchestrator must carry the main-agent tool list: {antigravity}"
         );
         assert!(
             !antigravity.contains("\nsubagent: true\n"),
