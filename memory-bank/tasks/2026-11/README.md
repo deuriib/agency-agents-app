@@ -8,6 +8,10 @@ tool declarations.
 - [ ] Confirm Antigravity runtime semantics for the role flags (issue #27).
 
 ## Recent Achievements
+- Added a Draft 2020-12 JSON Schema for the tool registry (issue #30): `src-tauri/data/_schema.json`
+  validates the bundled `tools.json` in the IDE (VS Code mapping) and in `cargo test --test tools_schema`,
+  which also asserts the schema still rejects malformed entries. See
+  [261101_tools-json-schema.md](./261101_tools-json-schema.md).
 - Verified Antigravity role-flag defaults at runtime (issue #27): no change needed; omitted
   `mainAgent` defaults to `false` (protobuf `omitempty`), unknown keys are tolerated, the CLI
   ignores flags for `--agent` selection. Found a stale foreign artifact (`mainAgents: true`)
