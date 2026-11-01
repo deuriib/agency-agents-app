@@ -31,7 +31,8 @@ that distinguish a primary agent from subagents, without changing specialist out
   made the policy a no-op for the multi-file wrapper).
 
 ## Open Follow-ups
-- Port upstream's per-role Antigravity `tools:` list (`MAIN_AGENT_TOOLS` /
+- #26 — port upstream's per-role Antigravity `tools:` list (`MAIN_AGENT_TOOLS` /
   `SUBAGENT_TOOLS`).
-- Confirm Antigravity's runtime behavior when `mainAgent` is omitted for specialists
-  (upstream omits it; the documented default is `true`).
+- #27 — confirm Antigravity's runtime behavior when `mainAgent` is omitted for
+  specialists (upstream omits it; the binary's `yaml:"mainAgent,omitempty"` implies
+  `false`, unverified at runtime).
