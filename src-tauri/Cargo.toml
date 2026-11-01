@@ -114,3 +114,9 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # Wave 3 test pass but kept here so Reality Checker can wire in tests
 # without bumping deps.
 tempfile = "3"
+# Issue #30 — `tests/tools_schema.rs` validates the embedded `data/tools.json`
+# against `data/_schema.json` (Draft 2020-12). Dev-only: the schema gate never
+# ships in the app binary. Default features pull a blocking HTTP client + TLS
+# stack (`reqwest`, `aws-lc-rs`) for remote `$ref` resolution; the schema only
+# uses same-document `#/$defs` refs, so both are switched off.
+jsonschema = { version = "0.60", default-features = false }

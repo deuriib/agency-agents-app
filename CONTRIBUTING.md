@@ -117,6 +117,24 @@ If you've verified that an upstream tool path is wrong or non-deterministic — 
 valuable catch — open the catalog PR first (or open both and link them), and the app-side
 PR becomes a clean sync rather than a fork.
 
+#### `tools.json` is schema-validated
+
+`src-tauri/data/_schema.json` is the JSON Schema (Draft 2020-12) for the manifest. VS Code
+picks it up through `.vscode/settings.json`, so entries get inline validation and
+`description` tooltips while you edit. The same contract is enforced by a test — an IDE
+warning is easy to ignore, a failing test is not. No workflow runs the Rust suite yet, so
+run it locally before opening a PR that touches the manifest:
+
+```bash
+cd src-tauri && cargo test --test tools_schema
+```
+
+The test validates the real `data/tools.json` and asserts the schema still *rejects* a
+missing required field, a malformed value, and an unknown key; a schema that silently
+accepts everything is worse than no schema at all. The mirror intentionally carries no
+`$schema` key — that would add noise to every upstream sync — but the schema allows one,
+so the catalog repo can adopt it without breaking app-side validation.
+
 ## Translations & Localization
 
 App UI strings live in `src/lib/i18n/locales/`. `en.ts` is the source of truth: its keys

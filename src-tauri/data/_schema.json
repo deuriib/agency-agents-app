@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/deuriib/agency-agents-app/src-tauri/data/_schema.json",
+  "title": "Agency Agents tool registry",
+  "description": "Shape of `tools.json`, the bundled mirror of the canonical catalog manifest the upstream `agency-agents` repo owns. One entry per supported AI coding tool, keyed by the CLI tool name (kebab-case). The schema encodes the authoring contract only — installability is derived app-side from `format` + `installKind` and is intentionally NOT part of the manifest.",
+  "type": "object",
+  "required": ["tools"],
+  "additionalProperties": false,
+  "properties": {
+    "$schema": {
+      "type": "string",
+      "description": "Optional JSON Schema reference. Allowed so the canonical upstream manifest can adopt `$schema` without breaking app-side validation; the app mirror omits it to stay a verbatim copy."
+    },
+    "_note": {
+      "type": "string",
+      "description": "Free-form maintainer notes: what the manifest is, how adding a tool works, and which scripts/CI gate it."
+    },
+    "tools": {
+      "type": "object",
+      "description": "Every supported tool, keyed by its kebab-case CLI name. The key MUST equal the entry's `kebab` field (enforced semantically, not by JSON Schema).",
+      "minProperties": 1,
+      "propertyNames": {
+        "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$"
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/tool"
+      }
+    }
+  },
+  "$defs": {
+    "tool": {
+      "type": "object",
+      "description": "One tool's install contract plus its app presentation. The install contract (`id`, `label`, `kebab`, `format`, `installKind`, `dest`) is what the catalog's tool checker gates; `short`, `accent`, `scope`, `detect`, `version` and `order` are the fields both app consumers (Rust registry + frontend) read. Everything except `order`, `icon`, `slugFrom` and `slugPrefix` is required.",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "label",
+        "short",
+        "kebab",
+        "accent",
+        "scope",
+        "detect",
+        "version",
+        "format",
+        "installKind",
+        "dest"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][A-Za-z0-9]*$",
+          "description": "camelCase wire id used by the frontend and the install ledger (e.g. \"claudeCode\"). Unique across the catalog."
+        },
+        "label": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Full display name shown in the UI (e.g. \"Claude Code\")."
+        },
+        "short": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Compact name for dense UIs such as the tool coverage matrix (e.g. \"Claude\")."
+        },
+        "kebab": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "description": "kebab-case CLI id used by the install scripts and as the `tools` map key."
+        },
+        "accent": {
+          "type": "string",
+          "pattern": "^#[0-9A-Fa-f]{6}$",
+          "description": "Badge accent color as a 6-digit hex string (e.g. \"#D97757\")."
+        },
+        "icon": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "Brand-mark filename stem under `assets/tools/` (e.g. \"claudecode\" → claudecode.svg), or null to fall back to the letter mark."
+        },
+        "order": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Optional install-menu position. Entries without an order sort after ordered ones, by label (both consumers treat a missing order that way)."
+        },
+        "scope": {
+          "type": "object",
+          "description": "Which install scopes the tool supports.",
+          "additionalProperties": false,
+          "required": ["user", "project"],
+          "properties": {
+            "user": {
+              "type": "boolean",
+              "description": "True when the tool installs user-globally (paths rooted at $HOME)."
+            },
+            "project": {
+              "type": "boolean",
+              "description": "True when the tool installs per-project (paths rooted at the project root)."
+            }
+          }
+        },
+        "detect": {
+          "type": "object",
+          "description": "Hints used to decide whether the tool is already present on this machine.",
+          "additionalProperties": false,
+          "required": ["dirs", "agentsDir"],
+          "properties": {
+            "dirs": {
+              "type": "array",
+              "description": "Relative directories whose presence implies the tool is installed. Empty when detection is not directory-based.",
+              "items": {
+                "type": "string",
+                "minLength": 1,
+                "description": "Relative directory, e.g. \".claude\" or \".config/opencode\". Must not be absolute or escape the home/project root.",
+                "pattern": "^[^/]",
+                "not": {
+                  "pattern": "(?:^|/)\\.\\.(?:/|$)"
+                }
+              }
+            },
+            "agentsDir": {
+              "type": ["string", "null"],
+              "minLength": 1,
+              "description": "The directory the tool reads agent definitions from, or null when it has none (roster/plugin tools)."
+            }
+          }
+        },
+        "version": {
+          "type": "object",
+          "description": "`<bin> <args…>` probe used to read the installed tool version.",
+          "additionalProperties": false,
+          "required": ["bin", "args"],
+          "properties": {
+            "bin": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Executable probed for the version (e.g. \"claude\", \"agy\")."
+            },
+            "args": {
+              "type": "array",
+              "description": "Arguments passed to `bin` (usually [\"--version\"]).",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "format": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "description": "Renderer contract: the same `format` name guarantees byte-identical output, so two tools may share a format only if their rendered files are identical. Known values include identity, codex-toml, gemini-md, qwen-md, zcode-md, cursor-mdc, opencode-md, antigravity-md, skill-md, aider-conventions, kimi-agent, openclaw-workspace, windsurf-rules, vibe-toml and hermes-router-plugin; new formats are allowed (renderer coverage is the consumer's concern)."
+        },
+        "installKind": {
+          "type": "string",
+          "enum": ["per-agent", "roster", "plugin"],
+          "description": "Install mechanism (upstream truth): per-agent = one rendered file/dir per agent; roster = one combined file for all agents; plugin = a built artifact that is not per-agent renderable (CLI-only everywhere)."
+        },
+        "slugFrom": {
+          "enum": ["source", "name", null],
+          "description": "\"source\" keeps the corpus filename as the output slug; \"name\" slugifies the frontmatter name; null for single-file roster formats, which have no per-agent slug."
+        },
+        "slugPrefix": {
+          "type": "string",
+          "pattern": "^[a-z0-9][a-z0-9-]*-$",
+          "description": "Namespace prepended to the output slug AND the rendered `name` field — \"agency-\" for skill-directory tools that share a global skills folder. Omit for tools that need no prefix."
+        },
+        "dest": {
+          "type": "object",
+          "description": "Destination path templates, relative to $HOME (user scope) or the project root (project scope). `{slug}` is substituted at install time. At least one scope must declare a destination.",
+          "additionalProperties": false,
+          "required": ["user", "project"],
+          "properties": {
+            "user": {
+              "$ref": "#/$defs/destList",
+              "description": "Files/directories written for user scope (empty when the tool does not support it)."
+            },
+            "project": {
+              "$ref": "#/$defs/destList",
+              "description": "Files/directories written for project scope (empty when the tool does not support it)."
+            }
+          },
+          "anyOf": [
+            {
+              "properties": {
+                "user": {
+                  "minItems": 1
+                }
+              }
+            },
+            {
+              "properties": {
+                "project": {
+                  "minItems": 1
+                }
+              }
+            }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "installKind": {
+                "const": "roster"
+              }
+            },
+            "required": ["installKind"]
+          },
+          "then": {
+            "properties": {
+              "slugFrom": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "destList": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1,
+        "description": "Relative destination template, e.g. \".claude/agents/{slug}.md\". Must not be absolute or escape the scope root.",
+        "pattern": "^[^/]",
+        "not": {
+          "pattern": "(?:^|/)\\.\\.(?:/|$)"
+        }
+      }
+    }
+  }
+}
