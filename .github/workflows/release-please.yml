@@ -7,6 +7,11 @@
 # built and notarized locally with `scripts/release.sh`, and a human publishes
 # the release once every platform is attached.
 #
+# The `manifest` job runs last and turns the attached artifacts into
+# `latest.json`, the file the in-app updater actually downloads. It never
+# publishes the release — a draft whose assets are still moving would hand
+# clients a manifest pointing at half-uploaded files.
+#
 # Version manifests kept in lockstep by release-please:
 #   - package.json + package-lock.json   (node release strategy)
 #   - src-tauri/tauri.conf.json          (json extra-file)
@@ -86,6 +91,12 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
+    # Passed explicitly: the signing key is what turns a plain bundle into a
+    # verifiable updater artifact, and an inherited-everything call would make
+    # the dependency invisible to a reader of this file.
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     uses: ./.github/workflows/linux-build.yml
     with:
       upload_release: true
@@ -97,7 +108,146 @@ jobs:
     if: needs.release-please.outputs.release_created == 'true'
     permissions:
       contents: write
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
     uses: ./.github/workflows/windows-build.yml
     with:
       upload_release: true
       tag: ${{ needs.release-please.outputs.tag_name }}
+
+  # Builds `latest.json` from the artifacts linux/windows just attached.
+  #
+  # Why a separate job: the manifest is only valid once *every* platform's
+  # artifact and signature are on the release, and it must be generated from the
+  # files that were actually uploaded (Tauri's filenames carry the version and
+  # arch, so nothing can be guessed from a template). `scripts/updater-manifest.mjs`
+  # reads each `.sig` next to its artifact and refuses to write a partial file.
+  #
+  # A missing `latest.json` is the original bug: the updater's endpoint 404s and
+  # every client reports "up to date" forever. This job is that 404's fix.
+  manifest:
+    name: Build and attach latest.json
+    needs: [release-please, linux, windows]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ needs.release-please.outputs.tag_name }}
+      VERSION: ${{ needs.release-please.outputs.version }}
+      # `gh` needs owner/repo explicitly: this workflow also runs from
+      # `workflow_dispatch`, where the checkout ref is not the release tag.
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Setup Node 22
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+
+      # Downloads whatever the platform builds attached (drafts are readable with
+      # a token). `--clobber` makes a re-run overwrite instead of failing.
+      - name: Download the release assets
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          gh release download "$TAG" --repo "$REPO" --dir release-assets --clobber
+
+      - name: Build latest.json
+        run: |
+          set -euo pipefail
+          ASSETS="release-assets"
+
+          # Exactly one match, or stop: guessing between two artifacts is how a
+          # manifest ends up pointing at the wrong architecture.
+          pick() { # pick <glob> <label>
+            local matches
+            matches="$(find "$ASSETS" -maxdepth 1 -type f -name "$1" -printf '%f\n' | sort)"
+            # Errors go to stderr: this runs inside "$( )", so stdout is the
+            # return value — an ::error:: written there would be swallowed.
+            if [[ -z "$matches" ]]; then
+              echo "::error::No $2 asset matching '$1' on $TAG — the platform build failed or its artifact was not attached." >&2
+              exit 1
+            fi
+            if [[ "$(printf '%s\n' "$matches" | wc -l)" -ne 1 ]]; then
+              echo "::error::Expected one $2 asset matching '$1' on $TAG, found: $(printf '%s' "$matches" | tr '\n' ' ')" >&2
+              exit 1
+            fi
+            printf '%s\n' "$matches"
+          }
+
+          LINUX_X64="$(pick '*.AppImage.tar.gz' 'linux-x86_64 updater tarball')"
+
+          # Tauri names NSIS installers `…_<arch>-setup.exe`; classify by the
+          # architecture token rather than hardcoding it, so an `x64`/`x86_64`
+          # spelling change does not silently swap the two Windows entries.
+          mapfile -t SETUP < <(find "$ASSETS" -maxdepth 1 -type f -name '*-setup.exe' -printf '%f\n' | sort)
+          if [[ ${#SETUP[@]} -ne 2 ]]; then
+            echo "::error::Expected 2 Windows installers on $TAG (x64 + arm64), found ${#SETUP[@]}: ${SETUP[*]:-none}"
+            exit 1
+          fi
+          WIN_X64=""
+          WIN_ARM64=""
+          for exe in "${SETUP[@]}"; do
+            case "$exe" in
+              *arm64*) WIN_ARM64="$exe" ;;
+              *)       WIN_X64="$exe" ;;
+            esac
+          done
+          if [[ -z "$WIN_X64" || -z "$WIN_ARM64" ]]; then
+            echo "::error::Could not tell the Windows architectures apart: ${SETUP[*]}"
+            exit 1
+          fi
+
+          # The updater shows these notes; the release body is the one place a
+          # human already wrote them. An empty body simply omits `notes`.
+          gh release view "$TAG" --repo "$REPO" --json body --jq .body > "$ASSETS/notes.md"
+
+          node scripts/updater-manifest.mjs \
+            --version "$VERSION" \
+            --notes-file "$ASSETS/notes.md" \
+            --pub-date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --base-url "https://github.com/${REPO}/releases/download/${TAG}" \
+            --assets-dir "$ASSETS" \
+            --asset "linux-x86_64=${LINUX_X64}" \
+            --asset "windows-x86_64=${WIN_X64}" \
+            --asset "windows-aarch64=${WIN_ARM64}" \
+            --merge "$ASSETS/latest.json" \
+            --out "$ASSETS/latest.json"
+
+          cat "$ASSETS/latest.json"
+
+      - name: Attach latest.json to the release
+        run: |
+          set -euo pipefail
+          gh release upload "$TAG" release-assets/latest.json --repo "$REPO" --clobber
+          echo "Attached latest.json to $TAG (still a draft — a human publishes it)."
+
+      # Beta channel (#23): `updater-beta` is a long-lived release whose only
+      # asset is the newest prerelease manifest. Clients on the beta channel
+      # fetch the fixed URL releases/download/updater-beta/latest.json, so the
+      # manifest is replaced in place with --clobber. `--latest=false` is
+      # load-bearing: if this release became "latest", the stable endpoint
+      # (releases/latest/download/latest.json) would start serving betas.
+      #
+      # Note: the manifest points at the prerelease tag's assets, which stay
+      # unreachable to anonymous clients until a human publishes that draft.
+      # Nothing here publishes — the mirror is staged, not delivered.
+      - name: Mirror latest.json to the updater-beta channel
+        if: contains(needs.release-please.outputs.tag_name, '-')
+        run: |
+          set -euo pipefail
+          if ! gh release view updater-beta --repo "$REPO" >/dev/null 2>&1; then
+            gh release create updater-beta \
+              --repo "$REPO" \
+              --title "Updater beta channel" \
+              --notes "Rolling manifest for Agency Agents prereleases. It is overwritten by every beta release; the stable channel lives at releases/latest/download/latest.json." \
+              --prerelease \
+              --latest=false
+          fi
+          gh release upload updater-beta release-assets/latest.json --repo "$REPO" --clobber
+          echo "Mirrored $TAG's latest.json to updater-beta."
