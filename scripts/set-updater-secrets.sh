@@ -90,43 +90,65 @@ if [[ -z "$PASSWORD" ]] && command -v security >/dev/null 2>&1; then
     -a "agency-agents" -s "agency-agents-updater-key-pw" -w 2>/dev/null || true)"
 fi
 
+# No Keychain (Linux/Windows) and no env var: prompt once, without echo. This is
+# the normal path when the key was generated on Linux for a CI-only release.
+if [[ -z "$PASSWORD" && "$KEY" == *"minisign encrypted secret key"* ]]; then
+  read -r -s -p "Updater key password: " PASSWORD
+  echo
+fi
+
 # An encrypted key without its password produces a build that fails at signing
 # time, after a long compile. Catch it now.
 if [[ "$KEY" == *"minisign encrypted secret key"* && -z "$PASSWORD" ]]; then
-  echo "✗ the key is encrypted but no password was found." >&2
-  echo "  Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD or add the" >&2
-  echo "  'agency-agents-updater-key-pw' Keychain item." >&2
+  echo "✗ the key is encrypted but no password was provided." >&2
+  echo "  Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD or run interactively." >&2
   exit 1
 fi
 
-# Compare the minisign key ids (bytes 2..10 of each decoded blob). Only the ids
-# are printed; the key itself goes in on stdin and never comes out.
-printf '%s' "$KEY" | node -e '
-const fs = require("fs");
-const cfg = require("./src-tauri/tauri.conf.json");
-const pub = Buffer.from(cfg.plugins.updater.pubkey, "base64")
-  .toString("utf8")
-  .trim()
-  .split("\n")[1];
-const priv = fs.readFileSync(0, "utf8");
-const line = priv
-  .split("\n")
-  .find((candidate) => candidate.trim() && !candidate.startsWith("untrusted comment:"));
-const id = (blob) => Buffer.from(blob, "base64").subarray(2, 10).toString("hex").toUpperCase();
-const expected = id(pub);
-const actual = line ? id(line) : "NONE";
-console.log(`pubkey key id:  ${expected}`);
-if (expected !== actual) {
-  console.error(`private key id: ${actual}`);
-  console.error("MISMATCH: this key cannot sign updates for the running apps.");
-  process.exit(1);
-}
-console.log("key id matches the embedded pubkey");
-' || {
-  echo "✗ refusing to upload: the key does not match tauri.conf.json" >&2
-  echo "  Rotate the pair and update the pubkey, or use the key that built it." >&2
+# Verify the key by using it. An encrypted minisign private key does not expose
+# its key id until it is decrypted, so comparing blob offsets cannot work (the
+# bytes there are the KDF header, not the id). Sign a throwaway file and compare
+# the signature's key id with the pubkey's. The key and password go to the child
+# as environment variables, never argv.
+PROBE_DIR="$(mktemp -d)"
+trap 'rm -rf "$PROBE_DIR"' EXIT
+PROBE="$PROBE_DIR/probe"
+printf 'agency-agents updater key probe\n' > "$PROBE"
+
+TAURI_BIN="$ROOT/node_modules/.bin/tauri"
+if [[ ! -x "$TAURI_BIN" ]]; then
+  echo "✗ Tauri CLI not found at $TAURI_BIN — run 'npm ci' first." >&2
   exit 1
-}
+fi
+
+if ! TAURI_SIGNING_PRIVATE_KEY="$KEY" \
+  TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$PASSWORD" \
+  "$TAURI_BIN" signer sign "$PROBE" >/dev/null; then
+  echo "✗ the key could not sign the probe (wrong password?)." >&2
+  exit 1
+fi
+
+PUB_ID="$(node -e '
+const cfg = require("./src-tauri/tauri.conf.json");
+const text = Buffer.from(cfg.plugins.updater.pubkey.trim(), "base64").toString("utf8");
+const line = text.split(/\r?\n/).find((candidate) => candidate.trim() && !candidate.startsWith("untrusted comment:"));
+console.log(Buffer.from(line, "base64").subarray(2, 10).toString("hex").toUpperCase());
+')"
+SIG_ID="$(node -e '
+const fs = require("fs");
+const sig = fs.readFileSync(process.argv[1], "utf8").trim();
+const line = sig.split(/\r?\n/).find((candidate) => candidate.trim() && !candidate.startsWith("untrusted comment:"));
+console.log(Buffer.from(line, "base64").subarray(2, 10).toString("hex").toUpperCase());
+' "$PROBE.sig")"
+
+echo "pubkey key id:  $PUB_ID"
+echo "signature id:   $SIG_ID"
+if [[ "$PUB_ID" != "$SIG_ID" ]]; then
+  echo "✗ refusing to upload: the key does not match tauri.conf.json." >&2
+  echo "  Update plugins.updater.pubkey with the key's .pub value, or use the matching key." >&2
+  exit 1
+fi
+echo "key id matches the embedded pubkey"
 
 printf '%s' "$KEY" | gh secret set TAURI_SIGNING_PRIVATE_KEY --repo "$REPO"
 if [[ -n "$PASSWORD" ]]; then
