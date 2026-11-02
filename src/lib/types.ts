@@ -16,6 +16,18 @@
 export type CaskIconMode = "off" | "installed-only" | "all";
 
 /**
+ * Which release channel the updater follows (Phase 15 / #23).
+ *
+ * - `stable` — the latest published (non-prerelease) GitHub release.
+ * - `beta` — the newest published prerelease; falls back to `stable`
+ *   when no prerelease exists.
+ *
+ * Mirrors the Rust `UpdateChannel` enum (`#[serde(rename_all = "lowercase")]`),
+ * so the wire value is the lowercase string.
+ */
+export type UpdateChannel = "stable" | "beta";
+
+/**
  * Persisted user settings (Phase 12d). Lives at
  * `~/Library/Application Support/com.zerologic.agency-agents-app/settings.json` and is
  * round-tripped via `settingsGet` / `settingsSet`.
@@ -51,6 +63,11 @@ export interface Settings {
       the user is only prompted to relaunch. Default off; a stronger
       opt-in than `updateAutoCheck`. */
   updateAutoInstall: boolean;
+  /** Release channel the updater follows (#23). `stable` tracks the
+      latest published release; `beta` tracks the newest published
+      prerelease and falls back to stable when none exists. Default
+      `stable`. */
+  updateChannel: UpdateChannel;
   /** Legacy enhanced-trending toggle inherited from the source app.
       Retained for settings-file compatibility. */
   enhancedTrendingEnabled: boolean;
@@ -86,6 +103,9 @@ export const SETTINGS_DEFAULTS: Settings = {
   // Auto-install is a stronger opt-in than auto-check and must never be
   // enabled implicitly. Off by default.
   updateAutoInstall: false,
+  // Which release channel the updater follows. Stable by default — a
+  // prerelease is an explicit opt-in, never implied.
+  updateChannel: "stable",
   // Legacy retained field. Off by default.
   enhancedTrendingEnabled: false,
   // Legacy retained field. Off by default.

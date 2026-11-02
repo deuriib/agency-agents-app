@@ -122,6 +122,18 @@ pub struct Settings {
     #[serde(default)]
     pub update_auto_install: bool,
 
+    /// Phase 15 / #23 — which release channel the updater follows.
+    /// Default [`UpdateChannel::Stable`]: prerelease builds are strictly
+    /// opt-in, so an upgrade from a settings file written before this
+    /// field existed keeps tracking published releases only.
+    ///
+    /// The channel changes *discovery* (which GitHub release counts as
+    /// "latest") and the manifest the plugin fetches, never the
+    /// verification pipeline: both channels are minisign-verified
+    /// against the same embedded public key.
+    #[serde(default)]
+    pub update_channel: UpdateChannel,
+
     /// Phase 15 — versions the user explicitly dismissed via the
     /// title-bar indicator's `×` button. Bounded at 10 entries with
     /// oldest-evicted-on-push (see [`Settings::push_skipped_version`]).
@@ -187,6 +199,9 @@ impl Default for Settings {
             // Off by default: auto-install is a stronger opt-in than
             // auto-check and must never be enabled implicitly.
             update_auto_install: false,
+            // Stable by default — a fresh install never joins a
+            // prerelease channel without an explicit user choice.
+            update_channel: UpdateChannel::Stable,
             // Empty by default — populated as the user dismisses
             // individual versions via the title-bar indicator's `×`.
             skipped_update_versions: Vec::new(),
@@ -273,6 +288,26 @@ pub enum CaskIconMode {
     InstalledOnly,
     #[default]
     All,
+}
+
+/// Which release channel the updater follows (#23).
+///
+/// Serialized lowercase (`"stable"` / `"beta"`) to match the
+/// `UpdateChannel` union in `src/lib/types.ts`.
+///
+/// The channel is a *discovery* switch only. Both channels install
+/// through the same signed-manifest pipeline (`tauri-plugin-updater` +
+/// the embedded minisign public key), so following `Beta` cannot weaken
+/// verification — it only widens which releases are offered.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum UpdateChannel {
+    /// Published, non-prerelease releases — GitHub's `/releases/latest`.
+    #[default]
+    Stable,
+    /// Newest published prerelease, falling back to the stable release
+    /// when the repo has no published prerelease.
+    Beta,
 }
 
 /// Three-state container for the in-memory settings cache.
@@ -663,6 +698,7 @@ mod tests {
             ai_features_enabled: false,
             update_auto_check: true,
             update_auto_install: true,
+            update_channel: UpdateChannel::Beta,
             skipped_update_versions: vec!["0.3.0".into(), "0.3.1".into()],
             enhanced_trending_enabled: true,
             vulnerability_scanning_enabled: true,
@@ -725,6 +761,7 @@ mod tests {
             ai_features_enabled: true,
             update_auto_check: false,
             update_auto_install: false,
+            update_channel: UpdateChannel::Stable,
             skipped_update_versions: Vec::new(),
             enhanced_trending_enabled: false,
             vulnerability_scanning_enabled: false,
@@ -837,9 +874,89 @@ mod tests {
                 // `skipped_update_versions` was added in Phase 15 — must
                 // default to an empty vec.
                 assert!(s.skipped_update_versions.is_empty());
+                // `update_channel` was added for #23 — must default to
+                // Stable so an upgrade never silently joins a prerelease
+                // channel.
+                assert_eq!(s.update_channel, UpdateChannel::Stable);
             }
             other => panic!("expected Loaded, got {other:?}"),
         }
+    }
+
+    // ---------- #23 — update channel ----------
+
+    /// A settings file written before the field existed must read as
+    /// `Stable`: joining a prerelease channel is an explicit opt-in, and
+    /// an upgrade is not consent.
+    #[tokio::test]
+    async fn missing_update_channel_field_defaults_to_stable() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let path = settings_path(tmp.path());
+        // v0.7.x-shape settings.json: no `updateChannel` key.
+        tokio::fs::write(
+            &path,
+            br#"{"paranoidMode": false, "updateAutoCheck": true, "updateAutoInstall": true}"#,
+        )
+        .await
+        .unwrap();
+
+        let state = load_at_startup(tmp.path());
+        match state {
+            SettingsLoadState::Loaded(s) => assert_eq!(
+                s.update_channel,
+                UpdateChannel::Stable,
+                "missing field must default to Stable (opt-in posture)"
+            ),
+            other => panic!("expected Loaded, got {other:?}"),
+        }
+    }
+
+    /// Both channel values round-trip through the on-disk wire shape as
+    /// lowercase tokens under the camelCase key `updateChannel`.
+    #[tokio::test]
+    async fn update_channel_round_trips_with_camel_case_key() {
+        for (channel, token) in [
+            (UpdateChannel::Stable, "stable"),
+            (UpdateChannel::Beta, "beta"),
+        ] {
+            let tmp = tempfile::tempdir().expect("tempdir");
+            let s = Settings {
+                update_channel: channel,
+                ..Settings::default()
+            };
+            let written = persist(tmp.path(), s.clone()).await.expect("persist");
+            assert_eq!(written.update_channel, channel);
+
+            let raw = tokio::fs::read_to_string(settings_path(tmp.path()))
+                .await
+                .expect("read raw");
+            assert!(
+                raw.contains("\"updateChannel\""),
+                "expected camelCase updateChannel key in raw JSON, got: {raw}"
+            );
+            assert!(
+                raw.contains(&format!("\"{token}\"")),
+                "expected lowercase `{token}` value in raw JSON, got: {raw}"
+            );
+            assert!(
+                !raw.contains("\"update_channel\""),
+                "must not emit snake_case key"
+            );
+
+            let reloaded = load_async(tmp.path()).await;
+            match reloaded {
+                SettingsLoadState::Loaded(loaded) => assert_eq!(loaded.update_channel, channel),
+                other => panic!("expected Loaded, got {other:?}"),
+            }
+        }
+    }
+
+    /// Default is Stable — pinned so a future `Default` derive change
+    /// cannot silently move every existing user onto prereleases.
+    #[test]
+    fn update_channel_defaults_to_stable() {
+        assert_eq!(Settings::default().update_channel, UpdateChannel::Stable);
+        assert_eq!(UpdateChannel::default(), UpdateChannel::Stable);
     }
 
     // ---------- Phase 15 — skip-list cap + helpers ----------

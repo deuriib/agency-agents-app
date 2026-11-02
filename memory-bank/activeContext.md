@@ -1,35 +1,52 @@
 ## Active Context — Agency Agents
 
-**State (2026-10-28)**: **v0.6.0 is cut.** The release PR bumps all five manifests; merging to `main` makes `release.yml` create tag `v0.6.0` and a draft release.
+**State (2026-11-02)**: **PR #38 is open and CI-green.** It fixes the in-app updater
+(which could never install: no release ever shipped `latest.json`), adds stable/beta
+channels (#23), and completes the auto-install locale keys (#24). Not merged yet.
 
-- **Landed in v0.6.0**:
-  - **Opt-in automatic installs**: the Settings → Updates toggle now drives a real background download → verify → install flow. Off by default, consent on first enable, Offline Mode a hard gate, relaunch always user-initiated.
-  - **Scheduler-owned**: the Rust scheduler wakes ~60s after launch (jittered), then every 24h; failures back off 1h/6h/24h; an inactive app polls every 5min. No settings migration.
-  - **Single-flight installs**: one atomic slot shared by the automatic and manual paths (`install_in_progress` when busy).
-  - **Fixes**: single-file renders now hash the file bytes (reconcile no longer reports `Modified` for every single-file install); `antigravity-md` registered in `IMPLEMENTED_FORMATS`; renderer tests use the current tool ids; eleven stale `autoInstallHint` strings corrected.
-- **Landed in v0.5.1**: version bump plus the manifest-drift repair (all five manifests in lockstep). Its release notes claimed `antigravity-md`, which actually landed in v0.6.0 — see `decisions.md`.
-- **Landed in v0.5.0**: version bump and standardized release notes.
-**Landed in v0.4.3**:
-- **Multi-file renderers**: First-class support for Kimi, OpenClaw, and Mistral Vibe.
-- **Multi-file Install Ledger**: Ledger now tracks `dests` and per-file hashes with composite hash validation.
-- **Enterprise-Ready**: Phases 1-4 of Enterprise Feature development completed (UX research, architecture, and backlog).
-- **Infrastructure**: Release workflow automated on push to main.
+- **In review (PR #38, branch `fix/updater-pipeline`)**:
+  - **Release pipeline**: signed updater artifacts in CI, a `manifest` job that builds
+    and attaches `latest.json`, the Linux tarball regenerated after the Wayland repack,
+    and `scripts/release.sh` uploading macOS artifacts, merging the `darwin-*` entries
+    and publishing. The stale `agencyagents.app/updater.json` fallback is gone.
+  - **Channels (#23)**: persisted `UpdateChannel` (stable | beta); beta follows the
+    newest published prerelease and falls back to stable; the manifest URL is cached
+    with the announced version; Settings has a real selector and re-checks on change.
+  - **i18n (#24)**: the three missing consent keys in all 11 translations, channel
+    labels/hints, dead key removal, and the `onlineHint` correction.
+  - **Tooling**: `mise run verify-updater` (published-manifest check) and
+    `mise run set-updater-secrets` (key-id-checked secret upload).
+  - **Evidence**: 53 script tests, 16 new Rust tests, fmt/clippy/test, svelte-check 0,
+    frontend build, actionlint; 8/8 CI checks green.
+- **Landed in v0.6.0**: opt-in automatic installs (scheduler-owned), single-flight
+  installs, renderer/ledger test repairs, eleven `autoInstallHint` corrections.
+- **Landed in v0.5.1**: version bump plus the manifest-drift repair (all five manifests
+  in lockstep). Its release notes claimed `antigravity-md`, which landed in v0.6.0.
+- **Landed in v0.4.3**: multi-file renderers (Kimi, OpenClaw, Vibe), composite ledger
+  hashes, automated release workflow.
+
 **Current Focus**:
-1. **Auto-install smoke test**: exercise the full path on a signed build (outstanding release condition).
-2. **i18n native pass**: review the eleven corrected `autoInstallHint` strings.
-3. **Multi-file Reconcile/Removal**: detect drift and uninstall agents that occupy multiple files.
-4. **Roster Aggregation**: enable installation flows for Aider and Windsurf.
-5. **Parity Testing**: ensure multi-file output matches upstream expectations across all renderers.
+1. **Add the signing secrets** (`TAURI_SIGNING_PRIVATE_KEY` /
+   `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`) — `mise run set-updater-secrets` on the Mac.
+2. **Merge PR #38** after human review; CI is green.
+3. **Cut the next release**: merge the release-please PR → CI attaches the Linux/Windows
+   assets and `latest.json` → `scripts/release.sh` on the Mac completes the `darwin-*`
+   entries and publishes.
+4. **Verify end-to-end**: install the previous version, update, and confirm
+   `mise run verify-updater -- --check-urls`.
+5. **Native review** of the new translations.
 
 **Known Constraints**:
-- Multi-file logic must remain backward-compatible with single-file ledgers.
-- Install flow for complex rosters (Aider/Windsurf) requires aggregate install handling.
+- The real install is unverified until a signed, published release exists.
+- macOS still needs local notarization; CI cannot produce the DMGs.
+- The v0.7.1 draft release is stranded; delete it once PR #38 lands.
+- The beta rolling release `updater-beta` must never be marked "latest".
 
 **Gates**:
-- `npm run check` (svelte-check) must be 0 errors.
+- `mise run ci` (fmt, clippy, Rust tests, scripts, svelte-check, frontend build).
+- `mise run verify-updater` after a release (all five platform keys).
 - `cargo test` for backend validation.
 
 ---
 ## History (Obsolete)
 v0.3.1 and prior contexts are now deprecated. Refer to `docs/release-notes/` for history.
-

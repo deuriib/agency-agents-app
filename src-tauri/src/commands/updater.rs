@@ -17,6 +17,24 @@
 //! the release page) instead of failing silently. `ReleaseInfo.installable`
 //! carries that distinction across the IPC boundary.
 //!
+//! ## Channels (#23)
+//!
+//! `Settings::update_channel` picks the release channel the check
+//! follows. Discovery differs per channel (`github::fetch_channel_release`);
+//! the *manifest* is then derived from the selected release so the plugin
+//! always fetches the bytes that belong to the announced version:
+//!
+//! | channel | selected release | manifest |
+//! |---|---|---|
+//! | Stable | `/releases/latest` | `…/releases/latest/download/latest.json` |
+//! | Beta | newest published prerelease | `…/releases/download/updater-beta/latest.json` |
+//! | Beta (fallback) | stable latest (no prerelease exists) | `…/releases/latest/download/latest.json` |
+//!
+//! The URL is computed once at check time and cached on
+//! [`CachedUpdate::manifest_url`], so an install always re-resolves the
+//! same manifest the check advertised — even if the user flips the
+//! channel while the Settings card is open.
+//!
 //! ## Defense-in-depth gates
 //!
 //! 1. **Paranoid mode** — every IPC entry consults
@@ -90,6 +108,7 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use tokio::sync::RwLock;
 
+use crate::commands::settings::UpdateChannel;
 use crate::error::AppError;
 use crate::github::auth::Token;
 use crate::github::{self, GithubRepo, ReleaseInfo};
@@ -156,6 +175,11 @@ pub struct CachedUpdate {
     pub pub_date: Option<String>,
     pub release_url: String,
     pub installable: bool,
+    /// Signed manifest the plugin must fetch for this exact release.
+    /// Computed at check time from the settings channel and whether the
+    /// release is a prerelease (see [`manifest_url`]), so a later settings
+    /// change cannot point the installer at a different version's bytes.
+    pub manifest_url: String,
 }
 
 // ---------- State ----------
@@ -244,6 +268,31 @@ pub struct UpdaterState {
     pub auto_install_cancel: CancelToken,
 }
 
+// ---------- Manifest endpoint ----------
+
+/// Rolling prerelease release whose `latest.json` the beta channel
+/// installs. The release pipeline keeps this tag populated with the
+/// beta manifest (`--clobber`), so it is a stable URL even though the
+/// version inside changes on every prerelease.
+const BETA_MANIFEST_RELEASE_TAG: &str = "updater-beta";
+
+/// Signed manifest the installer must fetch for `release` on `channel`.
+///
+/// Stable release → the release-owned `latest.json` (`/releases/latest`
+/// resolves to the newest published non-prerelease). Beta prerelease →
+/// the rolling `updater-beta` manifest, because the prerelease tag itself
+/// is not a stable URL once a newer prerelease supersedes it. Beta
+/// *fallback* (no prerelease exists, so the stable release was selected)
+/// → the stable manifest, so the bytes always match the announced version.
+fn manifest_url(repo: &GithubRepo, channel: UpdateChannel, release: &ReleaseInfo) -> String {
+    let base = format!("https://github.com/{}/{}", repo.owner, repo.repo);
+    if channel == UpdateChannel::Beta && release.prerelease {
+        format!("{base}/releases/download/{BETA_MANIFEST_RELEASE_TAG}/latest.json")
+    } else {
+        format!("{base}/releases/latest/download/latest.json")
+    }
+}
+
 // ---------- Backend abstractions ----------
 
 /// "What does the release channel say?" abstraction. Production uses
@@ -257,9 +306,9 @@ pub struct UpdaterState {
 #[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait ReleaseSource: Send + Sync {
-    /// Latest published release, or `None` when there is no published
+    /// Latest release on `channel`, or `None` when there is no published
     /// release and when the tag is not semver-shaped.
-    async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError>;
+    async fn latest(&self, channel: UpdateChannel) -> Result<Option<ReleaseInfo>, AppError>;
 }
 
 /// "Download + verify + install this version" abstraction around
@@ -274,7 +323,13 @@ pub trait InstallBackend: Send + Sync {
     /// own internal `Update` handle (cached from its own manifest check)
     /// so we don't have to round-trip the full Update state through the
     /// trait boundary.
-    async fn download_and_install(&self, version: &str) -> Result<(), AppError>;
+    ///
+    /// `manifest_url` is the signed manifest cached by the check that
+    /// announced this version. Passing it per call keeps the install
+    /// pinned to the release the user was shown instead of whatever the
+    /// channel reports by the time the button is pressed.
+    async fn download_and_install(&self, version: &str, manifest_url: &str)
+        -> Result<(), AppError>;
 }
 
 /// Currently-running app version, surfaced for downgrade rejection
@@ -307,8 +362,8 @@ impl GithubReleaseSource {
 
 #[async_trait::async_trait]
 impl ReleaseSource for GithubReleaseSource {
-    async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError> {
-        github::fetch_latest_release(&self.client, &self.repo, self.token.as_ref()).await
+    async fn latest(&self, channel: UpdateChannel) -> Result<Option<ReleaseInfo>, AppError> {
+        github::fetch_channel_release(&self.client, &self.repo, self.token.as_ref(), channel).await
     }
 }
 
@@ -378,23 +433,46 @@ impl<R: tauri::Runtime> PluginBackend<R> {
         }
     }
 
-    /// Borrow the plugin's `Updater` value. Built fresh on each call —
-    /// the plugin is cheap to instantiate and doing it eagerly at
-    /// startup would force the manifest endpoint validation into the
-    /// setup hook (failing builds with a malformed endpoint).
-    fn updater(&self) -> Result<tauri_plugin_updater::Updater, AppError> {
+    /// Borrow the plugin's `Updater` value, pointed at `manifest_url`.
+    /// Built fresh on each call — the plugin is cheap to instantiate and
+    /// doing it eagerly at startup would force the manifest endpoint
+    /// validation into the setup hook (failing builds with a malformed
+    /// endpoint).
+    ///
+    /// The endpoint comes from the check's cached
+    /// [`CachedUpdate::manifest_url`], not from `tauri.conf.json`: the
+    /// channel (and therefore the manifest) is a per-install decision,
+    /// while the static config keeps a single stable endpoint for the
+    /// first-run case.
+    fn updater(&self, manifest_url: &str) -> Result<tauri_plugin_updater::Updater, AppError> {
         use tauri_plugin_updater::UpdaterExt;
-        self.app.updater().map_err(|e| AppError::Internal {
-            message: format!("updater plugin init: {e}"),
-        })
+        use url::Url;
+
+        let endpoint = Url::parse(manifest_url).map_err(|e| AppError::InvalidArgument {
+            message: format!("invalid update manifest URL {manifest_url}: {e}"),
+        })?;
+        self.app
+            .updater_builder()
+            .endpoints(vec![endpoint])
+            .map_err(|e| AppError::InvalidArgument {
+                message: format!("rejected update manifest URL: {e}"),
+            })?
+            .build()
+            .map_err(|e| AppError::Internal {
+                message: format!("updater plugin init: {e}"),
+            })
     }
 }
 
 #[cfg(not(test))]
 #[async_trait::async_trait]
 impl<R: tauri::Runtime> InstallBackend for PluginBackend<R> {
-    async fn download_and_install(&self, version: &str) -> Result<(), AppError> {
-        let updater = self.updater()?;
+    async fn download_and_install(
+        &self,
+        version: &str,
+        manifest_url: &str,
+    ) -> Result<(), AppError> {
+        let updater = self.updater(manifest_url)?;
         let opt = updater
             .check()
             .await
@@ -498,14 +576,28 @@ pub async fn run_check(
     source: &dyn ReleaseSource,
 ) -> Result<UpdateCheckOutcome, AppError> {
     state.require_network("update_check").await?;
-    let latest = source.latest().await?;
+    // The channel is read per check, not captured at startup: flipping it
+    // in Settings must take effect on the next check (manual or scheduled)
+    // without a relaunch. Corrupt settings fail closed upstream in
+    // `require_network`; the default here is only the "no file yet" case.
+    let channel = current_update_channel(state).await;
+    let latest = source.latest(channel).await?;
     let now = chrono::Utc::now().timestamp();
     let current = current_app_version();
 
-    let outcome = match latest {
+    let (outcome, cached) = match latest {
         Some(release) if semver::is_strict_upgrade(current, &release.version) => {
             let skipped = is_version_skipped(state, &release.version).await;
-            UpdateCheckOutcome::Available {
+            let cached = CachedUpdate {
+                version: release.version.clone(),
+                current_version: current.to_string(),
+                notes: release.notes.clone(),
+                pub_date: release.published_at.clone(),
+                release_url: release.html_url.clone(),
+                installable: release.installable,
+                manifest_url: manifest_url(&github::app_repo(), channel, &release),
+            };
+            let outcome = UpdateCheckOutcome::Available {
                 version: release.version,
                 current_version: current.to_string(),
                 notes: release.notes,
@@ -513,9 +605,10 @@ pub async fn run_check(
                 release_url: release.html_url,
                 installable: release.installable,
                 skipped,
-            }
+            };
+            (outcome, Some(cached))
         }
-        _ => UpdateCheckOutcome::UpToDate,
+        _ => (UpdateCheckOutcome::UpToDate, None),
     };
 
     // Persist into AppState so subsequent install requests can validate.
@@ -523,28 +616,27 @@ pub async fn run_check(
         let mut guard = state.updater_state.write().await;
         guard.last_outcome = Some(outcome.clone());
         guard.last_checked_at = Some(now);
-        guard.cached_available = match &outcome {
-            UpdateCheckOutcome::UpToDate => None,
-            UpdateCheckOutcome::Available {
-                version,
-                current_version,
-                notes,
-                pub_date,
-                release_url,
-                installable,
-                ..
-            } => Some(CachedUpdate {
-                version: version.clone(),
-                current_version: current_version.clone(),
-                notes: notes.clone(),
-                pub_date: pub_date.clone(),
-                release_url: release_url.clone(),
-                installable: *installable,
-            }),
-        };
+        guard.cached_available = cached;
     }
 
     Ok(outcome)
+}
+
+/// The channel the check should follow, read from the live settings.
+///
+/// Absent settings mean "never configured" → the default (Stable).
+/// Corrupt settings never reach here (`require_network` denies first), but
+/// they are mapped to the default rather than the beta channel so a
+/// corrupted file can never widen the release surface.
+async fn current_update_channel(state: &AppState) -> UpdateChannel {
+    use crate::commands::settings::SettingsLoadState;
+    let guard = state.settings.read().await;
+    match &*guard {
+        SettingsLoadState::Loaded(s) => s.update_channel,
+        SettingsLoadState::FirstLaunch | SettingsLoadState::Corrupt { .. } => {
+            UpdateChannel::default()
+        }
+    }
 }
 
 /// True iff `version` is in the user's skip-list.
@@ -618,7 +710,9 @@ pub async fn run_install(
     // performs the download + sha256 verification (when the manifest
     // carries a hash) + minisign verification + atomic .app bundle
     // replacement in a single call.
-    backend.download_and_install(version).await?;
+    backend
+        .download_and_install(version, &cached.manifest_url)
+        .await?;
 
     // 5. Clear the cached available payload so a re-render of the
     // indicator + the Settings card doesn't re-offer the same
@@ -1487,6 +1581,12 @@ mod tests {
         install_result: Mutex<Result<(), AppError>>,
         check_calls: Mutex<u32>,
         install_calls: Mutex<u32>,
+        /// Channel the last `latest` call was made with, so the tests can
+        /// assert the settings channel actually reaches the release source.
+        last_channel: Mutex<Option<UpdateChannel>>,
+        /// Manifest URLs passed to `download_and_install`, so the install
+        /// paths can be pinned to the URL the check cached.
+        install_manifests: Mutex<Vec<String>>,
     }
 
     impl MockBackend {
@@ -1496,6 +1596,8 @@ mod tests {
                 install_result: Mutex::new(Ok(())),
                 check_calls: Mutex::new(0),
                 install_calls: Mutex::new(0),
+                last_channel: Mutex::new(None),
+                install_manifests: Mutex::new(Vec::new()),
             }
         }
 
@@ -1508,12 +1610,18 @@ mod tests {
                 install_result: Mutex::new(install),
                 check_calls: Mutex::new(0),
                 install_calls: Mutex::new(0),
+                last_channel: Mutex::new(None),
+                install_manifests: Mutex::new(Vec::new()),
             }
+        }
+
+        fn last_channel(&self) -> Option<UpdateChannel> {
+            *self.last_channel.lock().unwrap()
         }
     }
 
-    /// Build a published-release fixture. Defaults to installable so the
-    /// happy paths don't need to spell every field.
+    /// Build a published-release fixture. Defaults to installable and
+    /// non-prerelease so the happy paths don't need to spell every field.
     fn release(version: &str) -> ReleaseInfo {
         ReleaseInfo {
             version: version.into(),
@@ -1525,21 +1633,31 @@ mod tests {
                 "https://github.com/deuriib/agency-agents-app/releases/tag/v{version}"
             ),
             installable: true,
+            prerelease: false,
         }
     }
 
     #[async_trait::async_trait]
     impl ReleaseSource for MockBackend {
-        async fn latest(&self) -> Result<Option<ReleaseInfo>, AppError> {
+        async fn latest(&self, channel: UpdateChannel) -> Result<Option<ReleaseInfo>, AppError> {
             *self.check_calls.lock().unwrap() += 1;
+            *self.last_channel.lock().unwrap() = Some(channel);
             self.release_result.lock().unwrap().clone()
         }
     }
 
     #[async_trait::async_trait]
     impl InstallBackend for MockBackend {
-        async fn download_and_install(&self, _version: &str) -> Result<(), AppError> {
+        async fn download_and_install(
+            &self,
+            _version: &str,
+            manifest_url: &str,
+        ) -> Result<(), AppError> {
             *self.install_calls.lock().unwrap() += 1;
+            self.install_manifests
+                .lock()
+                .unwrap()
+                .push(manifest_url.to_string());
             self.install_result.lock().unwrap().clone()
         }
     }
@@ -1609,6 +1727,172 @@ mod tests {
         let cached = guard.cached_available.clone().expect("cached");
         assert_eq!(cached.version, "9.9.9");
         assert!(cached.installable);
+        assert_eq!(
+            cached.manifest_url, STABLE_MANIFEST,
+            "a stable-channel check must cache the stable manifest URL"
+        );
+    }
+
+    // ---------- Channels (#23) ----------
+
+    /// GitHub's stable manifest endpoint for the app repo.
+    const STABLE_MANIFEST: &str =
+        "https://github.com/deuriib/agency-agents-app/releases/latest/download/latest.json";
+
+    /// Rolling beta manifest endpoint for the app repo.
+    const BETA_MANIFEST: &str =
+        "https://github.com/deuriib/agency-agents-app/releases/download/updater-beta/latest.json";
+
+    /// Pure matrix of the manifest decision: only a beta channel *with a
+    /// prerelease* selects the rolling beta manifest. The beta fallback
+    /// (a non-prerelease selection) must use the stable URL so the bytes
+    /// match the announced version.
+    #[test]
+    fn manifest_url_depends_on_channel_and_prerelease_flag() {
+        let repo = github::app_repo();
+        for (channel, prerelease, expected) in [
+            (UpdateChannel::Stable, false, STABLE_MANIFEST),
+            (UpdateChannel::Stable, true, STABLE_MANIFEST),
+            (UpdateChannel::Beta, false, STABLE_MANIFEST),
+            (UpdateChannel::Beta, true, BETA_MANIFEST),
+        ] {
+            let info = ReleaseInfo {
+                prerelease,
+                ..release("9.9.9")
+            };
+            assert_eq!(
+                manifest_url(&repo, channel, &info),
+                expected,
+                "channel {channel:?} with prerelease={prerelease}"
+            );
+        }
+    }
+
+    /// Default settings → the release source is asked for the Stable
+    /// channel, so a fresh install never notices prereleases.
+    #[tokio::test]
+    async fn check_uses_stable_channel_by_default() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
+        let backend = MockBackend::returning(Ok(None));
+        run_check(&state, &backend).await.expect("check");
+        assert_eq!(backend.last_channel(), Some(UpdateChannel::Stable));
+    }
+
+    /// No settings file yet → Stable, same as the default posture.
+    #[tokio::test]
+    async fn check_uses_stable_channel_on_first_launch() {
+        let state = build_state_with(SettingsLoadState::FirstLaunch).await;
+        let backend = MockBackend::returning(Ok(None));
+        run_check(&state, &backend).await.expect("check");
+        assert_eq!(backend.last_channel(), Some(UpdateChannel::Stable));
+    }
+
+    /// Beta channel + a prerelease release → the rolling beta manifest is
+    /// cached for the install, not the stable one.
+    #[tokio::test]
+    async fn check_uses_beta_channel_and_caches_beta_manifest() {
+        let s = Settings {
+            update_channel: UpdateChannel::Beta,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        let backend = MockBackend::returning(Ok(Some(ReleaseInfo {
+            prerelease: true,
+            ..release("9.9.9-beta.1")
+        })));
+
+        run_check(&state, &backend).await.expect("check");
+        assert_eq!(backend.last_channel(), Some(UpdateChannel::Beta));
+
+        let cached = state
+            .updater_state
+            .read()
+            .await
+            .cached_available
+            .clone()
+            .expect("cached");
+        assert_eq!(cached.version, "9.9.9-beta.1");
+        assert_eq!(cached.manifest_url, BETA_MANIFEST);
+    }
+
+    /// Beta channel where the source fell back to the stable release
+    /// (no prerelease published) → the stable manifest, because the
+    /// beta manifest would advertise a different version.
+    #[tokio::test]
+    async fn check_beta_fallback_uses_stable_manifest() {
+        let s = Settings {
+            update_channel: UpdateChannel::Beta,
+            ..Settings::default()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        // `release()` is non-prerelease — exactly what the source returns
+        // when `fetch_channel_release` falls back to `/releases/latest`.
+        let backend = MockBackend::returning(Ok(Some(release("9.9.9"))));
+
+        run_check(&state, &backend).await.expect("check");
+        assert_eq!(backend.last_channel(), Some(UpdateChannel::Beta));
+
+        let cached = state
+            .updater_state
+            .read()
+            .await
+            .cached_available
+            .clone()
+            .expect("cached");
+        assert_eq!(cached.manifest_url, STABLE_MANIFEST);
+    }
+
+    /// The manual install path hands the plugin the manifest URL the check
+    /// cached — not one recomputed from the current settings.
+    #[tokio::test]
+    async fn manual_install_uses_the_cached_manifest_url() {
+        let state = build_state_with(SettingsLoadState::Loaded(Settings {
+            update_channel: UpdateChannel::Beta,
+            ..auto_install_on()
+        }))
+        .await;
+        let backend = MockBackend::returning(Ok(Some(ReleaseInfo {
+            prerelease: true,
+            ..release("9.9.9-beta.1")
+        })));
+        run_check(&state, &backend).await.expect("check");
+
+        // Flip the channel after the check: the cached manifest must win,
+        // or the installer would fetch a manifest for a different version.
+        {
+            let mut guard = state.settings.write().await;
+            *guard = SettingsLoadState::Loaded(Settings {
+                update_channel: UpdateChannel::Stable,
+                ..auto_install_on()
+            });
+        }
+
+        run_manual_install(&state, &backend, "9.9.9-beta.1")
+            .await
+            .expect("install");
+
+        assert_eq!(
+            *backend.install_manifests.lock().unwrap(),
+            vec![BETA_MANIFEST.to_string()],
+            "the install must reuse the manifest the check advertised"
+        );
+    }
+
+    /// Same contract on the background path.
+    #[tokio::test]
+    async fn auto_install_uses_the_cached_manifest_url() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        let backend = MockBackend::returning(Ok(Some(release("9.9.9"))));
+        run_check(&state, &backend).await.expect("check");
+
+        let r = run_auto_install(&state, &backend, "9.9.9")
+            .await
+            .expect("attempt");
+        assert_eq!(r, AutoInstallResult::Installed);
+        assert_eq!(
+            *backend.install_manifests.lock().unwrap(),
+            vec![STABLE_MANIFEST.to_string()]
+        );
     }
 
     /// A release whose tag matches the running version is not an update.
@@ -1742,6 +2026,11 @@ mod tests {
                     "https://github.com/deuriib/agency-agents-app/releases/tag/v{current}"
                 ),
                 installable: true,
+                manifest_url: manifest_url(
+                    &github::app_repo(),
+                    UpdateChannel::Stable,
+                    &release(&current),
+                ),
             });
         }
 
@@ -2192,6 +2481,11 @@ mod tests {
                 "https://github.com/deuriib/agency-agents-app/releases/tag/v{version}"
             ),
             installable,
+            manifest_url: manifest_url(
+                &github::app_repo(),
+                UpdateChannel::Stable,
+                &release(version),
+            ),
         });
     }
 

@@ -3,15 +3,21 @@
 # the aarch64-pc-windows-msvc target (the same trick the local VM matrix uses),
 # so one runner yields both installers.
 #
-# Signing: DEFERRED for v0.1.0 (see memory-bank/decisions.md 2026-06-16). The
-# installers are unsigned, so Windows SmartScreen warns on first launch
-# ("More info -> Run anyway"). When a code-signing cert (EV or Azure Trusted
-# Signing) is in place, signing slots in after each build step. Updater
-# artifacts are disabled (auto-update deferred), so no signing key is needed.
+# Signing: the *installer* is still unsigned — no code-signing cert (EV or Azure
+# Trusted Signing) yet, so Windows SmartScreen warns on first launch ("More info
+# -> Run anyway"). See memory-bank/decisions.md 2026-06-16.
 #
-# Output: the x64 + arm64 NSIS .exe installers, either as workflow artifacts
-# (manual run) or attached to the draft GitHub Release created by
-# release-please (`upload_release: true` from release-please.yml).
+# The *updater* artifact is signed: Tauri emits `<installer>.exe.sig` with the
+# minisign key in repository secrets (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD),
+# and the in-app updater verifies it against the public key embedded in
+# tauri.conf.json. The `.sig` is uploaded next to the installer it belongs to —
+# without it no `windows-x86_64` / `windows-aarch64` entry can be built into
+# `latest.json`. See docs/updater-release.md.
+#
+# Output: the x64 + arm64 NSIS `.exe` installers and their `.sig` files, either
+# as workflow artifacts (manual run) or attached to the draft GitHub Release
+# created by release-please (`upload_release: true` from release-please.yml).
+# The draft is published by a human, never here.
 
 name: Windows Build
 
@@ -34,6 +40,15 @@ on:
       tag:
         type: string
         required: false
+    # Declared explicitly (not `secrets: inherit`) so a caller cannot silently
+    # run an unsigned build. Not marked `required` so an unset repository secret
+    # fails in the preflight below with an actionable message rather than a bare
+    # "secret not provided" from the workflow engine.
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: write
@@ -43,9 +58,27 @@ jobs:
     name: Build Windows installers (x64 + arm64, unsigned)
     runs-on: windows-latest
 
+    # Tauri reads both vars itself when signing the updater artifacts. Values
+    # are never echoed; the preflight only checks presence.
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Fail before a ~20-minute MSVC build: Tauri only notices the missing key
+      # when it signs, and an installer whose update payload cannot be verified
+      # is worse than no build at all.
+      - name: Preflight — updater signing key present
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add the minisign private key as a repository secret (Settings > Secrets and variables > Actions) — see docs/updater-release.md."
+            exit 1
+          fi
 
       - name: Install Rust stable (+ arm64 target)
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
@@ -67,30 +100,37 @@ jobs:
       - name: Install npm dependencies
         run: npm ci
 
-      # x64 (native). Updater artifacts disabled (v0.1.0). shell: bash so the
-      # --config JSON survives quoting (Windows runners ship Git Bash).
+      # x64 (native). createUpdaterArtifacts is true in tauri.conf.json, so the
+      # installer is followed by its `.exe.sig`; no --config override — that
+      # override is what used to suppress the updater artifact entirely.
       - name: Build x64 installer
         shell: bash
-        run: npm run tauri build -- --target x86_64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: npm run tauri build -- --target x86_64-pc-windows-msvc
 
       # arm64 (cross-compiled in-OS). The frontend is already built; this just
       # recompiles the Rust binary for arm64 and bundles its NSIS installer.
       - name: Build arm64 installer
         shell: bash
-        run: npm run tauri build -- --target aarch64-pc-windows-msvc --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: npm run tauri build -- --target aarch64-pc-windows-msvc
 
+      # Installer + signature are uploaded as one artifact: the manifest build
+      # needs both halves, and a `.sig` without its `.exe` is unusable.
       - name: Upload x64 installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agency-agents-windows-x64
-          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
       - name: Upload arm64 installer
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: agency-agents-windows-arm64
-          path: src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+          path: |
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig
           if-no-files-found: error
 
       # Attach to the existing release without changing its draft state.
@@ -103,5 +143,7 @@ jobs:
           set -euo pipefail
           gh release upload "${{ inputs.tag }}" \
             src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe \
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig \
             src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe \
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe.sig \
             --clobber

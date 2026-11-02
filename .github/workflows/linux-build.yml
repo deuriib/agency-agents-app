@@ -4,14 +4,23 @@
 # Tauri 2 builds all three Linux bundle targets via `npm run tauri build`
 # (which runs the SvelteKit frontend build first via beforeBuildCommand).
 #
-# Signing: Linux desktop has no code-signing requirement for v0.1.0 — AppImage
-# ships unsigned (the common convention); .deb/.rpm GPG signing is a future
-# optional step. Updater artifacts are disabled here (v0.1.0 ships with
-# SKIP_UPDATER; auto-update is deferred), so no signing key is needed.
+# Signing: Linux desktop has no code-signing requirement — the AppImage ships
+# unsigned (the common convention); .deb/.rpm GPG signing is a future optional
+# step. The *updater* artifact IS signed though: Tauri's minisign key lives in
+# repository secrets (TAURI_SIGNING_PRIVATE_KEY / …_PASSWORD) and every bundle
+# this job produces carries a `.sig` the in-app updater verifies against the
+# public key embedded in tauri.conf.json. See docs/updater-release.md.
 #
-# Output: .deb / .rpm / .AppImage, either as workflow artifacts (manual run) or
-# attached to the draft GitHub Release created by release-please
-# (`upload_release: true` from release-please.yml).
+# Updater artifact: this is the subtle part. Tauri emits
+# `<name>.AppImage.tar.gz` + `.sig` at bundle time, but the AppImage is repacked
+# AFTER that to un-bundle host Wayland libs (#57) — shipping Tauri's tarball
+# would hand every Linux user the crashing AppImage. So the tarball is deleted
+# and regenerated from the *repacked* AppImage, then signed again.
+#
+# Output: .deb / .rpm / .AppImage, the updater `.AppImage.tar.gz` + `.sig`,
+# either as workflow artifacts (manual run) or attached to the draft GitHub
+# Release created by release-please (`upload_release: true` from
+# release-please.yml). The draft is published by a human, never here.
 
 name: Linux Build
 
@@ -34,6 +43,16 @@ on:
       tag:
         type: string
         required: false
+    # Declared explicitly (not `secrets: inherit`) so a caller cannot silently
+    # run an unsigned build: the caller in release-please.yml passes both. They
+    # are not marked `required` because an unset repository secret then fails in
+    # the preflight below with an actionable message instead of a bare
+    # "secret not provided" from the workflow engine.
+    secrets:
+      TAURI_SIGNING_PRIVATE_KEY:
+        required: false
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD:
+        required: false
 
 permissions:
   contents: write
@@ -46,9 +65,28 @@ jobs:
     # hard requirement — that raises the floor for every user downstream.
     runs-on: ubuntu-24.04
 
+    # Tauri reads both vars itself when signing updater artifacts, and the
+    # explicit post-repack `tauri signer sign` below uses them too. Values are
+    # never echoed; the preflight only checks presence.
+    env:
+      TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+      TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # Fail in ~2 seconds instead of after a 20-minute compile: Tauri only
+      # discovers a missing key when it signs, and by then the whole build is
+      # wasted. An unsigned updater artifact is worse than no build at all —
+      # the app would offer an update it cannot verify and refuse it.
+      - name: Preflight — updater signing key present
+        run: |
+          set -euo pipefail
+          if [[ -z "${TAURI_SIGNING_PRIVATE_KEY:-}" ]]; then
+            echo "::error::TAURI_SIGNING_PRIVATE_KEY is empty. Add the minisign private key as a repository secret (Settings > Secrets and variables > Actions) — see docs/updater-release.md."
+            exit 1
+          fi
 
       # The ubuntu-24.04 runner image runs with umask 0077, so checkout
       # materializes files as 0600/0700. appimagetool refuses to package an
@@ -99,11 +137,14 @@ jobs:
         run: npm ci
 
       # Builds the frontend, compiles the Rust binary, and bundles
-      # .deb / .rpm / .AppImage. Updater artifacts disabled (v0.1.0).
+      # .deb / .rpm / .AppImage plus the signed `<name>.AppImage.tar.gz` updater
+      # artifact. createUpdaterArtifacts is true in tauri.conf.json; no
+      # --config override here — overriding it is what left every release
+      # without a `.sig` and made the in-app updater report "up to date".
       - name: Build Tauri app
         run: |
           umask 0022
-          npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+          npm run tauri build
 
       # Un-bundle the Wayland client libs from the AppImage (#57).
       #
@@ -125,6 +166,10 @@ jobs:
           umask 0022
           cd src-tauri/target/release/bundle/appimage
           APP="$(ls *.AppImage)"
+          # Tauri's tarball was made from the AppImage as it was BEFORE the
+          # repack below, i.e. the crashing one. Drop it here so it can never be
+          # uploaded by accident; the next step rebuilds it from the fixed file.
+          rm -f "$APP.tar.gz" "$APP.tar.gz.sig"
           echo "Repacking $APP without bundled libwayland-*"
           ./"$APP" --appimage-extract >/dev/null
           # The AppImage runtime extracts with restrictive modes (0700/0770)
@@ -140,8 +185,32 @@ jobs:
           chmod +x appimagetool
           ARCH=x86_64 ./appimagetool --appimage-extract-and-run squashfs-root "$APP.new"
           mv -f "$APP.new" "$APP"
+          # appimagetool's output mode depends on the umask it inherited; pin
+          # 0755 so both the AppImage and the tarball built from it are
+          # executable for every user after extraction.
+          chmod +x "$APP"
           rm -rf squashfs-root appimagetool
           echo "Done — $APP now defers libwayland to the host."
+
+      # Rebuild the updater artifact from the REPACKED AppImage and sign it
+      # again. Same shape Tauri produces (a gzipped tar holding the AppImage at
+      # the archive root) so the plugin's extractor is unchanged; only the bytes
+      # differ, which is exactly why the signature has to be regenerated.
+      - name: Regenerate + sign the updater tarball
+        run: |
+          set -euo pipefail
+          umask 0022
+          cd src-tauri/target/release/bundle/appimage
+          APP="$(ls *.AppImage)"
+          tar -czf "$APP.tar.gz" "$APP"
+          rm -f "$APP.tar.gz.sig"
+          # The key comes from the job env (TAURI_SIGNING_PRIVATE_KEY /
+          # …_PASSWORD), never argv: a command-line argument is visible to every
+          # process on the runner, while the environment is already how Tauri's
+          # build step receives it. Same reason the docs tell humans to export it.
+          npx --no-install tauri signer sign "$APP.tar.gz"
+          test -s "$APP.tar.gz.sig" || { echo "::error::updater tarball was not signed"; exit 1; }
+          ls -l "$APP.tar.gz" "$APP.tar.gz.sig"
 
       - name: Upload .deb
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
@@ -164,6 +233,18 @@ jobs:
           path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
+      # The updater artifact and its signature travel together: a `.tar.gz`
+      # without `.sig` fails the manifest build (the CLI rejects an empty
+      # signature) and a `.sig` without the tarball is dead weight.
+      - name: Upload updater artifact (.AppImage.tar.gz + .sig)
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: agency-agents-linux-updater
+          path: |
+            src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz
+            src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz.sig
+          if-no-files-found: error
+
       # `gh release upload` attaches to the existing draft release without
       # touching its draft/published state — publishing stays a human step
       # after the macOS DMGs are attached locally.
@@ -177,4 +258,6 @@ jobs:
             src-tauri/target/release/bundle/deb/*.deb \
             src-tauri/target/release/bundle/rpm/*.rpm \
             src-tauri/target/release/bundle/appimage/*.AppImage \
+            src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz \
+            src-tauri/target/release/bundle/appimage/*.AppImage.tar.gz.sig \
             --clobber

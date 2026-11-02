@@ -300,3 +300,53 @@ satisfies because the runner image ships LLVM; and a from-scratch Windows build 
 ### 2026-11-01: Repository automation — release-please, PR gates, declarative labels, mise
 
 **Status**: Approved (branch chore/repo-professionalization). **Context**: releases were cut by hand (`scripts/bump-version.mjs` → version-bump PR → `release.yml` tag + draft release gated on `docs/release-notes/<v>.md`), no workflow ran on pull requests, labels were edited in the GitHub UI, and Dependabot only watched Actions. The repo had no issue templates, PR template, CODEOWNERS, or secret scan despite a `.gitleaks.toml` sitting unused. **Decision**: (1) `release-please` owns versioning — Conventional Commits on `main` accumulate into a release PR that bumps `package.json`, `package-lock.json`, `src-tauri/tauri.conf.json` (json extra-file) and `src-tauri/Cargo.toml` (toml extra-file); merging it creates the `vX.Y.Z` tag and a **draft** release, preserving the existing flow where Linux/Windows CI attaches bundles and macOS is signed manually via `scripts/release.sh` before a human publishes. `draft: true` + `force-tag-creation: true`; `bump-minor-pre-major` so breaking changes move 0.x minor, not to 1.0.0. Optionally appends `docs/release-notes/<v>.md` below the generated changelog. `release.yml` is deleted; `linux-build.yml`/`windows-build.yml` are now `workflow_call` only. (2) `pr-check.yml` gates every PR on `cargo fmt --check`, `cargo clippy -D warnings`, the Rust suite, `svelte-check`, the frontend build, and a Conventional-Commit PR title. (3) Labels are declarative (`.github/labels.yml` + `sync-labels.yml`) with path-based auto-labelling. (4) `.mise.toml` + `mise.lock` pin the toolchain and expose the CI commands as tasks (`mise run ci`). **Consequences**: the repo-wide `cargo fmt` pass in this branch is what makes the fmt gate green; release PRs opened with the default `GITHUB_TOKEN` start their PR checks in an approval-required state (a maintainer clicks "Approve workflows to run" in the merge box; no PAT needed); the repository setting "Allow GitHub Actions to create and approve pull requests" is required and was enabled; `src-tauri/Cargo.lock` stays derived (the next cargo command refreshes the local package entry); `scripts/bump-version.mjs` remains only as the manual fallback. **References**: `release-please-config.json`, `.release-please-manifest.json`, `.github/workflows/release-please.yml`, `.github/workflows/pr-check.yml`, `.github/labels.yml`, `.mise.toml`, `mise.lock`.
+
+---
+
+### 2026-11-02: The updater manifest is a release asset; channels select a release stream
+
+**Status**: Proposed (PR #38). **Context**: the in-app updater could never install
+anything. No release ever carried `latest.json` (404), Linux/Windows explicitly disabled
+updater artifacts, the fallback host served a v0.3.2 manifest for the upstream owner, and
+releases stayed drafts. The version decision also used a different source (GitHub
+`/releases/latest`) than the installer (a static manifest endpoint), which made channels
+impossible to add safely.
+
+**Decision**:
+1. **One manifest per release, attached to that release.** `scripts/updater-manifest.mjs`
+   builds/merges it from the platform artifacts and their `.sig` files; CI builds the
+   Linux/Windows entries, `scripts/release.sh` merges the `darwin-*` entries and
+   publishes. Stable clients fetch `releases/latest/download/latest.json`.
+2. **Channels select a release stream.** `Settings::update_channel` (stable | beta) is
+   persisted. Stable uses `/releases/latest`; beta uses the newest published prerelease
+   from `/releases?per_page=30`, falling back to stable. The manifest URL is resolved per
+   check and cached with the announced version, so a channel change between check and
+   install cannot download a different release's bytes. Beta installs from the rolling
+   `updater-beta` release; that release must never be "latest".
+3. **The draft-then-human-publish model stays.** CI attaches assets but never publishes;
+   macOS notarization is local, so `release.sh` is the single publish step and refuses to
+   publish a manifest missing Linux or Windows.
+4. **The release payload must match the shipped bundle.** The AppImage is repacked after
+   Tauri signs its updater tarball, so the Linux job deletes the pre-repack tarball and
+   regenerates + re-signs one from the repacked AppImage.
+
+**Alternatives rejected**:
+- Keeping the `agencyagents.app/updater.json` host: it served a stale v0.3.2 manifest for
+  the upstream owner, and it sits outside the release pipeline.
+- Adopting `tauri-action`: it would replace the release-please + draft + local macOS flow
+  the repo already uses, including the `docs/release-notes/` step.
+- A single manifest for both channels: Tauri's platform keys have no channel dimension,
+  so a client cannot tell a beta entry from a stable one.
+- Auto-publishing from CI: a draft whose macOS assets are still being notarized would
+  serve a manifest pointing at files no client can download.
+
+**Consequences**: a release is not done until `latest.json` is attached and reachable by
+an anonymous client (`mise run verify-updater`). The two signing secrets are required for
+Linux/Windows builds; a missing key fails the preflight. The v0.7.1 draft was stranded
+before this change and should be deleted. The real install remains unverified until the
+first signed, published release.
+
+**References**: `scripts/updater-manifest.mjs`, `scripts/verify-updater-manifest.mjs`,
+`src-tauri/src/commands/updater.rs`, `src-tauri/src/github/releases.rs`,
+`.github/workflows/release-please.yml`, `scripts/release.sh`,
+`docs/updater-release.md`, `tasks/2026-11/261102_updater-pipeline.md`.

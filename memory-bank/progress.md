@@ -1,15 +1,25 @@
 # Project Progress — Agency Agents
 
-## Version 0.6.x (Current)
-- [x] v0.6.0: Opt-in automatic installs (scheduler-owned background download → verify → install), plus the six backend test repairs and eleven i18n hint corrections.
+## Version 0.7.x (Current)
+- [ ] **PR #38 (in review, CI green)**: make the updater installable end-to-end
+  (`latest.json` + signing + publish), add stable/beta channels (#23), complete the
+  auto-install locale keys (#24), and add `verify-updater` / `set-updater-secrets`.
+- [ ] Add `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` to the
+  repository secrets.
+- [ ] Cut and publish the first release with this pipeline; verify with
+  `mise run verify-updater -- --check-urls`.
+- [ ] Native review of the new translations.
 
-### Pending for v0.6.1 / Next Milestone
-- [ ] Manual smoke test of auto-install on a signed build (release condition).
-- [ ] Native review of the eleven corrected `autoInstallHint` strings.
+### Pending for the next milestone
+- [ ] Manual smoke test of auto-install on a signed build.
 - [ ] Implement multi-file reconcile logic (detect drift across multiple files).
 - [ ] Implement multi-file uninstall logic.
 - [ ] Enable Aider/Windsurf roster aggregation.
 - [ ] Run full parity tests for multi-file outputs.
+- [ ] Delete the stranded v0.7.1 draft release once PR #38 lands.
+
+## Version 0.6.x (Completed)
+- [x] v0.6.0: Opt-in automatic installs (scheduler-owned background download → verify → install), plus the six backend test repairs and eleven i18n hint corrections.
 
 ## Version 0.5.x (Completed)
 - [x] v0.5.0: Version bump and release notes setup.
