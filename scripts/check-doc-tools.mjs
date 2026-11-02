@@ -18,6 +18,12 @@
 //
 // That mirrors ToolMeta::installable(), and `scope` comes straight from
 // tools.json, which is what render::supports_user / supports_project read.
+//
+// Note this tracks the BACKEND declaration on purpose. The frontend keeps its
+// own copy of IMPLEMENTED_FORMATS in src/lib/data/toolRegistry.ts and currently
+// claims three extra formats (kimi-agent, openclaw-workspace, vibe-toml), so the
+// UI offers 16 tools while `supported()` covers 13. See issue #49; when that is
+// resolved this guard is what forces the docs to follow.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
