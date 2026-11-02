@@ -65,6 +65,16 @@ gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # prompts, does not echo
 gh secret list
 ```
 
+Or run the automated path from the repo on the machine that holds the key:
+
+```sh
+mise run set-updater-secrets
+```
+
+It reads the Keychain (or `--key-file`), compares the private key id with the
+embedded `pubkey`, refuses to upload on a mismatch, and pipes both values to
+`gh secret set` through stdin — never argv, a log, or shell history.
+
 The public half is already embedded in `src-tauri/tauri.conf.json` →
 `plugins.updater.pubkey`. Rotating the key means regenerating both halves **and**
 shipping a release signed with the old key first, or installed apps will reject
@@ -149,6 +159,19 @@ endpoint would start handing betas to everyone. Both `gh release create` calls
 pass `--latest=false` for that reason; do not flip it by hand.
 
 ## Verifying a manifest
+
+The repo ships the same checks as a task:
+
+```sh
+mise run verify-updater                       # stable channel, all five platforms
+mise run verify-updater -- --channel beta     # beta channel
+mise run verify-updater -- --check-urls       # also HEAD every artifact URL
+mise run verify-updater -- --file dist/latest.json --allow-subset
+```
+
+It exits non-zero on a missing platform, an unknown platform key, an empty
+signature, a non-https URL, or (with `--check-urls`) an artifact that is not
+downloadable. `--json` emits a machine-readable report.
 
 After publishing, exactly what a client sees:
 

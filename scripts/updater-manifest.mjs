@@ -47,7 +47,7 @@ const TARGET_SET = new Set(TARGETS);
 // Official semver.org regex: rejects leading zeros and empty identifiers, so
 // "1.02.3" and "1.0.0-" fail instead of producing a version Tauri cannot
 // compare against installed versions.
-const SEMVER =
+export const SEMVER =
   /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|\d*[A-Za-z-][0-9A-Za-z-]*))*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$/;
 
 // Tauri parses pub_date as RFC3339; anything else is silently ignored upstream.

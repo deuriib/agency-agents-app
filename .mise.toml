@@ -101,3 +101,19 @@ run = "npm run tauri --"
 description = "Renderer parity test (needs AGENCY_AGENTS_PARITY_ROOT pointed at an agency-agents checkout)"
 dir = "src-tauri"
 run = "cargo test upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored"
+
+# ── Updater operations ───────────────────────────────────────────────────────
+
+# Validates the manifest a client would actually fetch. Defaults to the stable
+# channel and all five platform keys; pass --channel beta, --file, --url,
+# --allow-subset or --check-urls after `--`.
+[tasks.verify-updater]
+description = "Validate the published updater manifest (stable by default)"
+run = "node scripts/verify-updater-manifest.mjs"
+
+# Reads the key from the macOS Keychain (or --key-file), refuses it if its id
+# does not match the embedded pubkey, and pipes both values to `gh secret set`
+# without echoing them.
+[tasks.set-updater-secrets]
+description = "Upload the updater signing key to GitHub Actions secrets"
+run = "bash scripts/set-updater-secrets.sh"
