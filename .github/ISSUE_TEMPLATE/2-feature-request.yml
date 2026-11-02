@@ -1,0 +1,63 @@
+name: Feature Request
+description: Propose a capability, UX change, or improvement.
+title: "[feat]: "
+labels: ["enhancement", "triage"]
+type: feature
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the problem first, then the solution. Requirements are quoted
+        literally during scoping, so be precise about what "done" means.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: The workflow that is painful or impossible today.
+      placeholder: "When I switch projects, I cannot tell which agents are installed at project scope."
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed solution
+      description: What should the app do? Sketches or mockups are welcome.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches, or how you work around it today.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - UI / UX
+        - Catalog and rendering
+        - Install / update / uninstall
+        - Updater and releases
+        - Performance
+        - Accessibility
+        - Internationalization
+        - Other / not sure
+      default: 0
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: This request describes a user problem, not only an implementation detail.
+          required: true

@@ -1,0 +1,104 @@
+# Release Please — turns Conventional Commits on `main` into a release PR, and
+# merging that PR into a version bump, a `vX.Y.Z` tag, and a draft GitHub
+# Release.
+#
+# The draft is intentional. It preserves the release flow this project already
+# uses: Linux/Windows bundles are attached by this workflow, macOS DMGs are
+# built and notarized locally with `scripts/release.sh`, and a human publishes
+# the release once every platform is attached.
+#
+# Version manifests kept in lockstep by release-please:
+#   - package.json + package-lock.json   (node release strategy)
+#   - src-tauri/tauri.conf.json          (json extra-file)
+#   - src-tauri/Cargo.toml               (toml extra-file)
+# `src-tauri/Cargo.lock` is derived: the local package entry is refreshed by the
+# next cargo command (the CI build does it), so it is not an extra-file.
+#
+# Required repository setting (Settings → Actions → General → Workflow
+# permissions): "Allow GitHub Actions to create and approve pull requests".
+#
+# Release pull requests opened with the default GITHUB_TOKEN do not trigger
+# other workflows (GitHub suppresses recursive runs), so CI does not run on
+# them. Set the `RELEASE_PLEASE_TOKEN` repository secret to a fine-grained PAT
+# with `contents: write` + `pull-requests: write` to get CI on release PRs.
+
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: release-please
+  cancel-in-progress: false
+
+jobs:
+  release-please:
+    name: Create release PR / tag
+    runs-on: ubuntu-latest
+    outputs:
+      release_created: ${{ steps.release.outputs.release_created }}
+      tag_name: ${{ steps.release.outputs.tag_name }}
+      version: ${{ steps.release.outputs.version }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Run release-please
+        id: release
+        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+
+      # release-please writes the generated changelog into the release body.
+      # `docs/release-notes/<version>.md` is the optional narrative (why this
+      # release matters); when present it is appended below the generated notes.
+      # Non-blocking: cosmetic notes must never stop the platform builds.
+      - name: Append narrative release notes
+        if: steps.release.outputs.release_created == 'true'
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="${{ steps.release.outputs.tag_name }}"
+          VERSION="${{ steps.release.outputs.version }}"
+          NOTES="docs/release-notes/${VERSION}.md"
+          if [[ ! -f "$NOTES" ]]; then
+            echo "No narrative notes at $NOTES — keeping the generated changelog only."
+            exit 0
+          fi
+          gh release view "$TAG" --json body --jq .body > /tmp/generated.md
+          { cat /tmp/generated.md; printf '\n\n---\n\n'; cat "$NOTES"; } > /tmp/combined.md
+          gh release edit "$TAG" --notes-file /tmp/combined.md
+          echo "Appended $NOTES to $TAG."
+
+  linux:
+    name: Build Linux bundles
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/linux-build.yml
+    with:
+      upload_release: true
+      tag: ${{ needs.release-please.outputs.tag_name }}
+
+  windows:
+    name: Build Windows installers
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    permissions:
+      contents: write
+    uses: ./.github/workflows/windows-build.yml
+    with:
+      upload_release: true
+      tag: ${{ needs.release-please.outputs.tag_name }}

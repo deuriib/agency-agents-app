@@ -9,14 +9,13 @@
 # Signing) is in place, signing slots in after each build step. Updater
 # artifacts are disabled (auto-update deferred), so no signing key is needed.
 #
-# Output: the x64 + arm64 NSIS .exe installers uploaded to the workflow run.
+# Output: the x64 + arm64 NSIS .exe installers, either as workflow artifacts
+# (manual run) or attached to the draft GitHub Release created by
+# release-please (`upload_release: true` from release-please.yml).
 
 name: Windows Build
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -26,6 +25,9 @@ on:
       tag:
         type: string
         required: false
+
+permissions:
+  contents: write
 
 jobs:
   build:
@@ -82,11 +84,15 @@ jobs:
           path: src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
           if-no-files-found: error
 
+      # Attach to the existing release without changing its draft state.
       - name: Attach to GitHub Release
         if: ${{ inputs.upload_release == true }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          files: |
-            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
-            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.tag }}" \
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*-setup.exe \
+            src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/*-setup.exe \
+            --clobber

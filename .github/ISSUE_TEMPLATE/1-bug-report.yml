@@ -1,0 +1,119 @@
+name: Bug Report
+description: Report a crash, regression, or behaviour that contradicts the app.
+title: "[bug]: "
+labels: ["bug", "triage"]
+type: bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Keep it reproducible and specific.
+
+        **Do not paste secrets, tokens, or API keys.** Report vulnerabilities
+        privately via the Security advisory link instead of a public issue.
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: The actual behaviour, with the exact error text if there is one.
+      placeholder: "I opened Settings, enabled automatic updates, and the app quit instead of installing."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+      placeholder: "The update should verify, install, and offer a relaunch."
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: A numbered list someone else can follow on a clean install.
+      placeholder: |
+        1. Open the app
+        2. Go to ...
+        3. Click ...
+        4. Observe ...
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: App version
+      description: Settings → About, or tell us the build/branch you ran.
+      placeholder: "0.6.0"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Windows 11
+        - Windows 10
+        - Linux (.deb / .rpm)
+        - Linux (AppImage)
+        - Other
+      default: 0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tool
+    attributes:
+      label: AI coding tool involved (if any)
+      description: The tool whose install, update, or render is affected.
+      options:
+        - Not tool-specific
+        - Claude Code
+        - Codex
+        - Gemini CLI
+        - GitHub Copilot
+        - Qwen Code
+        - Cursor
+        - opencode
+        - Osaurus
+        - Aider
+        - Antigravity
+        - Kimi
+        - OpenClaw
+        - Windsurf
+        - Hermes
+        - Mistral Vibe
+        - ZCode
+        - DeepSeek Harness
+        - Pi Agent
+        - Oh My Pi
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs, stack traces, or screenshots
+      description: |
+        Drag screenshots in here. Redact tokens and personal paths.
+        macOS log dir: ~/Library/Logs/agency-agents-app (if present)
+      render: shell
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true
+        - label: I am running the latest release, or `main` built from source.
+          required: true
