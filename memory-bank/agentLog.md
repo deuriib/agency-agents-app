@@ -760,3 +760,25 @@ Ubuntu 26.04 aarch64 VM with a real jammy `libnghttp2`, and proving the fix end 
 Surveyed both repos while here. The app's real problem is not code: **v0.3.0 has been the last release since
 2026-07-05**, `main` sat still 07-30 → 09-12, and 16 PRs / 16 issues are open with **every PR mergeable**. Next
 action is a v0.3.1, not more fixes. Full detail in `tasks/2026-09/README.md` and `activeContext.md`.
+
+## 2026-11-02 — Updater pipeline: signed latest.json + stable/beta channels (PR #38)
+
+The in-app updater could never install anything. Diagnosis: no release ever carried
+`latest.json` (`GET /releases/latest/download/latest.json` → 404), Linux/Windows passed
+`createUpdaterArtifacts: false` and uploaded no `.sig`, the fallback host served a v0.3.2
+manifest for the upstream owner, releases stayed drafts, and `release.sh` uploaded
+nothing. The Linux AppImage is also repacked after Tauri signs its tarball, so the signed
+payload would have been the build that crashes at EGL init.
+
+PR #38 fixes the pipeline: CI signs updater artifacts from repository secrets, attaches
+every `.sig`, regenerates and re-signs the Linux tarball after the repack, and a `manifest`
+job builds `latest.json` from the release assets. `release.sh` uploads the macOS artifacts,
+merges the `darwin-*` entries, publishes, and refuses a partial manifest. #23 lands as a
+persisted `UpdateChannel` (stable | beta) with a per-check manifest URL cached alongside
+the announced version; #24 lands as the three missing consent keys in all 11 translations.
+`mise run verify-updater` and `mise run set-updater-secrets` automate the post-release
+check and the key-id-checked secret upload.
+
+Evidence: 53 script tests, 16 new Rust tests, fmt/clippy/test, svelte-check 0, frontend
+build, actionlint, 8/8 CI checks green. Not verified: the real install needs the signing
+secrets and a published signed release. Task doc: `tasks/2026-11/261102_updater-pipeline.md`.

@@ -101,3 +101,28 @@ Activity drawer (live install/convert stdout). Cmd+K palette, Cmd+0…6 nav inhe
 
 Long ops stream stdout/stderr via `Channel<Event>` with a global write-lock, exactly
 like brew-browser's `run_brew_streaming`. Install/convert/refresh are the streaming ops.
+
+## 9. Updater release pipeline (manifest + channels)
+
+The updater has two halves with one contract: a signed `latest.json` attached to the
+GitHub release.
+
+```
+release-please draft ──► linux/windows CI (signed .sig) ──► manifest job (latest.json)
+                                                              │
+macOS local release.sh ──► DMGs + .app.tar.gz + .sig ──► merge darwin-* + publish
+                                                              │
+                                     stable: releases/latest/download/latest.json
+                                     beta:   releases/download/updater-beta/latest.json
+```
+
+- **Version decision**: stable uses `/releases/latest`; beta uses the newest published
+  prerelease (`/releases?per_page=30`), falling back to stable. The manifest URL is
+  resolved per check and cached with the announced version.
+- **Install**: `tauri-plugin-updater` fetches that cached manifest, verifies the minisign
+  signature against the embedded pubkey, and swaps the bundle. The Linux payload is
+  regenerated after the Wayland repack and re-signed.
+- **Never publish a partial manifest**: CI fails when a platform artifact is missing;
+  `release.sh` fails when `latest.json` lacks Linux or Windows unless explicitly allowed.
+- **Verification is a task, not a ritual**: `mise run verify-updater` checks the published
+  manifest against Tauri's five platform keys and, with `--check-urls`, the artifacts.

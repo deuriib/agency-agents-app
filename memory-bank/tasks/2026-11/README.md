@@ -1,13 +1,21 @@
-# November 2026 — Antigravity parity
+# November 2026 — Antigravity parity + updater pipeline
 
 ## Current State
-Post-v0.6.0. The renderer now mirrors upstream's Antigravity role policy *and* its per-role
-tool declarations.
+Post-v0.6.0. The renderer mirrors upstream's Antigravity role policy *and* its per-role
+tool declarations. PR #38 (open, CI green) makes the in-app updater installable
+end-to-end and adds stable/beta channels.
 
 ## Goals
 - [ ] Confirm Antigravity runtime semantics for the role flags (issue #27).
+- [ ] Add the updater signing secrets and cut the first release with the new pipeline.
 
 ## Recent Achievements
+- Fixed the in-app updater and closed #23/#24 (PR #38): the release pipeline now
+  publishes signed `latest.json` manifests, Linux/Windows updater artifacts are signed,
+  the Linux tarball is regenerated after the Wayland repack, stable/beta channels are
+  persisted and selectable, and the auto-install consent keys exist in all 11
+  translations. Added `mise run verify-updater` and `mise run set-updater-secrets`.
+  See [261102_updater-pipeline.md](./261102_updater-pipeline.md).
 - Added a Draft 2020-12 JSON Schema for the tool registry (issue #30): `src-tauri/data/_schema.json`
   validates the bundled `tools.json` in the IDE (VS Code mapping) and in `cargo test --test tools_schema`,
   which also asserts the schema still rejects malformed entries. See
