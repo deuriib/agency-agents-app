@@ -7,15 +7,22 @@
 //! (see `commands::updater`), but the *version decision* is owned by the
 //! published GitHub Release.
 //!
-//! ## Why `/releases/latest`
+//! ## Channels (#23)
 //!
-//! - It excludes drafts and pre-releases, matching the "Stable" channel
-//!   the UI advertises.
-//! - It returns `tag_name`, `body`, `published_at`, `html_url`, and the
-//!   asset list in one request — enough to render the notice and decide
-//!   whether an in-app install is possible.
-//! - It is the same endpoint `github::stats` already uses for
-//!   `last_release_tag`, so the origin/rate-limit story is unchanged.
+//! Two channels, one decision procedure:
+//!
+//! - **Stable** — `GET /repos/{owner}/{repo}/releases/latest`. It
+//!   excludes drafts and pre-releases, matching the "Stable" channel the
+//!   UI advertises.
+//! - **Beta** — `GET /repos/{owner}/{repo}/releases?per_page=30`, then
+//!   the first published (`!draft`) prerelease whose tag is
+//!   semver-shaped. When the repo has no published prerelease the beta
+//!   channel falls back to the stable `/releases/latest` answer, so
+//!   "Beta" is never *older* than "Stable".
+//!
+//! Both queries share one body fetch (status mapping, rate-limit
+//! discrimination, 1 MiB cap) and one parser ([`convert_raw_release`]),
+//! so a fix in one path cannot drift from the other.
 //!
 //! ## Security posture
 //!
@@ -29,9 +36,11 @@
 //! - Non-semver tags are ignored (`Ok(None)`) rather than surfaced as a
 //!   bogus version.
 
+use serde::de::DeserializeOwned;
 use serde::Deserialize;
 use url::Url;
 
+use crate::commands::settings::UpdateChannel;
 use crate::error::AppError;
 use crate::github::auth::Token;
 use crate::github::stats::{
@@ -47,6 +56,11 @@ const MAX_NOTES_CHARS: usize = 4_000;
 
 /// Upper bound on the release-name string.
 const MAX_NAME_CHARS: usize = 200;
+
+/// Page size for the beta channel's release list. 30 covers months of
+/// releases on this repo, so the newest prerelease is always on the first
+/// page without pagination.
+const BETA_RELEASE_PAGE_SIZE: usize = 30;
 
 /// A published GitHub Release, reduced to the fields the updater needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -69,6 +83,10 @@ pub struct ReleaseInfo {
     /// True when the release carries a `latest.json` asset. Without it
     /// the app can announce the release but cannot install it in-place.
     pub installable: bool,
+    /// True when GitHub marks the release as a prerelease. The updater
+    /// uses this to choose the beta manifest endpoint, and to tell a
+    /// beta-channel result apart from the beta fallback to stable.
+    pub prerelease: bool,
 }
 
 // ---------- Raw API shapes (subset of fields actually used) ----------
@@ -87,6 +105,12 @@ struct RawRelease {
     html_url: Option<String>,
     #[serde(default)]
     assets: Vec<RawAsset>,
+    /// GitHub omits these on some payloads (and pre-2.x fixtures), so
+    /// both default to `false`.
+    #[serde(default)]
+    prerelease: bool,
+    #[serde(default)]
+    draft: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -111,69 +135,171 @@ pub async fn fetch_latest_release(
         "{}/repos/{}/{}/releases/latest",
         API_BASE, repo.owner, repo.repo
     );
-    let resp = send_with_optional_auth(client, &url, auth_token).await?;
+    let Some(bytes) = fetch_release_body(client, &url, auth_token).await? else {
+        return Ok(None);
+    };
+    parse_release_json(&bytes, repo)
+}
+
+/// Fetch the release the given `channel` should offer.
+///
+/// - `Stable` → [`fetch_latest_release`].
+/// - `Beta` → the newest published prerelease, or the stable latest when
+///   the repo has no published prerelease (a beta channel is never older
+///   than stable).
+///
+/// `UpdateChannel` lives in `commands::settings` because it is part of
+/// the on-disk/IPC settings schema; duplicating the enum here would
+/// create a second definition that could drift from the serde shape the
+/// frontend writes.
+pub async fn fetch_channel_release(
+    client: &reqwest::Client,
+    repo: &GithubRepo,
+    auth_token: Option<&Token>,
+    channel: UpdateChannel,
+) -> Result<Option<ReleaseInfo>, AppError> {
+    match channel {
+        UpdateChannel::Stable => fetch_latest_release(client, repo, auth_token).await,
+        UpdateChannel::Beta => {
+            if let Some(prerelease) = fetch_newest_prerelease(client, repo, auth_token).await? {
+                return Ok(Some(prerelease));
+            }
+            // No published prerelease anywhere on the first page → the
+            // beta channel degrades to stable rather than reporting
+            // "up to date" while stable has a newer release.
+            fetch_latest_release(client, repo, auth_token).await
+        }
+    }
+}
+
+/// Fetch the newest published prerelease, or `None` when the repo has
+/// none on the first page of [`BETA_RELEASE_PAGE_SIZE`] releases.
+async fn fetch_newest_prerelease(
+    client: &reqwest::Client,
+    repo: &GithubRepo,
+    auth_token: Option<&Token>,
+) -> Result<Option<ReleaseInfo>, AppError> {
+    let url = format!(
+        "{}/repos/{}/{}/releases?per_page={BETA_RELEASE_PAGE_SIZE}",
+        API_BASE, repo.owner, repo.repo
+    );
+    let Some(bytes) = fetch_release_body(client, &url, auth_token).await? else {
+        return Ok(None);
+    };
+    parse_release_list(&bytes, repo)
+}
+
+// ---------- HTTP ----------
+
+/// GET `url` and return the raw body, or `None` when GitHub answers 404.
+///
+/// One implementation for both channel queries so the status mapping, the
+/// rate-limit discrimination, and the body cap cannot drift between the
+/// stable release and the prerelease list.
+async fn fetch_release_body(
+    client: &reqwest::Client,
+    url: &str,
+    auth_token: Option<&Token>,
+) -> Result<Option<Vec<u8>>, AppError> {
+    let resp = send_with_optional_auth(client, url, auth_token).await?;
 
     match resp.status().as_u16() {
         200 => {}
         // No published release yet. Not an error for a young repo, and
         // not an error for a repo whose releases are all drafts.
         404 => return Ok(None),
-        403 => return Err(maybe_rate_limited(&resp, &url)),
+        403 => return Err(maybe_rate_limited(&resp, url)),
         status => {
-            return Err(AppError::HttpStatus { url, status });
+            return Err(AppError::HttpStatus {
+                url: url.to_string(),
+                status,
+            });
         }
     }
 
+    read_capped_body(resp, url).await.map(Some)
+}
+
+/// Drain the body, refusing anything above [`MAX_RESPONSE_BYTES`] before
+/// it reaches a deserializer.
+async fn read_capped_body(resp: reqwest::Response, url: &str) -> Result<Vec<u8>, AppError> {
     if let Some(len) = resp.content_length() {
         if len > MAX_RESPONSE_BYTES {
             return Err(AppError::Network {
-                url,
+                url: url.to_string(),
                 message: format!("body length {len} exceeds {MAX_RESPONSE_BYTES}"),
             });
         }
     }
     let bytes = resp.bytes().await.map_err(|e| AppError::Network {
-        url: url.clone(),
+        url: url.to_string(),
         message: format!("body: {e}"),
     })?;
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
         return Err(AppError::Network {
-            url,
+            url: url.to_string(),
             message: format!("body length {} exceeds {MAX_RESPONSE_BYTES}", bytes.len()),
         });
     }
-
-    parse_release_json(&bytes, repo)
+    Ok(bytes.to_vec())
 }
 
-/// Pure parser, extracted so the wire shape can be tested without a
-/// mock HTTP server. `repo` is used only to build a safe fallback URL
-/// when the API's `html_url` is missing or unexpected.
+// ---------- Parsing ----------
+
+/// Decode a GitHub response body, tagging the error with the endpoint
+/// that produced it so a malformed payload is diagnosable from the toast.
+fn decode_json<T: DeserializeOwned>(bytes: &[u8], command: &str) -> Result<T, AppError> {
+    serde_json::from_slice(bytes).map_err(|e| AppError::JsonParse {
+        command: command.to_string(),
+        message: e.to_string(),
+        raw_excerpt: String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).into_owned(),
+    })
+}
+
+/// Pure parser for `/releases/latest`, extracted so the wire shape can be
+/// tested without a mock HTTP server. `repo` is used only to build a safe
+/// fallback URL when the API's `html_url` is missing or unexpected.
 pub(crate) fn parse_release_json(
     bytes: &[u8],
     repo: &GithubRepo,
 ) -> Result<Option<ReleaseInfo>, AppError> {
-    let raw: RawRelease = serde_json::from_slice(bytes).map_err(|e| AppError::JsonParse {
-        command: "releases/latest".into(),
-        message: e.to_string(),
-        raw_excerpt: String::from_utf8_lossy(&bytes[..bytes.len().min(256)]).into_owned(),
-    })?;
+    let raw: RawRelease = decode_json(bytes, "releases/latest")?;
+    Ok(convert_raw_release(raw, repo))
+}
 
+/// Pure parser for `/releases?per_page=N`: the first published prerelease
+/// with a semver-shaped tag, or `None`.
+///
+/// `None` is the signal [`fetch_channel_release`] uses to fall back to the
+/// stable release, so drafts and non-semver tags are skipped here rather
+/// than surfaced.
+fn parse_release_list(bytes: &[u8], repo: &GithubRepo) -> Result<Option<ReleaseInfo>, AppError> {
+    let releases: Vec<RawRelease> = decode_json(bytes, "releases")?;
+    Ok(releases
+        .into_iter()
+        .filter(|release| release.prerelease && !release.draft)
+        .find_map(|release| convert_raw_release(release, repo)))
+}
+
+/// Normalize one raw API release into [`ReleaseInfo`].
+///
+/// Returns `None` when the tag is not semver-shaped: a repo can publish
+/// non-version tags (e.g. `nightly`), and ignoring them is correct — we
+/// cannot compare them to the running build.
+fn convert_raw_release(raw: RawRelease, repo: &GithubRepo) -> Option<ReleaseInfo> {
     let Some(version) = semver::normalize_tag(&raw.tag_name) else {
-        // A repo can publish non-version tags (e.g. `nightly`). Ignoring
-        // them is correct: we cannot compare them to the running build.
         tracing::warn!(
             tag = %raw.tag_name,
-            "github releases: latest release tag is not semver-shaped; ignoring"
+            "github releases: release tag is not semver-shaped; ignoring"
         );
-        return Ok(None);
+        return None;
     };
 
     let tag = raw.tag_name.trim().to_string();
     let html_url = safe_release_url(raw.html_url.as_deref(), repo, &tag);
     let installable = raw.assets.iter().any(|asset| asset.name == "latest.json");
 
-    Ok(Some(ReleaseInfo {
+    Some(ReleaseInfo {
         version,
         tag,
         name: bounded_text(raw.name.as_deref(), MAX_NAME_CHARS),
@@ -181,7 +307,8 @@ pub(crate) fn parse_release_json(
         published_at: raw.published_at,
         html_url,
         installable,
-    }))
+        prerelease: raw.prerelease,
+    })
 }
 
 /// Trim, collapse a trailing newline, and truncate on a char boundary.
@@ -233,7 +360,9 @@ mod tests {
         }
     }
 
-    fn release_json(tag: &str, assets: &[&str]) -> Vec<u8> {
+    /// One entry of a `/releases` array. `prerelease` / `draft` are
+    /// explicit because those two flags decide the beta channel's answer.
+    fn raw_release(tag: &str, assets: &[&str], prerelease: bool, draft: bool) -> String {
         let assets_json: Vec<String> = assets
             .iter()
             .map(|name| format!(r#"{{"name":"{name}","size":1}}"#))
@@ -245,11 +374,20 @@ mod tests {
                 "body": "  Fixed the updater.\n",
                 "published_at": "2026-10-27T12:00:00Z",
                 "html_url": "https://github.com/deuriib/agency-agents-app/releases/tag/{tag}",
-                "assets": [{}]
+                "assets": [{}],
+                "prerelease": {prerelease},
+                "draft": {draft}
             }}"#,
             assets_json.join(",")
         )
-        .into_bytes()
+    }
+
+    fn release_json(tag: &str, assets: &[&str]) -> Vec<u8> {
+        raw_release(tag, assets, false, false).into_bytes()
+    }
+
+    fn release_list(entries: &[String]) -> Vec<u8> {
+        format!("[{}]", entries.join(",")).into_bytes()
     }
 
     #[test]
@@ -275,6 +413,7 @@ mod tests {
             "https://github.com/deuriib/agency-agents-app/releases/tag/v0.4.0"
         );
         assert!(release.installable);
+        assert!(!release.prerelease);
     }
 
     #[test]
@@ -352,5 +491,81 @@ mod tests {
             AppError::JsonParse { command, .. } => assert_eq!(command, "releases/latest"),
             other => panic!("expected JsonParse, got {other:?}"),
         }
+    }
+
+    // ---------- Beta channel (#23) ----------
+
+    /// The newest *published* prerelease wins, even when a stable release
+    /// sits above it in GitHub's newest-first list.
+    #[test]
+    fn beta_picks_the_newest_published_prerelease() {
+        let bytes = release_list(&[
+            raw_release("v0.9.0-beta.2", &["latest.json"], true, false),
+            raw_release("v0.8.0", &["latest.json"], false, false),
+            raw_release("v0.9.0-beta.1", &["latest.json"], true, false),
+        ]);
+        let release = parse_release_list(&bytes, &repo())
+            .expect("parse")
+            .expect("prerelease");
+        assert_eq!(release.version, "0.9.0-beta.2");
+        assert!(release.prerelease);
+    }
+
+    /// A draft prerelease is never offered — it is not published yet, so
+    /// its artifacts are not downloadable either.
+    #[test]
+    fn beta_ignores_draft_prereleases() {
+        let bytes = release_list(&[
+            raw_release("v0.9.0-beta.3", &["latest.json"], true, true),
+            raw_release("v0.9.0-beta.2", &["latest.json"], true, false),
+        ]);
+        let release = parse_release_list(&bytes, &repo())
+            .expect("parse")
+            .expect("prerelease");
+        assert_eq!(release.version, "0.9.0-beta.2");
+    }
+
+    /// A non-semver prerelease tag (e.g. `updater-beta`'s rolling
+    /// artifacts) cannot be compared with the running build, so the scan
+    /// continues to the next entry.
+    #[test]
+    fn beta_ignores_non_semver_prereleases() {
+        let bytes = release_list(&[
+            raw_release("updater-beta", &["latest.json"], true, false),
+            raw_release("v0.9.0-beta.1", &["latest.json"], true, false),
+        ]);
+        let release = parse_release_list(&bytes, &repo())
+            .expect("parse")
+            .expect("prerelease");
+        assert_eq!(release.version, "0.9.0-beta.1");
+    }
+
+    /// No published prerelease → `None`, which is exactly the signal
+    /// [`fetch_channel_release`] uses to fall back to `/releases/latest`.
+    #[test]
+    fn beta_without_published_prerelease_reports_none_so_the_caller_falls_back() {
+        let bytes = release_list(&[
+            raw_release("v0.8.0", &["latest.json"], false, false),
+            raw_release("v0.9.0-beta.1", &["latest.json"], true, true),
+        ]);
+        assert!(parse_release_list(&bytes, &repo())
+            .expect("parse")
+            .is_none());
+    }
+
+    #[test]
+    fn beta_rejects_invalid_json_with_the_list_endpoint_tag() {
+        let err = parse_release_list(b"[]]", &repo()).expect_err("must fail");
+        match err {
+            AppError::JsonParse { command, .. } => assert_eq!(command, "releases"),
+            other => panic!("expected JsonParse, got {other:?}"),
+        }
+    }
+
+    /// An empty release list (repo with no releases at all) is `None`,
+    /// not an error.
+    #[test]
+    fn beta_treats_an_empty_release_list_as_none() {
+        assert!(parse_release_list(b"[]", &repo()).expect("parse").is_none());
     }
 }
