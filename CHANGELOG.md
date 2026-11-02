@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.0](https://github.com/deuriib/agency-agents-app/compare/v0.7.1...v0.8.0) (2026-11-02)
+
+
+### Features
+
+* **updates:** make updates installable and add release channels ([#38](https://github.com/deuriib/agency-agents-app/issues/38)) ([a453bd2](https://github.com/deuriib/agency-agents-app/commit/a453bd2fba4c04f04257a652fa4ae180ad784c71))
+
 ## [0.7.1](https://github.com/deuriib/agency-agents-app/compare/v0.7.0...v0.7.1) (2026-11-02)
 
 
