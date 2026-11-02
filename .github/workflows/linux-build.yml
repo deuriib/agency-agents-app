@@ -127,6 +127,10 @@ jobs:
           APP="$(ls *.AppImage)"
           echo "Repacking $APP without bundled libwayland-*"
           ./"$APP" --appimage-extract >/dev/null
+          # The AppImage runtime extracts with restrictive modes (0700/0770)
+          # regardless of the caller's umask, and appimagetool refuses to
+          # repack an AppDir that is not world-readable.
+          chmod -R a+rX squashfs-root
           find squashfs-root -type f \( \
               -name 'libwayland-client.so.*' -o \
               -name 'libwayland-cursor.so.*' -o \
