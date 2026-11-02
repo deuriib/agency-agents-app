@@ -5,30 +5,37 @@
 //! `divisions.json`). It carries *upstream truth* — what the CLI converts +
 //! installs — and nothing app-specific. Whether THIS app can install a tool is
 //! derived, not stored: a tool is installable iff we ship a native renderer for
-//! its `format` (see `IMPLEMENTED_FORMATS`). Mirrors the frontend
-//! `toolRegistry.ts`, which reads the same file.
+//! its `format` (see `implemented_formats()`). Mirrors the frontend
+//! `toolRegistry.ts`, which reads the same two files.
 
+use std::collections::HashSet;
 use std::sync::OnceLock;
 
 use serde::Deserialize;
 
 const TOOLS_JSON: &str = include_str!("../data/tools.json");
+const RENDER_FORMATS_JSON: &str = include_str!("../data/render-formats.json");
 
-/// The render formats our native Rust renderer implements. A tool is installable
-/// in this app iff its `format` is one of these — derived from the catalog's
-/// `format`, never stored there (the catalog is upstream truth; renderer
-/// coverage is our concern). Adding a renderer = adding its format here.
-const IMPLEMENTED_FORMATS: &[&str] = &[
-    "identity",
-    "codex-toml",
-    "gemini-md",
-    "qwen-md",
-    "zcode-md",
-    "cursor-mdc",
-    "opencode-md",
-    "antigravity-md",
-    "skill-md",
-];
+/// The render formats this app implements natively, read from
+/// `data/render-formats.json`.
+///
+/// That file is the single source of truth: the frontend imports the same JSON,
+/// so the two sides cannot drift. They did once — the TypeScript list claimed
+/// `kimi-agent`, `openclaw-workspace` and `vibe-toml` while this app refused
+/// them, and the UI offered installs that never reconciled (issue #49). Never
+/// restate this list in code (issue #53).
+fn implemented_formats() -> &'static HashSet<String> {
+    static FORMATS: OnceLock<HashSet<String>> = OnceLock::new();
+    FORMATS.get_or_init(|| {
+        #[derive(Deserialize)]
+        struct Spec {
+            formats: Vec<String>,
+        }
+        let spec: Spec = serde_json::from_str(RENDER_FORMATS_JSON)
+            .unwrap_or_else(|e| panic!("invalid data/render-formats.json: {e}"));
+        spec.formats.into_iter().collect()
+    })
+}
 
 /// Scope capabilities — whether a tool can deploy user-globally and/or per-project.
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -135,7 +142,7 @@ impl ToolMeta {
         }
         self.format
             .as_deref()
-            .is_some_and(|f| IMPLEMENTED_FORMATS.contains(&f))
+            .is_some_and(|f| implemented_formats().contains(f))
     }
 }
 
@@ -229,5 +236,26 @@ mod tests {
         let h = get("hermes").expect("hermes in the refreshed catalog");
         assert_eq!(h.install_kind.as_deref(), Some("plugin"));
         assert!(!h.installable(), "a plugin tool is never app-installable");
+    }
+
+    #[test]
+    fn render_formats_are_single_sourced_and_resolvable() {
+        let formats = implemented_formats();
+        assert!(
+            !formats.is_empty(),
+            "data/render-formats.json lists no formats — every tool would be uninstallable"
+        );
+
+        // A format no catalog tool declares is a typo or a leftover: it silently
+        // does nothing today and misleads the next reader. The frontend imports
+        // the same file, so this also covers the TS side (issues #49, #53).
+        let declared: std::collections::BTreeSet<&str> =
+            all().iter().filter_map(|t| t.format.as_deref()).collect();
+        for format in formats {
+            assert!(
+                declared.contains(format.as_str()),
+                "render format '{format}' in data/render-formats.json matches no tools.json entry"
+            );
+        }
     }
 }

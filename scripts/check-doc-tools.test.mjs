@@ -8,17 +8,17 @@ import { fileURLToPath } from "node:url";
 import {
   badgeLabels,
   installableTools,
-  parseFrontendFormats,
-  parseImplementedFormats,
+  parseRenderFormats,
   readmeRows,
   scopeLabel,
+  singleSourceWiring,
 } from "./check-doc-tools.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(HERE, "..");
 const SCRIPT = join(HERE, "check-doc-tools.mjs");
 
-/** A throwaway copy of the four inputs the check reads, safe to mutate. */
+/** A throwaway copy of every input the check reads, safe to mutate. */
 function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "doc-tools-"));
   mkdirSync(join(dir, "src-tauri/data"), { recursive: true });
@@ -26,6 +26,7 @@ function fixture() {
   mkdirSync(join(dir, "src/lib/data"), { recursive: true });
   mkdirSync(join(dir, "landing"), { recursive: true });
   cpSync(join(ROOT, "src-tauri/data/tools.json"), join(dir, "src-tauri/data/tools.json"));
+  cpSync(join(ROOT, "src-tauri/data/render-formats.json"), join(dir, "src-tauri/data/render-formats.json"));
   cpSync(join(ROOT, "src-tauri/src/registry.rs"), join(dir, "src-tauri/src/registry.rs"));
   cpSync(join(ROOT, "src/lib/data/toolRegistry.ts"), join(dir, "src/lib/data/toolRegistry.ts"));
   cpSync(join(ROOT, "landing/index.html"), join(dir, "landing/index.html"));
@@ -109,28 +110,63 @@ test("fails when the README scope column contradicts tools.json", () => {
   }
 });
 
-test("reads IMPLEMENTED_FORMATS out of registry.rs, not a copy of the list", () => {
-  const formats = parseImplementedFormats(readFileSync(join(ROOT, "src-tauri/src/registry.rs"), "utf8"));
+test("render-formats.json is the single shared source", () => {
+  const spec = JSON.parse(readFileSync(join(ROOT, "src-tauri/data/render-formats.json"), "utf8"));
+  const formats = parseRenderFormats(spec);
   assert.ok(formats.has("identity"), "identity is a rendered format");
   assert.ok(formats.has("antigravity-md"), "antigravity-md is a rendered format");
   assert.ok(!formats.has("aider-conventions"), "aider has no renderer yet");
+  assert.deepEqual(singleSourceWiring(ROOT), { rust: true, frontend: true });
 });
 
-test("the frontend and backend format lists agree", () => {
-  const backend = parseImplementedFormats(readFileSync(join(ROOT, "src-tauri/src/registry.rs"), "utf8"));
-  const frontend = parseFrontendFormats(readFileSync(join(ROOT, "src/lib/data/toolRegistry.ts"), "utf8"));
-  assert.deepEqual([...frontend].sort(), [...backend].sort());
+test("parseRenderFormats rejects an empty or duplicated list", () => {
+  assert.throws(() => parseRenderFormats({ formats: [] }), /non-empty array/);
+  assert.throws(() => parseRenderFormats({}), /non-empty array/);
+  assert.throws(() => parseRenderFormats({ formats: ["identity", "identity"] }), /duplicate/);
 });
 
-test("fails when the frontend reinstates a format the backend refuses", () => {
+test("fails when the Rust side stops reading the shared file", () => {
+  const dir = fixture();
+  try {
+    const file = join(dir, "src-tauri/src/registry.rs");
+    const source = readFileSync(file, "utf8");
+    const forked = source.replace(
+      'const RENDER_FORMATS_JSON: &str = include_str!("../data/render-formats.json");',
+      'const RENDER_FORMATS_JSON: &str = "{\\"formats\\":[\\"identity\\"]}";',
+    );
+    assert.notEqual(forked, source, "fixture no longer embeds render-formats.json the expected way");
+    writeFileSync(file, forked);
+    expectFailure(dir, /registry\.rs no longer embeds data\/render-formats\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("fails when the frontend stops reading the shared file", () => {
   const dir = fixture();
   try {
     const file = join(dir, "src/lib/data/toolRegistry.ts");
     const source = readFileSync(file, "utf8");
-    const drifted = source.replace('  "skill-md",\n]);', '  "skill-md",\n  "kimi-agent",\n]);');
-    assert.notEqual(drifted, source, "fixture no longer has the expected format list shape");
-    writeFileSync(file, drifted);
-    expectFailure(dir, /frontend\/backend IMPLEMENTED_FORMATS differ.*frontend only: \[kimi-agent\]/);
+    const forked = source.replace(
+      'import spec from "../../../src-tauri/data/render-formats.json";',
+      "const spec = { formats: [\"identity\"] };",
+    );
+    assert.notEqual(forked, source, "fixture no longer imports render-formats.json");
+    writeFileSync(file, forked);
+    expectFailure(dir, /toolRegistry\.ts no longer imports data\/render-formats\.json/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("adding a format to the shared file forces the docs to catch up", () => {
+  const dir = fixture();
+  try {
+    const file = join(dir, "src-tauri/data/render-formats.json");
+    const spec = JSON.parse(readFileSync(file, "utf8"));
+    spec.formats.push("aider-conventions"); // makes Aider installable
+    writeFileSync(file, JSON.stringify(spec, null, 2) + "\n");
+    expectFailure(dir, /landing badge missing: Aider/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -138,7 +174,9 @@ test("fails when the frontend reinstates a format the backend refuses", () => {
 
 test("plugin tools and unrendered formats derive as non-installable", () => {
   const tools = JSON.parse(readFileSync(join(ROOT, "src-tauri/data/tools.json"), "utf8")).tools;
-  const formats = parseImplementedFormats(readFileSync(join(ROOT, "src-tauri/src/registry.rs"), "utf8"));
+  const formats = parseRenderFormats(
+    JSON.parse(readFileSync(join(ROOT, "src-tauri/data/render-formats.json"), "utf8")),
+  );
   const installable = installableTools(tools, formats);
 
   // Recognized-only: real upstream format, no native renderer.

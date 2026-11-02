@@ -101,7 +101,9 @@ Do not add a tool by only adding a UI label.
 Tool support needs:
 
 - verified upstream install path
-- renderer format definition
+- renderer format definition — implement the format in `src-tauri/src/render/` **and** add it to
+  `src-tauri/data/render-formats.json`, the single list the Rust registry and the frontend both
+  read. Never restate that list in code
 - scope model: user, project, or both
 - destination resolution
 - detection behavior
@@ -118,6 +120,10 @@ The recommended next architecture is a manifest in the AA repo that both `script
 `src-tauri/resources/corpus-baseline/scripts/convert.sh` mirrors that repo's converter.
 The Rust renderers in `src-tauri/src/render/` are ports of `convert.sh` and must stay
 byte-for-byte identical to it — that is exactly what the parity test enforces.
+
+Renderer *capability* deliberately does not live there. `src-tauri/data/render-formats.json`
+is app state, owned by this repo, read by `registry.rs` and `toolRegistry.ts` alike — the
+catalog carries no app-release state, and `scripts/check-tools.sh` upstream would reject it.
 
 So **changing how an existing tool installs — its `format`, destination paths, slug
 prefix, emitted frontmatter, or scope — is an upstream change first.** Land it in the

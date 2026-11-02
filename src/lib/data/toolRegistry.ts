@@ -6,11 +6,12 @@
  * read identically by the Rust backend. It carries *upstream truth* (what the
  * CLI converts + installs) and nothing app-specific. Whether THIS app can
  * install a tool is **derived**, not stored: a tool is installable iff we ship a
- * native renderer for its `format` (`IMPLEMENTED_FORMATS`). Brand icons live as
+ * native renderer for its `format` (`data/render-formats.json`). Brand icons live as
  * SVGs under `assets/tools/`, resolved by the `icon` field.
  */
 
 import catalog from "../../../src-tauri/data/tools.json";
+import spec from "../../../src-tauri/data/render-formats.json";
 
 export interface ToolMeta {
   /** camelCase id — the wire value used by the backend + install ledger. */
@@ -43,22 +44,13 @@ export interface ToolMeta {
 
 /** The render formats this app implements natively. A tool is installable iff
     its `format` is one of these — derived from the catalog, never stored there.
-    Must stay identical to `IMPLEMENTED_FORMATS` in `src-tauri/src/registry.rs`:
-    the two are hand-maintained in parallel, and they drifted once — this list
+
+    Read from `src-tauri/data/render-formats.json`, the same file the Rust
+    registry embeds, so the two sides cannot drift. They did once: this list
     claimed `kimi-agent`, `openclaw-workspace` and `vibe-toml` while the backend
     refused them, so the UI offered three installs that never reconciled
-    (issue #49). */
-const IMPLEMENTED_FORMATS = new Set([
-  "identity",
-  "codex-toml",
-  "gemini-md",
-  "qwen-md",
-  "zcode-md",
-  "cursor-mdc",
-  "opencode-md",
-  "antigravity-md",
-  "skill-md",
-]);
+    (issues #49, #53). */
+const IMPLEMENTED_FORMATS = new Set(spec.formats);
 
 // Brand marks (Lobe Icons, MIT) — monochrome SVG keyed by filename stem.
 const iconMods = import.meta.glob("../assets/tools/*.svg", {
