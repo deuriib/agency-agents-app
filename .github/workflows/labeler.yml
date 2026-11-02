@@ -1,0 +1,23 @@
+# Adds path-based labels to pull requests from .github/labeler.yml.
+#
+# `pull_request_target` is required to write labels on PRs from forks. This
+# workflow never checks out or executes pull-request code, so the elevated
+# permission cannot be abused by a fork.
+
+name: PR Labeler
+
+on:
+  pull_request_target:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    name: Apply path labels
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/labeler@b8dd2d9be0f68b860e7dae5dae7d772984eacd6d # v6.2.0
+        with:
+          sync-labels: false

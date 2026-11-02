@@ -106,7 +106,11 @@ use crate::util::semver;
 /// mode surfaces as `Err(AppError::ParanoidModeBlocked)` instead, so
 /// the toast routes through the same channel as every other gated call.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum UpdateCheckOutcome {
     /// Plugin returned no update — running version is current.
     UpToDate,
@@ -199,7 +203,11 @@ impl CancelToken {
 /// Lifecycle of the background auto-install, mirrored for the UI and used as
 /// the scheduler's in-flight guard (ENG-11: at most one install at a time).
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
-#[serde(tag = "phase", rename_all = "camelCase", rename_all_fields = "camelCase")]
+#[serde(
+    tag = "phase",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
 pub enum AutoInstallStatus {
     /// No background install has run since launch.
     #[default]
@@ -244,6 +252,9 @@ pub struct UpdaterState {
 /// The check is deliberately independent of the signed manifest: a
 /// release can exist without a `latest.json` asset, and the UI should
 /// still be able to announce it and link to the release page.
+// `async_trait` adds `#[must_use]` to the generated boxed future, and the
+// resulting `Future` is already `must_use`; clippy flags the double attribute.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait ReleaseSource: Send + Sync {
     /// Latest published release, or `None` when there is no published
@@ -254,6 +265,8 @@ pub trait ReleaseSource: Send + Sync {
 /// "Download + verify + install this version" abstraction around
 /// `tauri-plugin-updater`. Production uses [`PluginBackend`]; tests use
 /// `MockInstallBackend`.
+// Same `async_trait` + boxed-future double `must_use` as `ReleaseSource`.
+#[allow(clippy::double_must_use)]
 #[async_trait::async_trait]
 pub trait InstallBackend: Send + Sync {
     /// Download + verify (sha256 + minisign) + install the update. The
@@ -371,11 +384,9 @@ impl<R: tauri::Runtime> PluginBackend<R> {
     /// setup hook (failing builds with a malformed endpoint).
     fn updater(&self) -> Result<tauri_plugin_updater::Updater, AppError> {
         use tauri_plugin_updater::UpdaterExt;
-        self.app
-            .updater()
-            .map_err(|e| AppError::Internal {
-                message: format!("updater plugin init: {e}"),
-            })
+        self.app.updater().map_err(|e| AppError::Internal {
+            message: format!("updater plugin init: {e}"),
+        })
     }
 }
 
@@ -541,10 +552,7 @@ async fn is_version_skipped(state: &AppState, version: &str) -> bool {
     use crate::commands::settings::SettingsLoadState;
     let guard = state.settings.read().await;
     match &*guard {
-        SettingsLoadState::Loaded(s) => s
-            .skipped_update_versions
-            .iter()
-            .any(|v| v == version),
+        SettingsLoadState::Loaded(s) => s.skipped_update_versions.iter().any(|v| v == version),
         _ => false,
     }
 }
@@ -796,13 +804,23 @@ pub async fn run_auto_install(
 
     let outcome = match run_install(state, backend, version).await {
         Ok(()) => {
-            set_auto_install_status(state, AutoInstallStatus::Installed { version: version.to_string() })
-                .await;
+            set_auto_install_status(
+                state,
+                AutoInstallStatus::Installed {
+                    version: version.to_string(),
+                },
+            )
+            .await;
             AutoInstallResult::Installed
         }
         Err(AppError::InstallCanceled) => {
-            set_auto_install_status(state, AutoInstallStatus::Canceled { version: version.to_string() })
-                .await;
+            set_auto_install_status(
+                state,
+                AutoInstallStatus::Canceled {
+                    version: version.to_string(),
+                },
+            )
+            .await;
             AutoInstallResult::Canceled
         }
         // Gate refusals are skips: nothing actionable happened, so the user
@@ -930,7 +948,12 @@ pub async fn handle_auto_install_consent_change(
     let revoked = before.enabled && !after.enabled;
     let went_offline = !before.offline && after.offline;
     if revoked || went_offline {
-        state.updater_state.read().await.auto_install_cancel.request();
+        state
+            .updater_state
+            .read()
+            .await
+            .auto_install_cancel
+            .request();
         return true;
     }
     false
@@ -947,12 +970,12 @@ pub async fn handle_auto_install_consent_change(
 /// channel stays uniform with every other gated call).
 #[tauri::command]
 pub async fn update_check_now(
-    app: tauri::AppHandle,
+    _app: tauri::AppHandle,
     state: State<'_, AppState>,
 ) -> Result<UpdateCheckOutcome, AppError> {
     #[cfg(test)]
     {
-        let _ = (app, state);
+        let _ = (_app, state);
         // Tests never go through this path; they exercise `run_check`
         // directly via the trait. The `app` + `state` parameters are
         // retained so the IPC signature stays uniform with the
@@ -1085,10 +1108,7 @@ pub async fn run_skip(state: &AppState, version: &str) -> Result<(), AppError> {
 /// the network. Sane to allow even when Offline Mode is on (the user
 /// might be reviewing accumulated update notices while offline).
 #[tauri::command]
-pub async fn update_skip(
-    version: String,
-    state: State<'_, AppState>,
-) -> Result<(), AppError> {
+pub async fn update_skip(version: String, state: State<'_, AppState>) -> Result<(), AppError> {
     run_skip(&state, &version).await
 }
 
@@ -1298,7 +1318,9 @@ pub fn spawn_auto_check_scheduler<R: tauri::Runtime>(app: tauri::AppHandle<R>) {
                 let source = match build_release_source() {
                     Ok(source) => source,
                     Err(e) => {
-                        tracing::warn!("updater: auto-check source build failed (non-fatal): {e:?}");
+                        tracing::warn!(
+                            "updater: auto-check source build failed (non-fatal): {e:?}"
+                        );
                         sleep_for = sleep_after_failure(backoff_idx);
                         backoff_idx = next_backoff_index(backoff_idx);
                         continue;
@@ -1726,7 +1748,10 @@ mod tests {
         let backend = MockBackend::returning(Ok(None));
         let r = run_install(&state, &backend, &current).await;
         match r {
-            Err(AppError::DowngradeRejected { current: c, target: t }) => {
+            Err(AppError::DowngradeRejected {
+                current: c,
+                target: t,
+            }) => {
                 assert_eq!(c, current);
                 assert_eq!(t, current);
             }
@@ -1751,7 +1776,10 @@ mod tests {
         let r = run_install(&state, &backend, "9.9.9").await;
         match r {
             Err(AppError::InvalidArgument { message }) => {
-                assert!(message.contains("no in-app update manifest"), "got: {message}");
+                assert!(
+                    message.contains("no in-app update manifest"),
+                    "got: {message}"
+                );
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
         }
@@ -1856,10 +1884,7 @@ mod tests {
     #[tokio::test]
     async fn install_clears_cached_available_on_success() {
         let state = build_state_with(SettingsLoadState::Loaded(Settings::default())).await;
-        let backend = MockBackend::install_returning(
-            Ok(Some(release("9.9.9"))),
-            Ok(()),
-        );
+        let backend = MockBackend::install_returning(Ok(Some(release("9.9.9"))), Ok(()));
         run_check(&state, &backend).await.expect("check");
         // Sanity: cache populated by the check.
         {
@@ -1867,7 +1892,9 @@ mod tests {
             assert!(guard.cached_available.is_some());
         }
 
-        run_install(&state, &backend, "9.9.9").await.expect("install");
+        run_install(&state, &backend, "9.9.9")
+            .await
+            .expect("install");
 
         let guard = state.updater_state.read().await;
         assert!(
@@ -1948,7 +1975,10 @@ mod tests {
             next_sleep(true, true, Some(now - 999_999), now),
             Some(AUTO_CHECK_IDLE_POLL)
         );
-        assert_eq!(next_sleep(true, true, None, now), Some(AUTO_CHECK_IDLE_POLL));
+        assert_eq!(
+            next_sleep(true, true, None, now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
     }
 
     /// Off by default: auto_check_enabled=false → never fires, but keeps
@@ -1956,7 +1986,10 @@ mod tests {
     #[test]
     fn scheduler_does_nothing_when_disabled() {
         let now: i64 = 1_700_000_000;
-        assert_eq!(next_sleep(false, false, None, now), Some(AUTO_CHECK_IDLE_POLL));
+        assert_eq!(
+            next_sleep(false, false, None, now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
         assert_eq!(
             next_sleep(false, false, Some(now - 100_000), now),
             Some(AUTO_CHECK_IDLE_POLL)
@@ -2003,7 +2036,10 @@ mod tests {
             + std::time::Duration::from_secs(AUTO_CHECK_STARTUP_JITTER_SECS);
         for now in [0i64, 1, 29, 30, 1_700_000_000, -1_700_000_000] {
             let d = startup_delay(now);
-            assert!(d >= lo && d < hi, "startup_delay({now}) = {d:?} out of range");
+            assert!(
+                d >= lo && d < hi,
+                "startup_delay({now}) = {d:?} out of range"
+            );
             // Deterministic for a given clock reading (no RNG to flake on).
             assert_eq!(d, startup_delay(now));
         }
@@ -2017,7 +2053,10 @@ mod tests {
     #[test]
     fn next_sleep_polls_soon_when_inactive() {
         let now: i64 = 1_700_000_000;
-        assert_eq!(next_sleep(false, false, None, now), Some(AUTO_CHECK_IDLE_POLL));
+        assert_eq!(
+            next_sleep(false, false, None, now),
+            Some(AUTO_CHECK_IDLE_POLL)
+        );
         // Offline Mode wins over a stale opt-in and an ancient last check.
         assert_eq!(
             next_sleep(true, true, Some(now - 999_999), now),
@@ -2043,7 +2082,12 @@ mod tests {
         );
         // At or past the floor → due.
         assert_eq!(
-            next_sleep(true, false, Some(now - AUTO_CHECK_INTERVAL.as_secs() as i64), now),
+            next_sleep(
+                true,
+                false,
+                Some(now - AUTO_CHECK_INTERVAL.as_secs() as i64),
+                now
+            ),
             None
         );
         // A clock that jumped backwards must not panic or produce a negative
@@ -2060,8 +2104,14 @@ mod tests {
     #[test]
     fn sleep_after_failure_walks_the_backoff_then_saturates() {
         assert_eq!(sleep_after_failure(0), std::time::Duration::from_secs(3600));
-        assert_eq!(sleep_after_failure(1), std::time::Duration::from_secs(6 * 3600));
-        assert_eq!(sleep_after_failure(2), std::time::Duration::from_secs(24 * 3600));
+        assert_eq!(
+            sleep_after_failure(1),
+            std::time::Duration::from_secs(6 * 3600)
+        );
+        assert_eq!(
+            sleep_after_failure(2),
+            std::time::Duration::from_secs(24 * 3600)
+        );
         assert_eq!(sleep_after_failure(9), AUTO_CHECK_INTERVAL);
         assert_eq!(sleep_after_success(), AUTO_CHECK_INTERVAL);
     }
@@ -2092,8 +2142,7 @@ mod tests {
             current_version: "0.3.0".into(),
             notes: Some("changelog".into()),
             pub_date: Some("2026-05-24T00:00:00Z".into()),
-            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1"
-                .into(),
+            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1".into(),
             installable: false,
             skipped: false,
         })
@@ -2264,7 +2313,10 @@ mod tests {
     async fn claim_install_slot_is_single_flight() {
         let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
 
-        assert!(claim_install_slot(&state, "9.9.9").await, "first claim wins");
+        assert!(
+            claim_install_slot(&state, "9.9.9").await,
+            "first claim wins"
+        );
         assert!(
             !claim_install_slot(&state, "9.9.9").await,
             "a second claim must be refused while one is running"
@@ -2289,7 +2341,10 @@ mod tests {
 
         assert!(claim_install_slot(&state, "9.9.9").await);
         release_install_slot(&state).await;
-        assert_eq!(state.updater_state.read().await.auto_install, AutoInstallStatus::Idle);
+        assert_eq!(
+            state.updater_state.read().await.auto_install,
+            AutoInstallStatus::Idle
+        );
         assert!(
             claim_install_slot(&state, "9.9.10").await,
             "a released slot must be claimable again"
@@ -2334,7 +2389,10 @@ mod tests {
             .await
             .expect("attempt");
 
-        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::AlreadyRunning));
+        assert_eq!(
+            r,
+            AutoInstallResult::Skipped(AutoInstallSkip::AlreadyRunning)
+        );
         assert_eq!(
             *backend.install_calls.lock().unwrap(),
             0,
@@ -2512,8 +2570,7 @@ mod tests {
     async fn auto_install_maps_cancel_and_preserves_cache() {
         let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
         seed_available(&state, "9.9.9", true).await;
-        let backend =
-            MockBackend::install_returning(Ok(None), Err(AppError::InstallCanceled));
+        let backend = MockBackend::install_returning(Ok(None), Err(AppError::InstallCanceled));
 
         let r = run_auto_install(&state, &backend, "9.9.9")
             .await
@@ -2544,7 +2601,10 @@ mod tests {
         let r = run_auto_install(&state, &backend, "9.9.9")
             .await
             .expect("attempt");
-        assert_eq!(r, AutoInstallResult::Skipped(AutoInstallSkip::NotInstallable));
+        assert_eq!(
+            r,
+            AutoInstallResult::Skipped(AutoInstallSkip::NotInstallable)
+        );
         assert_eq!(*backend.install_calls.lock().unwrap(), 0);
 
         let guard = state.updater_state.read().await;
@@ -2569,7 +2629,10 @@ mod tests {
         );
 
         let r = run_auto_install(&state, &backend, "9.9.9").await;
-        assert!(matches!(r, Err(AppError::SignatureVerificationFailed { .. })));
+        assert!(matches!(
+            r,
+            Err(AppError::SignatureVerificationFailed { .. })
+        ));
 
         let guard = state.updater_state.read().await;
         match &guard.auto_install {
@@ -2604,7 +2667,12 @@ mod tests {
             handle_auto_install_consent_change(&state, on_online, off_online).await,
             "auto-install on -> off must request cancellation"
         );
-        assert!(state.updater_state.read().await.auto_install_cancel.is_requested());
+        assert!(state
+            .updater_state
+            .read()
+            .await
+            .auto_install_cancel
+            .is_requested());
 
         // Re-arm and confirm Offline Mode engaging is a withdrawal too.
         state.updater_state.read().await.auto_install_cancel.reset();
@@ -2622,7 +2690,12 @@ mod tests {
             "staying offline is not a transition"
         );
         assert!(
-            !state.updater_state.read().await.auto_install_cancel.is_requested(),
+            !state
+                .updater_state
+                .read()
+                .await
+                .auto_install_cancel
+                .is_requested(),
             "enabling must not request a cancellation"
         );
     }
@@ -2663,7 +2736,13 @@ mod tests {
             AutoInstallPhase::Canceled,
         ]
         .iter()
-        .map(|p| serde_json::to_value(p).unwrap().as_str().unwrap().to_string())
+        .map(|p| {
+            serde_json::to_value(p)
+                .unwrap()
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
         .collect();
         assert_eq!(
             tokens,

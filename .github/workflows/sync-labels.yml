@@ -1,0 +1,35 @@
+# Applies .github/labels.yml to the repository. Labels are configuration, not
+# UI state: change labels.yml, merge, and this workflow reconciles GitHub.
+#
+# Deleting a label from labels.yml removes it from the repository.
+
+name: Sync Labels
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/labels.yml"
+      - ".github/workflows/sync-labels.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: sync-labels
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Apply labels.yml
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Sync labels
+        uses: kjanat/github-labelmanager@9ebc59b4ab81d78b0ad0036097786a956ca45a4f # v1.1.1
+        with:
+          token: ${{ github.token }}

@@ -9,15 +9,13 @@
 # optional step. Updater artifacts are disabled here (v0.1.0 ships with
 # SKIP_UPDATER; auto-update is deferred), so no signing key is needed.
 #
-# Output: .deb / .rpm / .AppImage uploaded to the workflow run. Cutting the
-# GitHub Release + attaching artifacts remains a deliberate human step.
+# Output: .deb / .rpm / .AppImage, either as workflow artifacts (manual run) or
+# attached to the draft GitHub Release created by release-please
+# (`upload_release: true` from release-please.yml).
 
 name: Linux Build
 
 on:
-  push:
-    tags:
-      - "v*"
   workflow_dispatch:
   workflow_call:
     inputs:
@@ -28,13 +26,16 @@ on:
         type: string
         required: false
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build Linux bundles (.deb / .rpm / .AppImage)
-    # Pin to ubuntu-22.04 (Jammy, webkit2gtk-4.1) for the oldest glibc we
-    # commit to supporting — binaries run on 22.04+; ubuntu-latest would
-    # silently raise the floor.
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04 (Noble, webkit2gtk-4.1). These bundles support 24.04+
+    # (glibc 2.39+). Lower this runner only if Ubuntu 22.04 compatibility is a
+    # hard requirement — that raises the floor for every user downstream.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
@@ -138,12 +139,17 @@ jobs:
           path: src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error
 
+      # `gh release upload` attaches to the existing draft release without
+      # touching its draft/published state — publishing stays a human step
+      # after the macOS DMGs are attached locally.
       - name: Attach to GitHub Release
         if: ${{ inputs.upload_release == true }}
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag }}
-          files: |
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/rpm/*.rpm
-            src-tauri/target/release/bundle/appimage/*.AppImage
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release upload "${{ inputs.tag }}" \
+            src-tauri/target/release/bundle/deb/*.deb \
+            src-tauri/target/release/bundle/rpm/*.rpm \
+            src-tauri/target/release/bundle/appimage/*.AppImage \
+            --clobber

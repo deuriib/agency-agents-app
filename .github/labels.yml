@@ -1,0 +1,126 @@
+$schema: https://raw.githubusercontent.com/kjanat/github-labelmanager/master/.github/labels.schema.json
+# Declarative source of truth for repository labels.
+# Applied by .github/workflows/sync-labels.yml — never edit labels in the UI.
+# Renaming a label: add the old name to `aliases` so existing issues move.
+labels:
+  # ── Type ──────────────────────────────────────────────────────────────────
+  - name: bug
+    color: "#d73a4a"
+    description: "Something isn't working"
+  - name: enhancement
+    color: "#a2eeef"
+    description: "New feature or request"
+  - name: documentation
+    color: "#0075ca"
+    description: "Improvements or additions to documentation"
+  - name: question
+    color: "#d876e3"
+    description: "Further information is requested"
+  - name: security
+    color: "#b60205"
+    description: "Security-relevant change or report"
+  - name: performance
+    color: "#fbca04"
+    description: "Speed, memory, or bundle-size work"
+  - name: refactor
+    color: "#6f42c1"
+    description: "Internal change with no behaviour change"
+  - name: dependencies
+    color: "#0366d6"
+    description: "Dependency updates (npm, cargo, actions)"
+  - name: tool-support
+    color: "#1d76db"
+    description: "Add or fix support for an AI coding tool"
+  - name: release
+    color: "#0e8a16"
+    description: "Version bumps, tags, and release packaging"
+  - name: ci
+    color: "#6e7781"
+    description: "GitHub Actions and repository automation"
+
+  # ── Priority ──────────────────────────────────────────────────────────────
+  - name: "priority: critical"
+    color: "#b60205"
+    description: "Data loss, security, or the app cannot be used"
+  - name: "priority: high"
+    color: "#d93f0b"
+    description: "Major breakage with a workaround"
+  - name: "priority: medium"
+    color: "#fbca04"
+    description: "Normal priority"
+  - name: "priority: low"
+    color: "#0e8a16"
+    description: "Nice to have, no urgency"
+
+  # ── Domain ────────────────────────────────────────────────────────────────
+  - name: rust
+    color: "#dea584"
+    description: "src-tauri Rust backend"
+  - name: frontend
+    color: "#f9d0c4"
+    description: "Svelte 5 / TypeScript frontend"
+  - name: tauri
+    color: "#24c8db"
+    description: "Tauri shell, capabilities, or packaging config"
+  - name: renderer
+    color: "#c5def5"
+    description: "Per-tool agent renderers"
+  - name: installer
+    color: "#bfd4f2"
+    description: "Install, ledger, reconcile, or uninstall behaviour"
+  - name: catalog
+    color: "#d4c5f9"
+    description: "Agent catalog syncing and indexing"
+  - name: updater
+    color: "#5319e7"
+    description: "In-app update check and auto-install"
+  - name: macos
+    color: "#000000"
+    description: "macOS-specific behaviour or packaging"
+  - name: windows
+    color: "#0078d7"
+    description: "Windows-specific behaviour or packaging"
+  - name: linux
+    color: "#f6c000"
+    description: "Linux-specific behaviour or packaging"
+  - name: accessibility
+    color: "#f143ab"
+    description: "Barrier affecting people with disabilities"
+  - name: i18n
+    color: "#b4d7f7"
+    description: "Translations and localization"
+
+  # ── State ─────────────────────────────────────────────────────────────────
+  - name: triage
+    color: "#ededed"
+    description: "Not triaged yet"
+  - name: blocked
+    color: "#000000"
+    description: "Blocked on an external dependency or decision"
+  - name: needs-info
+    color: "#d876e3"
+    description: "Waiting on more information from the reporter"
+  - name: good first issue
+    color: "#7057ff"
+    description: "Good for newcomers"
+  - name: help wanted
+    color: "#008672"
+    description: "Extra attention is needed"
+
+  # ── Meta ──────────────────────────────────────────────────────────────────
+  - name: duplicate
+    color: "#cfd3d7"
+    description: "This issue or pull request already exists"
+  - name: invalid
+    color: "#e4e669"
+    description: "This doesn't seem right"
+  - name: wontfix
+    color: "#ffffff"
+    description: "This will not be worked on"
+  # Owned by release-please; keep them so the action never has to create them.
+  - name: "autorelease: pending"
+    color: "#ededed"
+    description: "Release PR open, waiting to be merged"
+  - name: "autorelease: tagged"
+    color: "#0e8a16"
+    description: "Release tagged by release-please"

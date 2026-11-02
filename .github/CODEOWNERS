@@ -1,0 +1,3 @@
+# Default owner for every path. Update if the project gains maintainers, or
+# add narrower rules above the catch-all if ownership splits by area.
+* @deuriib

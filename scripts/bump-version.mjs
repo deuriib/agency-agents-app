@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// scripts/bump-version.mjs — bump the four version manifests in lockstep.
+// scripts/bump-version.mjs — bump the five version manifests in lockstep.
 //
 // Usage: node scripts/bump-version.mjs 0.4.0
 //
@@ -8,6 +8,11 @@
 //   2. src-tauri/tauri.conf.json
 //   3. src-tauri/Cargo.toml
 //   4. src-tauri/Cargo.lock  (the `agency-agents-app` package entry only)
+//   5. package-lock.json
+//
+// This is the manual fallback only: the normal flow is release-please, which
+// bumps package.json, package-lock.json, tauri.conf.json and Cargo.toml. See
+// CONTRIBUTING.md → Releases.
 //
 // The script is idempotent: re-running with the same version is a no-op
 // on the manifests (it still prints the diff). It refuses a non-semver
@@ -16,9 +21,13 @@
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { execFileSync } from "node:child_process";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const ROOT = resolve(import.meta.url.replace("file:///", "").replace(/\/scripts\/.*$/, ""));
+// Resolve from this file, not from `import.meta.url` string surgery: stripping
+// "file:///" turns an absolute POSIX path into a relative one, which resolved
+// against the caller's cwd and broke every non-Windows run.
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 
 const SEMVER = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?(\+[0-9A-Za-z.-]+)?$/;
 

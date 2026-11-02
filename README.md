@@ -3,6 +3,8 @@
 > A native installer for AI agents.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![PR Check](https://github.com/deuriib/agency-agents-app/actions/workflows/pr-check.yml/badge.svg)](https://github.com/deuriib/agency-agents-app/actions/workflows/pr-check.yml)
+[![Latest release](https://img.shields.io/github/v/release/deuriib/agency-agents-app?display_name=tag&sort=semver)](https://github.com/deuriib/agency-agents-app/releases/latest)
 [![Built with Tauri 2](https://img.shields.io/badge/Built%20with-Tauri%202-orange)](https://tauri.app)
 [![macOS 13+](https://img.shields.io/badge/macOS-13%2B-lightgrey)](https://www.apple.com/macos)
 [![Sponsor](https://img.shields.io/badge/♥-Sponsor-EC4899?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/deuriib)
@@ -121,6 +123,18 @@ npm run tauri dev
 npm run check
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 npm run build
+```
+
+Or, with [mise](https://mise.jdx.dev/) — the pinned toolchain and the CI
+checks in one place:
+
+```sh
+git clone https://github.com/deuriib/agency-agents-app
+cd agency-agents-app
+mise install       # node + rust from mise.lock
+mise run setup     # npm ci
+mise run dev
+mise run ci        # fmt, clippy, rust tests, svelte-check, build
 ```
 
 The Phase C local QA batch is:

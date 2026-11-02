@@ -120,10 +120,7 @@ pub async fn fetch_latest_release(
         404 => return Ok(None),
         403 => return Err(maybe_rate_limited(&resp, &url)),
         status => {
-            return Err(AppError::HttpStatus {
-                url,
-                status,
-            });
+            return Err(AppError::HttpStatus { url, status });
         }
     }
 
@@ -142,10 +139,7 @@ pub async fn fetch_latest_release(
     if (bytes.len() as u64) > MAX_RESPONSE_BYTES {
         return Err(AppError::Network {
             url,
-            message: format!(
-                "body length {} exceeds {MAX_RESPONSE_BYTES}",
-                bytes.len()
-            ),
+            message: format!("body length {} exceeds {MAX_RESPONSE_BYTES}", bytes.len()),
         });
     }
 
@@ -260,7 +254,10 @@ mod tests {
 
     #[test]
     fn parse_extracts_fields_and_normalizes_version() {
-        let bytes = release_json("v0.4.0", &["latest.json", "Agency_Agents_0.4.0_aarch64.app.tar.gz"]);
+        let bytes = release_json(
+            "v0.4.0",
+            &["latest.json", "Agency_Agents_0.4.0_aarch64.app.tar.gz"],
+        );
         let release = parse_release_json(&bytes, &repo())
             .expect("parse")
             .expect("release");
@@ -292,7 +289,9 @@ mod tests {
     #[test]
     fn parse_ignores_non_semver_tags() {
         let bytes = release_json("nightly", &["latest.json"]);
-        assert!(parse_release_json(&bytes, &repo()).expect("parse").is_none());
+        assert!(parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .is_none());
     }
 
     #[test]

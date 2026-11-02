@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Report a security vulnerability
+    url: https://github.com/deuriib/agency-agents-app/security/advisories/new
+    about: Report vulnerabilities privately. Never open a public issue for them.
+  - name: Catalog and tool definitions (upstream)
+    url: https://github.com/deuriib/agency-agents/issues
+    about: Agent content, tools.json, and convert.sh live in the catalog repository.
+  - name: Contributing guide
+    url: https://github.com/deuriib/agency-agents-app/blob/main/CONTRIBUTING.md
+    about: Dev setup, architecture, tests, and how to add tool support.

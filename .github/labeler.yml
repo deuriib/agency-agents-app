@@ -1,0 +1,78 @@
+# Path-based auto-labelling for pull requests (actions/labeler v6).
+# Labels must exist first — see .github/labels.yml + sync-labels.yml.
+
+rust:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src-tauri/**/*.rs"
+          - "src-tauri/Cargo.toml"
+          - "src-tauri/Cargo.lock"
+
+frontend:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src/**/*.svelte"
+          - "src/**/*.ts"
+          - "src/**/*.css"
+          - "static/**"
+          - "svelte.config.js"
+          - "vite.config.js"
+          - "tsconfig.json"
+
+tauri:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src-tauri/tauri.conf.json"
+          - "src-tauri/tauri.*.conf.json"
+          - "src-tauri/capabilities/**"
+          - "src-tauri/icons/**"
+
+renderer:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src-tauri/src/render/**"
+          - "src-tauri/resources/corpus-baseline/scripts/convert.sh"
+
+installer:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src-tauri/src/install/**"
+          - "src-tauri/src/commands/**"
+
+catalog:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "src-tauri/src/corpus/**"
+          - "src-tauri/data/**"
+          - "src-tauri/resources/corpus-baseline/**"
+
+ci:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+          - "docs/**"
+          - "landing/**"
+
+dependencies:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "package.json"
+          - "package-lock.json"
+          - "src-tauri/Cargo.toml"
+          - "src-tauri/Cargo.lock"
+
+release:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "release-please-config.json"
+          - ".release-please-manifest.json"
+          - "CHANGELOG.md"
+          - "scripts/bump-version.mjs"
+          - "scripts/release.sh"
+          - "scripts/release-linux.sh"
+          - "docs/release-notes/**"

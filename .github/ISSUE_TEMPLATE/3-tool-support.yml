@@ -1,0 +1,73 @@
+name: Tool Support Request
+description: Ask for a new AI coding tool, or report a wrong install path/format.
+title: "[tool]: "
+labels: ["tool-support", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tool definitions are owned by the [agency-agents catalog](https://github.com/deuriib/agency-agents)
+        (`tools.json` + `scripts/convert.sh`). This app mirrors them verbatim, so a
+        tool whose install contract is wrong is usually an upstream fix first —
+        see [CONTRIBUTING](https://github.com/deuriib/agency-agents-app/blob/main/CONTRIBUTING.md#how-to-add-tool-support).
+
+  - type: input
+    id: tool-name
+    attributes:
+      label: Tool name
+      placeholder: "Windsurf"
+    validations:
+      required: true
+
+  - type: input
+    id: docs
+    attributes:
+      label: Link to the tool's agent/rules documentation
+      description: Where the install path and file format are documented.
+      placeholder: "https://docs.example.com/agents"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Where does the tool read agent files?
+      options:
+        - User scope only (~/...)
+        - Project scope only (<repo>/...)
+        - Both user and project scope
+        - Not sure
+      default: 0
+    validations:
+      required: true
+
+  - type: textarea
+    id: paths
+    attributes:
+      label: Install paths
+      description: Exact destination(s), including the file name or directory shape.
+      placeholder: |
+        ~/.example/agents/<slug>.md
+        <project>/.example/rules/<slug>.mdc
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: format
+    attributes:
+      label: File format
+      description: Frontmatter fields, body requirements, or a minimal example file.
+      render: markdown
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Before submitting
+      options:
+        - label: I verified the path and format against the tool's own documentation or a real install.
+          required: true
+        - label: I searched the existing issues and this is not a duplicate.
+          required: true

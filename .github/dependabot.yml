@@ -1,11 +1,44 @@
-# Keeps the commit-pinned GitHub Actions current: Dependabot proposes the new
-# commit SHA (and updates the version comment) once a month, in one PR.
+# Dependabot — keeps GitHub Actions, npm, and Cargo dependencies current.
+#
+# Monthly and grouped on purpose: this is a small project, and one reviewable
+# PR per ecosystem is easier to land than a stream of single-bump PRs.
+# Commit messages use the Conventional Commits `chore(deps)` type, and majors
+# are excluded from the groups so a breaking bump always gets its own PR.
+
 version: 2
 updates:
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
     groups:
       actions:
         patterns: ["*"]
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+      prefix-development: "chore(deps-dev)"
+    groups:
+      npm:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: cargo
+    directory: /src-tauri
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
