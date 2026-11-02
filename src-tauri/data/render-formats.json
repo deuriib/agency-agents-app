@@ -1,0 +1,14 @@
+{
+  "_note": "The render formats this app implements natively. A tool is installable iff its tools.json `format` appears in this list AND its `installKind` is not \"plugin\". Read by BOTH src-tauri/src/registry.rs (include_str!) and src/lib/data/toolRegistry.ts (JSON import) — never restate this list in code. Adding a renderer means adding its format here, and the docs guard then forces README.md and landing/index.html to list the tool.",
+  "formats": [
+    "antigravity-md",
+    "codex-toml",
+    "cursor-mdc",
+    "gemini-md",
+    "identity",
+    "opencode-md",
+    "qwen-md",
+    "skill-md",
+    "zcode-md"
+  ]
+}

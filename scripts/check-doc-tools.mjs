@@ -11,38 +11,42 @@
 // eight-plus-three set and a "Scope Today" column that contradicted the registry
 // (Claude Code has supported project scope for a while).
 //
-// The registry is the source of truth, so derive the expected set from the same
-// code the app branches on:
+// The installable set is derived the way the app derives it:
 //
-//     tools.json `format`  ∩  IMPLEMENTED_FORMATS (registry.rs), minus `plugin`
+//     tools.json `format`  ∩  render-formats.json, minus `plugin`
 //
-// That mirrors ToolMeta::installable(), and `scope` comes straight from
-// tools.json, which is what render::supports_user / supports_project read.
+// `src-tauri/data/render-formats.json` is the single source of truth, embedded
+// by the Rust registry and imported by the frontend. `singleSourceWiring`
+// asserts both readers still read it, so a reintroduced literal list fails here
+// instead of drifting silently (issues #49, #53).
 //
-// Note this tracks the BACKEND declaration deliberately. The frontend keeps its
-// own hand-maintained copy of IMPLEMENTED_FORMATS in
-// src/lib/data/toolRegistry.ts, and the two drifted once (issue #49): the UI
-// offered three installs the backend refused. `compare` now fails when the two
-// lists disagree, which is the invariant that was missing.
+// `scope` comes straight from tools.json, which is what render::supports_user
+// and render::supports_project read.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-const FORMATS_RE = /const IMPLEMENTED_FORMATS: &\[&str\] = &\[([\s\S]*?)\];/;
-
-/** Formats the native Rust renderer implements, read from registry.rs. */
-export function parseImplementedFormats(registryRs) {
-  const block = registryRs.match(FORMATS_RE);
-  if (!block) throw new Error("IMPLEMENTED_FORMATS not found in registry.rs");
-  return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+/** The shared renderer capability list, validated. */
+export function parseRenderFormats(spec) {
+  if (!Array.isArray(spec?.formats) || spec.formats.length === 0) {
+    throw new Error("data/render-formats.json: `formats` must be a non-empty array");
+  }
+  const formats = new Set(spec.formats);
+  if (formats.size !== spec.formats.length) {
+    throw new Error("data/render-formats.json: duplicate format entries");
+  }
+  return formats;
 }
 
-/** The frontend's hand-maintained copy of the same list. */
-export function parseFrontendFormats(toolRegistryTs) {
-  const block = toolRegistryTs.match(/const IMPLEMENTED_FORMATS = new Set\(\[([\s\S]*?)\]\);/);
-  if (!block) throw new Error("IMPLEMENTED_FORMATS not found in src/lib/data/toolRegistry.ts");
-  return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+/** Both sides must read the shared file rather than restate the list. */
+export function singleSourceWiring(root) {
+  const registryRs = readFileSync(join(root, "src-tauri/src/registry.rs"), "utf8");
+  const toolRegistryTs = readFileSync(join(root, "src/lib/data/toolRegistry.ts"), "utf8");
+  return {
+    rust: registryRs.includes('include_str!("../data/render-formats.json")'),
+    frontend: toolRegistryTs.includes('"../../../src-tauri/data/render-formats.json"'),
+  };
 }
 
 /** Tools this app can install, keyed by label. */
@@ -98,10 +102,10 @@ export function readmeRows(markdown) {
 /** Compare both documented lists against the registry-derived truth. */
 export function compare(root) {
   const tools = JSON.parse(readFileSync(join(root, "src-tauri/data/tools.json"), "utf8")).tools;
-  const formats = parseImplementedFormats(readFileSync(join(root, "src-tauri/src/registry.rs"), "utf8"));
-  const frontendFormats = parseFrontendFormats(
-    readFileSync(join(root, "src/lib/data/toolRegistry.ts"), "utf8"),
+  const formats = parseRenderFormats(
+    JSON.parse(readFileSync(join(root, "src-tauri/data/render-formats.json"), "utf8")),
   );
+  const wiring = singleSourceWiring(root);
   const installable = installableTools(tools, formats);
   const expected = [...installable.keys()].sort();
 
@@ -115,8 +119,7 @@ export function compare(root) {
     expected,
     badged,
     rows,
-    backendOnlyFormats: [...formats].filter((format) => !frontendFormats.has(format)).sort(),
-    frontendOnlyFormats: [...frontendFormats].filter((format) => !formats.has(format)).sort(),
+    wiring,
     badgeMissing: expected.filter((label) => !badgedSet.has(label)),
     badgeStale: badged.filter((label) => !installable.has(label)),
     badgeDuplicates: badged.filter((label, index) => badged.indexOf(label) !== index),
@@ -144,10 +147,11 @@ if (isMain) {
   }
 
   const problems = [];
-  if (result.backendOnlyFormats.length || result.frontendOnlyFormats.length) {
-    problems.push(
-      `frontend/backend IMPLEMENTED_FORMATS differ — backend only: [${result.backendOnlyFormats.join(", ")}], frontend only: [${result.frontendOnlyFormats.join(", ")}]`,
-    );
+  if (!result.wiring.rust) {
+    problems.push("src-tauri/src/registry.rs no longer embeds data/render-formats.json — a literal list is back");
+  }
+  if (!result.wiring.frontend) {
+    problems.push("src/lib/data/toolRegistry.ts no longer imports data/render-formats.json — a literal list is back");
   }
   if (result.badgeMissing.length) {
     problems.push(`landing badge missing: ${result.badgeMissing.join(", ")}`);
