@@ -13,8 +13,9 @@
    *      `settings.updateAutoCheck`. Stays toggleable even in Offline
    *      Mode so the user can configure their preference for the next
    *      time Offline Mode is off (matches every other network toggle).
-   *   3. "Update channel: Stable" — read-only display, placeholder
-   *      for v0.4+ beta channel support.
+   *   3. "Update channel" — a real `<select>` (stable | beta) persisted via
+   *      `settings.save({ updateChannel })`. The backend picks the release
+   *      list from it (#23).
    *
    * One conditional card (when `updater.available !== null`):
    *   - **v{version} available** heading
@@ -140,6 +141,20 @@
   function onCancelAutoInstall() {
     void updater.cancelAutoInstall();
   }
+
+  /** Persist the channel choice and immediately re-check. `value` comes off
+      a `<select>` that only offers the two union members, but it is still
+      narrowed rather than cast so a stray value can never reach the backend.
+      The await matters: `update_check_now` reads the channel from the
+      backend's live settings, so the check must run after the write lands —
+      otherwise switching to Beta would still query the stable stream. */
+  async function onChangeChannel(e: Event) {
+    const value = (e.currentTarget as HTMLSelectElement).value;
+    if (value !== "stable" && value !== "beta") return;
+    if (value === settings.effective.updateChannel) return;
+    await settings.save({ updateChannel: value });
+    void updater.checkNow();
+  }
 </script>
 
 <div class="section">
@@ -212,13 +227,28 @@
     </p>
   </div>
 
-  <!-- Row 3: Update channel -->
+  <!-- Row 3: Update channel. Persisted via `settings.save`; the backend
+       then selects the release list for this channel (stable = latest
+       published release, beta = newest published prerelease, falling
+       back to stable when no prerelease exists). -->
   <div class="field">
-    <span class="field-label">{i18n.t("updates.channel")}</span>
-    <div class="channel-row">
-      <span class="channel-name">{i18n.t("updates.stable")}</span>
-      <span class="meta">{i18n.t("updates.noBeta")}</span>
-    </div>
+    <label class="field-label" for="update-channel">
+      {i18n.t("updates.channel")}
+    </label>
+    <select
+      id="update-channel"
+      class="select"
+      value={settings.effective.updateChannel}
+      onchange={onChangeChannel}
+      disabled={settings.loading || settings.corruptOnDisk}
+      aria-describedby="update-channel-hint"
+    >
+      <option value="stable">{i18n.t("updates.channelStable")}</option>
+      <option value="beta">{i18n.t("updates.channelBeta")}</option>
+    </select>
+    <p class="hint" id="update-channel-hint">
+      {i18n.t("updates.channelHint")}
+    </p>
   </div>
 
   <!-- Conditional: notice card when an update is available -->
@@ -492,20 +522,37 @@
     color: var(--color-text-primary);
   }
 
-  /* ---------- Channel row ---------- */
-  .channel-row {
-    display: inline-flex;
-    align-items: baseline;
-    gap: var(--space-3);
-  }
-  .channel-name {
+  /* ---------- Channel select ---------- */
+  .select {
+    appearance: none;
+    width: max-content;
+    min-width: 160px;
+    padding: 5px 28px 5px 10px;
     font-size: var(--text-body);
+    font-family: inherit;
     color: var(--color-text-primary);
-    font-weight: var(--fw-medium);
-    padding: 2px 10px;
-    background: var(--color-surface-sunken);
+    background-color: var(--color-surface-sunken);
+    /* Chevron drawn with gradients so the control needs no extra markup
+       and keeps inheriting the theme tokens. */
+    background-image: linear-gradient(45deg, transparent 50%, currentColor 50%),
+      linear-gradient(135deg, currentColor 50%, transparent 50%);
+    background-position:
+      calc(100% - 15px) calc(50% + 1px),
+      calc(100% - 10px) calc(50% + 1px);
+    background-size: 5px 5px, 5px 5px;
+    background-repeat: no-repeat;
     border: 1px solid var(--color-border);
     border-radius: var(--radius-sm);
+    cursor: pointer;
+  }
+  .select:focus-visible {
+    outline: 2px solid
+      var(--color-focus, var(--color-brand, var(--color-accent)));
+    outline-offset: 2px;
+  }
+  .select:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
   }
 
   /* ---------- Buttons (match GitHub section pattern) ---------- */
