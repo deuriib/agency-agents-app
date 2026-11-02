@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://agencyagents.app/sitemap.xml
+Sitemap: https://deuriib.github.io/agency-agents-app/sitemap.xml
