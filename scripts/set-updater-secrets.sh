@@ -90,12 +90,18 @@ if [[ -z "$PASSWORD" ]] && command -v security >/dev/null 2>&1; then
     -a "agency-agents" -s "agency-agents-updater-key-pw" -w 2>/dev/null || true)"
 fi
 
+# No Keychain (Linux/Windows) and no env var: prompt once, without echo. This is
+# the normal path when the key was generated on Linux for a CI-only release.
+if [[ -z "$PASSWORD" && "$KEY" == *"minisign encrypted secret key"* ]]; then
+  read -r -s -p "Updater key password: " PASSWORD
+  echo
+fi
+
 # An encrypted key without its password produces a build that fails at signing
 # time, after a long compile. Catch it now.
 if [[ "$KEY" == *"minisign encrypted secret key"* && -z "$PASSWORD" ]]; then
-  echo "✗ the key is encrypted but no password was found." >&2
-  echo "  Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD or add the" >&2
-  echo "  'agency-agents-updater-key-pw' Keychain item." >&2
+  echo "✗ the key is encrypted but no password was provided." >&2
+  echo "  Set TAURI_SIGNING_PRIVATE_KEY_PASSWORD or run interactively." >&2
   exit 1
 fi
 

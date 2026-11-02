@@ -251,3 +251,30 @@ jobs:
           fi
           gh release upload updater-beta release-assets/latest.json --repo "$REPO" --clobber
           echo "Mirrored $TAG's latest.json to updater-beta."
+
+  # CI-only mode for forks without a Mac. Everything a Linux/Windows client
+  # needs is already on the release when this job starts: the platform bundles,
+  # their signatures, and latest.json. Publishing here is what makes
+  # `/releases/latest` (and therefore the stable manifest URL) resolve.
+  #
+  # Set the repository variable AUTO_PUBLISH=false to restore the old
+  # draft-then-human-publish flow — for example when a Mac will add the
+  # darwin-* entries before the release goes live. Unset means "publish".
+  publish:
+    name: Publish the release
+    needs: [release-please, manifest]
+    if: |
+      needs.release-please.outputs.release_created == 'true' &&
+      vars.AUTO_PUBLISH != 'false'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --repo "${{ github.repository }}" --draft=false
+          echo "Published $TAG (CI-only release: platforms are whatever linux/windows built)."

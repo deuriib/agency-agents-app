@@ -89,6 +89,35 @@ environment (`agency-agents-updater-key` and `…-key-pw`; setup is documented a
 the top of the script). It also requires an authenticated `gh`
 (`gh auth login`, `repo` scope) and fails immediately if either is missing.
 
+### No macOS? Generate the key on Linux/Windows
+
+The signing key is a minisign keypair; it does not require macOS. Generate it on
+the machine that will hold it:
+
+```sh
+mkdir -p ~/.config/agency-agents-app
+npx tauri signer generate -w ~/.config/agency-agents-app/updater.key
+chmod 600 ~/.config/agency-agents-app/updater.key
+```
+
+`updater.key.pub` contains the one-line value for
+`plugins.updater.pubkey` in `src-tauri/tauri.conf.json`. Update that value on a
+branch, commit it, and only then run:
+
+```sh
+mise run set-updater-secrets
+```
+
+The script compares the private key id with the `pubkey` in the working tree and
+refuses to upload a mismatch. On Linux/Windows it reads the file and prompts for
+the password; no Keychain is required.
+
+**Rotating the key is a one-way door for installed clients.** They embed the old
+`pubkey` and reject updates signed with the new one. If you still control the old
+private key, ship a transition release signed with it first. If it is lost — for
+example, a fork whose upstream key lived in a Mac Keychain — users must install
+one release manually; every release after that updates normally.
+
 ## What each build produces
 
 | Platform | Uploaded to the release | Signed by |
@@ -137,9 +166,33 @@ download.
    Publish later with `gh release edit v0.8.0 --draft=false`.
 5. **Check the result.** See [Verifying a manifest](#verifying-a-manifest).
 
-Nothing publishes automatically, in CI or locally: a draft whose assets are
-still arriving would serve a manifest that points at files no client can
-download.
+Nothing is published until every asset a client needs is attached: the
+`publish` job runs only after `linux`, `windows` and `manifest` succeed, and it
+is skipped when any of them fails.
+
+### CI-only releases (no macOS)
+
+Forks without a Mac publish Linux and Windows from CI. The `publish` job in
+`release-please.yml` flips the draft after `linux`, `windows` and `manifest`
+succeed. It is on by default; set the repository variable `AUTO_PUBLISH=false`
+to restore the draft-then-human-publish flow:
+
+```sh
+gh variable set AUTO_PUBLISH -R deuriib/agency-agents-app --body false
+```
+
+The resulting `latest.json` contains only the platforms CI built. Verify it with
+the explicit platform list:
+
+```sh
+mise run verify-updater -- \
+  --expect linux-x86_64,windows-x86_64,windows-aarch64 \
+  --check-urls
+```
+
+macOS is not part of a CI-only release: there is no `darwin-*` entry and a macOS
+client cannot install it. Add a `macos-latest` job (and a signing identity) if
+that platform matters.
 
 ### Beta releases
 
@@ -212,3 +265,6 @@ hand is how a release ends up with a signature for the wrong file.
 | Beta channel serves stable | No published prerelease, or `updater-beta` is missing | Check `gh release view updater-beta`; the app falls back to stable by design |
 | Stable channel offers a beta | A prerelease was marked as "latest", or published without the prerelease flag | `gh release edit <tag> --prerelease` and re-check `/releases/latest` |
 | `latest.json` points at a renamed asset | An asset was replaced without regenerating the manifest | Re-run the manifest step; it is derived from filenames, never from a template |
+| CI fails with `TAURI_SIGNING_PRIVATE_KEY is empty` | The repository secrets were never set | `mise run set-updater-secrets` on the machine holding the key; Linux/Windows is fine |
+| An installed app rejects the new release after a key rotation | The installed binary embeds the old `pubkey` | Ship a transition release signed with the old key, or install one release manually |
+| macOS offers an update that fails | A CI-only manifest has no `darwin-*` entry | Add a `macos-latest` build job, or ignore macOS in this fork |
