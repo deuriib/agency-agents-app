@@ -20,9 +20,11 @@
 //! "render" is the raw corpus source. Transform tools (cursor/.mdc, codex/TOML,
 //! gemini-cli, opencode, qwen) rebuild the file from frontmatter fields + body.
 //! Skill tools (osaurus) emit an Agent-Skills `SKILL.md` directory.
-//! The remaining tools (openclaw multi-file, aider / windsurf accumulated files,
-//! kimi) are special multi-file shapes — not yet supported here; `render`/`dests`
-//! return an error so the UI can disable them cleanly.
+//! Aider and Windsurf are corpus-wide rosters (they need every agent at once),
+//! and Kimi, OpenClaw and Mistral Vibe have no port here: `render` and
+//! `render_files` both refuse those formats. `dests` still resolves their
+//! catalog paths — it reports upstream truth — so `install::ensure_installable`
+//! is what stops a write for them.
 
 use std::path::{Path, PathBuf};
 
@@ -306,29 +308,28 @@ fn unsupported(tool: &str) -> AppError {
     }
 }
 
-/// A single file produced by a (possibly multi-file) renderer. `relative` is
-/// the path suffix under the tool's dest root (e.g. `agent.yaml` for Kimi,
-/// empty/`""` for single-file tools). `bytes` is the exact content to write.
+/// A single file produced by a renderer. `relative` is the path suffix under the
+/// tool's dest root — currently always empty, because every tool this app
+/// implements is single-file. The field stays for the multi-file formats the
+/// catalog declares (Kimi, OpenClaw, Vibe) so a real port can populate it
+/// without reshaping the install layer. `bytes` is the exact content to write.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedFile {
     pub relative: String,
     pub bytes: String,
 }
 
-/// Render ALL files for `tool` from `agent` (+ raw corpus source). Single-file
-/// tools return a one-element vector; multi-file tools (Kimi, OpenClaw, Vibe)
-/// return several. Roster/aggregate tools (Aider, Windsurf) are NOT handled
-/// here — they need corpus-wide aggregation and live in the install layer.
-/// Deterministic. This is the foundation for multi-file installability.
+/// Render ALL files for `tool` from `agent` (+ raw corpus source). Every format
+/// implemented today is single-file, so this returns a one-element vector; the
+/// multi-file shapes the catalog declares (Kimi, OpenClaw, Vibe) are refused
+/// until they are ported from `convert.sh`. Roster/aggregate tools (Aider,
+/// Windsurf) are NOT handled here — they need corpus-wide aggregation and live
+/// in the install layer. Deterministic.
 pub fn render_files(
     agent: &Agent,
     raw_source: &str,
     tool: &str,
 ) -> Result<Vec<RenderedFile>, AppError> {
-    let name = source_field(raw_source, "name");
-    let description = source_field(raw_source, "description");
-    let body = source_body(raw_source);
-    let slug = slugify(&name);
     let format = registry::get(tool).and_then(|m| m.format.as_deref());
 
     match format {
@@ -349,77 +350,19 @@ pub fn render_files(
             }])
         }
 
-        // Kimi: per-agent dir with agent.yaml + system.md.
-        Some("kimi-agent") => {
-            let color = source_field(raw_source, "color");
-            let yaml = format!(
-                "name: {name}\ndescription: {desc}\n",
-                name = yaml_quote(&name),
-                desc = yaml_quote(&description),
-            );
-            let system = format!("{body}\n");
-            let _ = color;
-            let _ = slug;
-            Ok(vec![
-                RenderedFile {
-                    relative: "agent.yaml".to_string(),
-                    bytes: yaml,
-                },
-                RenderedFile {
-                    relative: "system.md".to_string(),
-                    bytes: system,
-                },
-            ])
-        }
-
-        // Vibe: per-agent .toml + prompts/.md.
-        Some("vibe-toml") => {
-            let toml = format!(
-                "name = \"{name}\"\ndescription = \"{desc}\"\n",
-                name = toml_escape(&name),
-                desc = toml_escape(&description),
-            );
-            Ok(vec![
-                RenderedFile {
-                    relative: format!("{slug}.toml"),
-                    bytes: toml,
-                },
-                RenderedFile {
-                    relative: format!("prompts/{slug}.md"),
-                    bytes: format!("{body}\n"),
-                },
-            ])
-        }
-
-        // OpenClaw: per-agent dir with three files.
-        Some("openclaw-workspace") => {
-            let vibe = source_field(raw_source, "vibe");
-            Ok(vec![
-                RenderedFile {
-                    relative: "SOUL.md".to_string(),
-                    bytes: format!("# {name}\n\n{vibe}\n", name = name, vibe = vibe),
-                },
-                RenderedFile {
-                    relative: "AGENTS.md".to_string(),
-                    bytes: format!("{body}\n"),
-                },
-                RenderedFile {
-                    relative: "IDENTITY.md".to_string(),
-                    bytes: format!(
-                        "name: {name}\ndescription: {desc}\n",
-                        name = name,
-                        desc = description
-                    ),
-                },
-            ])
-        }
-
         // Roster/aggregate tools need corpus-wide context; not per-agent.
         Some("aider-conventions") | Some("windsurf-rules") => Err(unsupported(tool)),
 
         // hermes is plugin (CLI-only) — not renderable.
         Some("hermes-router-plugin") => Err(unsupported(tool)),
 
+        // kimi-agent, openclaw-workspace and vibe-toml are declared in the
+        // catalog but have no port here yet: the placeholder multi-file shapes
+        // that used to live in this match emitted YAML/TOML that does not match
+        // `convert.sh` for any of the three, so they were removed rather than
+        // left one flag away from corrupting a user's config. Port them from
+        // `convert_kimi` / `convert_openclaw` / `convert_vibe` before adding
+        // their formats to `registry::IMPLEMENTED_FORMATS` (issue #49).
         _ => Err(unsupported(tool)),
     }
 }
@@ -1373,9 +1316,13 @@ mod tests {
     fn unsupported_tools_error() {
         // These tools are in the catalog (upstream truth: real format + dest), but
         // this app ships no renderer for their format — so render() must refuse.
-        // dests() legitimately returns the upstream templates; the install path is
-        // gated on render(), and these tools aren't in the installable set anyway.
-        for tool in ["windsurf", "aider", "openclaw", "kimi"] {
+        // dests() legitimately returns the upstream templates, because it reports
+        // catalog truth rather than app capability. The write path is gated
+        // separately, by install::ensure_installable, against the same
+        // `installable()` predicate — a gate on render() alone was never enough,
+        // because render_files() answered first for the multi-file formats
+        // (issue #49).
+        for tool in ["windsurf", "aider", "openclaw", "kimi", "vibe"] {
             assert!(
                 render(&agent(), "raw", tool).is_err(),
                 "{tool} has no app renderer"
@@ -1447,23 +1394,17 @@ mod tests {
     }
 
     #[test]
-    fn render_files_kimi_is_multi() {
-        let files = render_files(&agent(), raw(), "kimi").unwrap();
-        assert_eq!(files.len(), 2);
-        assert!(files.iter().any(|f| f.relative == "agent.yaml"));
-        assert!(files.iter().any(|f| f.relative == "system.md"));
-    }
-
-    #[test]
-    fn render_files_vibe_is_multi() {
-        let files = render_files(&agent(), raw(), "vibe").unwrap();
-        assert_eq!(files.len(), 2);
-    }
-
-    #[test]
-    fn render_files_openclaw_is_multi() {
-        let files = render_files(&agent(), raw(), "openclaw").unwrap();
-        assert_eq!(files.len(), 3);
+    fn render_files_refuses_unported_formats() {
+        // kimi-agent, openclaw-workspace and vibe-toml are catalog formats with
+        // no port here. The placeholder shapes that used to answer for them did
+        // not match convert.sh, so both entry points must refuse rather than
+        // emit a file no CLI can read (issue #49).
+        for tool in ["kimi", "openclaw", "vibe"] {
+            assert!(
+                render_files(&agent(), raw(), tool).is_err(),
+                "{tool} must not render while it has no convert.sh port"
+            );
+        }
     }
 
     #[test]
