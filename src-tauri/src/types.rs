@@ -37,11 +37,12 @@ pub enum Scope {
 /// over the user's clone" vs "manage our own copy." Persisted to
 /// `state/catalog.json`. Serialized tagged on `kind` so the TS side is a clean
 /// discriminated union.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum CatalogSource {
     /// App-managed copy seeded from the bundled baseline (`<app_data>/corpus`).
     /// The always-works default; never touches anything outside app data.
+    #[default]
     Bundled,
     /// A clone the app provisioned and owns (default `~/.agency-agents`). The
     /// app may pull/refresh it; it's shared with the CLI.
@@ -50,12 +51,6 @@ pub enum CatalogSource {
     /// granted permission to pull it (manage-with-permission); when false we
     /// only ever read from it.
     UserClone { path: String, manage: bool },
-}
-
-impl Default for CatalogSource {
-    fn default() -> Self {
-        CatalogSource::Bundled
-    }
 }
 
 /// A catalog directory discovered on disk (for the first-run / Settings picker).
@@ -404,10 +399,18 @@ mod tests {
             "state",
             "updateKind",
         ] {
-            assert!(v.get(k).is_some(), "InstalledAgent must have wire field {:?}", k);
+            assert!(
+                v.get(k).is_some(),
+                "InstalledAgent must have wire field {:?}",
+                k
+            );
         }
         for snake in ["project_path", "update_kind"] {
-            assert!(v.get(snake).is_none(), "snake key {:?} must not leak", snake);
+            assert!(
+                v.get(snake).is_none(),
+                "snake key {:?} must not leak",
+                snake
+            );
         }
         assert_eq!(v["tool"], "claudeCode");
         assert_eq!(v["state"], "outdated");
@@ -430,10 +433,18 @@ mod tests {
         };
         let v = serde_json::to_value(&e).unwrap();
         for k in ["sourceHash", "frontmatterHash", "bodyHash"] {
-            assert!(v.get(k).is_some(), "CorpusEntry must have wire field {:?}", k);
+            assert!(
+                v.get(k).is_some(),
+                "CorpusEntry must have wire field {:?}",
+                k
+            );
         }
         for snake in ["source_hash", "frontmatter_hash", "body_hash"] {
-            assert!(v.get(snake).is_none(), "snake key {:?} must not leak", snake);
+            assert!(
+                v.get(snake).is_none(),
+                "snake key {:?} must not leak",
+                snake
+            );
         }
     }
 }

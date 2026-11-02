@@ -27,10 +27,7 @@ pub fn parse(s: &str) -> Option<(u32, u32, u32)> {
     let minor: u32 = iter.next()?.parse().ok()?;
     let patch_raw = iter.next()?;
     // Drop pre-release / metadata suffix (`0.3.1-beta.1`).
-    let patch_str = patch_raw
-        .split(['-', '+'])
-        .next()
-        .unwrap_or(patch_raw);
+    let patch_str = patch_raw.split(['-', '+']).next().unwrap_or(patch_raw);
     let patch: u32 = patch_str.parse().ok()?;
     Some((major, minor, patch))
 }

@@ -4,6 +4,12 @@
 //! Tauri Builder + invoke_handler registration; every command lives
 //! in `commands::*`.
 
+// Test builds compile out the `#[cfg(not(test))]` production paths, so items
+// reachable only from those paths (the GitHub release source, the app repo
+// constants, the updater IPC path) read as dead code under `cfg(test)`.
+// Scoped to test builds on purpose: production warnings still fail clippy.
+#![cfg_attr(test, allow(dead_code))]
+
 mod commands;
 mod corpus;
 mod error;
@@ -68,8 +74,9 @@ pub fn run() {
     // Best-effort tracing setup — silent if RUST_LOG is unset.
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn,agency_agents_app=info")),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
+                tracing_subscriber::EnvFilter::new("warn,agency_agents_app=info")
+            }),
         )
         .try_init();
 
@@ -99,7 +106,10 @@ pub fn run() {
         .on_window_event(|window, event| {
             use tauri::Manager;
             use tauri_plugin_window_state::{AppHandleExt, StateFlags};
-            if matches!(event, tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)) {
+            if matches!(
+                event,
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::Moved(_)
+            ) {
                 let _ = window.app_handle().save_window_state(StateFlags::all());
             }
         })
@@ -120,7 +130,9 @@ pub fn run() {
                 // sidebar and main panes; the WebView background must be set
                 // transparent in CSS (see app.css :root) for the blur to show.
                 use tauri::Manager;
-                use window_vibrancy::{apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState};
+                use window_vibrancy::{
+                    apply_vibrancy, NSVisualEffectMaterial, NSVisualEffectState,
+                };
                 if let Some(window) = app.get_webview_window("main") {
                     let _ = apply_vibrancy(
                         &window,
@@ -269,10 +281,7 @@ fn build_app_menu<R: tauri::Runtime>(
         .build()
 }
 
-fn handle_menu_event<R: tauri::Runtime>(
-    app: &tauri::AppHandle<R>,
-    event: tauri::menu::MenuEvent,
-) {
+fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri::menu::MenuEvent) {
     use tauri::Emitter;
     match event.id().as_ref() {
         MENU_EVENT_ABOUT => {
