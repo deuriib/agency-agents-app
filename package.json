@@ -11,7 +11,7 @@
   "repository": "github:deuriib/agency-agents-app",
   "scripts": {
     "dev": "vite dev",
-    "build": "vite build",
+    "build": "svelte-kit sync && vite build",
     "build:phase-c": "tools/phase-c/phase-c.sh",
     "build:phase-c:full": "PHASE_C_INCLUDE_VMS=1 tools/phase-c/phase-c.sh",
     "preview": "vite preview",

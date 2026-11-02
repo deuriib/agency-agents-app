@@ -17,6 +17,15 @@ name: Windows Build
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_release:
+        description: "Attach the installers to an existing GitHub Release"
+        type: boolean
+        default: false
+      tag:
+        description: "Release tag to attach to (e.g. v0.7.0)"
+        type: string
+        required: false
   workflow_call:
     inputs:
       upload_release:

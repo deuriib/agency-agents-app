@@ -17,6 +17,15 @@ name: Linux Build
 
 on:
   workflow_dispatch:
+    inputs:
+      upload_release:
+        description: "Attach the bundles to an existing GitHub Release"
+        type: boolean
+        default: false
+      tag:
+        description: "Release tag to attach to (e.g. v0.7.0)"
+        type: string
+        required: false
   workflow_call:
     inputs:
       upload_release:
@@ -40,6 +49,15 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      # The ubuntu-24.04 runner image runs with umask 0077, so checkout
+      # materializes files as 0600/0700. appimagetool refuses to package an
+      # AppDir whose files are not world-readable (and the bundled app would
+      # be unusable for other users), so normalize the tree before anything
+      # is copied into the bundle. New artefacts are created under umask 0022
+      # in the build steps below.
+      - name: Normalize checkout permissions (umask 0077 on 24.04)
+        run: chmod -R a+rX .
 
       # Standard Tauri 2 Linux build deps (https://v2.tauri.app/start/prerequisites/)
       # plus patchelf/file/wget for the AppImage bundler, and the xdg-utils +
@@ -83,7 +101,9 @@ jobs:
       # Builds the frontend, compiles the Rust binary, and bundles
       # .deb / .rpm / .AppImage. Updater artifacts disabled (v0.1.0).
       - name: Build Tauri app
-        run: npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
+        run: |
+          umask 0022
+          npm run tauri build -- --config '{"bundle":{"createUpdaterArtifacts":false}}'
 
       # Un-bundle the Wayland client libs from the AppImage (#57).
       #
@@ -102,6 +122,7 @@ jobs:
       - name: "Un-bundle host Wayland libs from AppImage (fixes EGL crash, #57)"
         run: |
           set -euo pipefail
+          umask 0022
           cd src-tauri/target/release/bundle/appimage
           APP="$(ls *.AppImage)"
           echo "Repacking $APP without bundled libwayland-*"
