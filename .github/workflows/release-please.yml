@@ -17,10 +17,10 @@
 # Required repository setting (Settings → Actions → General → Workflow
 # permissions): "Allow GitHub Actions to create and approve pull requests".
 #
-# Release pull requests opened with the default GITHUB_TOKEN do not trigger
-# other workflows (GitHub suppresses recursive runs), so CI does not run on
-# them. Set the `RELEASE_PLEASE_TOKEN` repository secret to a fine-grained PAT
-# with `contents: write` + `pull-requests: write` to get CI on release PRs.
+# Release pull requests are opened with the default GITHUB_TOKEN. GitHub still
+# creates `pull_request` workflow runs for them, but in an approval-required
+# state: a user with write access starts the checks once from the merge box
+# ("Approve workflows to run"). No PAT or app token is needed.
 
 name: Release Please
 
@@ -41,7 +41,7 @@ concurrency:
 jobs:
   release-please:
     name: Create release PR / tag
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       release_created: ${{ steps.release.outputs.release_created }}
       tag_name: ${{ steps.release.outputs.tag_name }}
@@ -52,9 +52,8 @@ jobs:
 
       - name: Run release-please
         id: release
-        uses: googleapis/release-please-action@5c625bfb5d1ff62eadeeb3772007f7f66fdcf071 # v4.4.1
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
-          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

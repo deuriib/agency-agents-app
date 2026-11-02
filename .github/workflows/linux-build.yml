@@ -32,10 +32,10 @@ permissions:
 jobs:
   build:
     name: Build Linux bundles (.deb / .rpm / .AppImage)
-    # Pin to ubuntu-22.04 (Jammy, webkit2gtk-4.1) for the oldest glibc we
-    # commit to supporting — binaries run on 22.04+; ubuntu-latest would
-    # silently raise the floor.
-    runs-on: ubuntu-22.04
+    # Ubuntu 24.04 (Noble, webkit2gtk-4.1). These bundles support 24.04+
+    # (glibc 2.39+). Lower this runner only if Ubuntu 22.04 compatibility is a
+    # hard requirement — that raises the floor for every user downstream.
+    runs-on: ubuntu-24.04
 
     steps:
       - name: Checkout
