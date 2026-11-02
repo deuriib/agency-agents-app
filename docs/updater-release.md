@@ -1,0 +1,191 @@
+# Releasing updates
+
+Agency Agents updates itself through `tauri-plugin-updater`. The contract
+between a release and every installed app is a single file — `latest.json` —
+attached to the GitHub release:
+
+```json
+{
+  "version": "0.8.0",
+  "notes": "…",
+  "pub_date": "2026-11-02T12:00:00Z",
+  "platforms": {
+    "darwin-aarch64": { "signature": "…", "url": "…" },
+    "windows-x86_64": { "signature": "…", "url": "…" }
+  }
+}
+```
+
+If that file is missing the endpoint answers 404, the updater swallows the
+error, and every client reports "up to date" forever. That is the failure this
+pipeline exists to prevent, so a release is not done until `latest.json` is on
+it *and* reachable by an anonymous client.
+
+This page is the runbook. `docs/BUILD.md` still describes the retired
+`agencyagents.app` endpoint; that host is no longer used for updates.
+
+## Channels
+
+| Channel | Manifest URL | Selected release |
+| --- | --- | --- |
+| stable | `https://github.com/deuriib/agency-agents-app/releases/latest/download/latest.json` | `GET /repos/deuriib/agency-agents-app/releases/latest` — the newest published, non-prerelease release |
+| beta | `https://github.com/deuriib/agency-agents-app/releases/download/updater-beta/latest.json` | first published prerelease in `/releases?per_page=30`, falling back to the stable release when there is none |
+
+The platform keys are Tauri's and are not negotiable:
+
+```text
+darwin-aarch64  darwin-x86_64  windows-x86_64  windows-aarch64  linux-x86_64
+```
+
+A key that is spelled differently is silently ignored by the updater, which is
+why `scripts/updater-manifest.mjs` refuses to emit anything else.
+
+The app picks the channel from Settings → Updates. The beta channel is a fixed
+URL, so switching channels never requires a new release; it changes which
+manifest the next check reads. When the beta channel falls back to the stable
+release, the app uses the stable URL — a beta client must never be handed a
+manifest that the beta release does not own.
+
+## Required secrets
+
+### GitHub Actions (repository secrets)
+
+Set once in **Settings → Secrets and variables → Actions**:
+
+| Secret | Value |
+| --- | --- |
+| `TAURI_SIGNING_PRIVATE_KEY` | contents of the minisign private key (`~/.config/agency-agents-app/updater.key`) |
+| `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` | the password of that key (empty file/string if it has none) |
+
+Without reading the key into your shell history or a log:
+
+```sh
+gh secret set TAURI_SIGNING_PRIVATE_KEY < ~/.config/agency-agents-app/updater.key
+gh secret set TAURI_SIGNING_PRIVATE_KEY_PASSWORD   # prompts, does not echo
+gh secret list
+```
+
+The public half is already embedded in `src-tauri/tauri.conf.json` →
+`plugins.updater.pubkey`. Rotating the key means regenerating both halves **and**
+shipping a release signed with the old key first, or installed apps will reject
+every future update.
+
+`GITHUB_TOKEN` needs no setup; the workflows request `contents: write`.
+
+### Local macOS builds
+
+`scripts/release.sh` reads the same key from the Keychain instead of the
+environment (`agency-agents-updater-key` and `…-key-pw`; setup is documented at
+the top of the script). It also requires an authenticated `gh`
+(`gh auth login`, `repo` scope) and fails immediately if either is missing.
+
+## What each build produces
+
+| Platform | Uploaded to the release | Signed by |
+| --- | --- | --- |
+| Linux (CI) | `<product>_<version>_amd64.AppImage`, `…AppImage.tar.gz`, `…AppImage.tar.gz.sig`, `.deb`, `.rpm` | CI job `linux` |
+| Windows (CI) | `<product>_<version>_x64-setup.exe` + `.sig`, `…_arm64-setup.exe` + `.sig` | CI job `windows` |
+| macOS (local) | `Agency Agents_<version>_<arch>.dmg`, `Agency.Agents_<version>_<aarch64\|x64>.app.tar.gz` + `.sig` | `scripts/release.sh` |
+| Manifest (CI or local) | `latest.json` | n/a |
+
+Linux is the one platform where the updater payload is **not** the tarball Tauri
+produced: the AppImage is repacked after bundling to un-bundle host Wayland
+libraries (#57), so `linux-build.yml` deletes Tauri's tarball, rebuilds it from
+the repacked AppImage, and signs it again. A `linux-x86_64` entry whose
+signature was made over the pre-repack file fails verification with
+`signature verification failed` — that is a broken build, not a corrupt
+download.
+
+## Release flow
+
+1. **Merge the release PR.** release-please turns Conventional Commits on `main`
+   into a version bump, a `vX.Y.Z` tag, and a **draft** release with the
+   changelog as its body.
+2. **CI builds Linux, then Windows, then the manifest.** `release-please.yml`
+   chains `linux` → `windows` → `manifest`. The manifest job downloads the
+   assets the two platform jobs attached, builds `latest.json` from them
+   (`--merge` keeps any platforms already present, so re-runs are safe), and
+   attaches it to the same draft. It never publishes.
+3. **Build macOS locally.** On the Mac with the Developer ID and the Keychain
+   entries:
+
+   ```sh
+   ./scripts/release.sh
+   ```
+
+   It builds and notarizes both arches, uploads the DMGs plus the
+   `Agency.Agents_<version>_<arch>.app.tar.gz` payloads and signatures,
+   downloads the release's `latest.json`, merges the `darwin-*` entries into it,
+   uploads it back, and then publishes the release.
+4. **Verifying before you publish.** Set `NO_PUBLISH=1` to stop after the upload:
+
+   ```sh
+   NO_PUBLISH=1 ./scripts/release.sh
+   gh release view "v0.8.0" --json isDraft,assets --jq '{isDraft, assets: [.assets[].name]}'
+   ```
+
+   Publish later with `gh release edit v0.8.0 --draft=false`.
+5. **Check the result.** See [Verifying a manifest](#verifying-a-manifest).
+
+Nothing publishes automatically, in CI or locally: a draft whose assets are
+still arriving would serve a manifest that points at files no client can
+download.
+
+### Beta releases
+
+A version whose semver carries a prerelease suffix (`0.8.0-beta.1`) is handled
+by the same flow, with two additions:
+
+- The release is marked prerelease, so it is excluded from
+  `releases/latest` and the stable channel never sees it.
+- `latest.json` is also copied to the long-lived `updater-beta` release
+  (`--clobber`, so it always holds the newest beta). CI stages that copy as soon
+  as the platform builds finish; `scripts/release.sh` mirrors it right after
+  publishing. The mirror only becomes reachable to clients once the prerelease
+  itself is published — draft assets 404 for anonymous clients.
+
+`updater-beta` must never be the repository's "latest" release, or the stable
+endpoint would start handing betas to everyone. Both `gh release create` calls
+pass `--latest=false` for that reason; do not flip it by hand.
+
+## Verifying a manifest
+
+After publishing, exactly what a client sees:
+
+```sh
+TAG=v0.8.0
+curl -fsSL "https://github.com/deuriib/agency-agents-app/releases/latest/download/latest.json" | jq .
+curl -fsSL "https://github.com/deuriib/agency-agents-app/releases/download/${TAG}/latest.json" | jq .
+```
+
+Expected: every platform you shipped, each with a non-empty `signature` and an
+`https` `url` ending in the artifact's filename. Then confirm the artifacts are
+actually downloadable (a manifest is worthless if it 404s):
+
+```sh
+curl -fsSIL "$(curl -fsSL "https://github.com/deuriib/agency-agents-app/releases/download/${TAG}/latest.json" \
+  | jq -r '.platforms["linux-x86_64"].url')" | head -1
+```
+
+Before publishing, inspect the draft instead:
+
+```sh
+gh release download "$TAG" --pattern latest.json --dir /tmp/agent-manifest --clobber
+jq -r '.version, (.platforms | keys[])' /tmp/agent-manifest/latest.json
+```
+
+`scripts/updater-manifest.mjs` is the only supported way to produce the file: it
+validates the semver, the https base URL, the platform keys, the artifact paths
+and each `.sig`, and writes nothing at all if one check fails. Building it by
+hand is how a release ends up with a signature for the wrong file.
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| App always says "up to date" | `latest.json` missing, or the release is still a draft (404 to anonymous clients) | Check `gh release view <tag>`; publish the release |
+| Manifest lacks a platform | That platform's job failed, or its `.sig` was not attached | Re-run the job; the manifest job rebuilds from whatever is on the release |
+| `signature verification failed` after download | Artifact and `.sig` come from different builds (typically the Linux pre-repack tarball) | Re-run the Linux build; both files are regenerated together |
+| Beta channel serves stable | No published prerelease, or `updater-beta` is missing | Check `gh release view updater-beta`; the app falls back to stable by design |
+| Stable channel offers a beta | A prerelease was marked as "latest", or published without the prerelease flag | `gh release edit <tag> --prerelease` and re-check `/releases/latest` |
+| `latest.json` points at a renamed asset | An asset was replaced without regenerating the manifest | Re-run the manifest step; it is derived from filenames, never from a template |
