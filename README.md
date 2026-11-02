@@ -72,7 +72,7 @@ The app currently installs to thirteen renderer-backed targets that have determi
 | Pi Agent | user + project | `~/.pi/agent/agents/*.md`, `.pi/agents/*.md` |
 | Oh My Pi | user + project | `~/.omp/agent/agents/*.md`, `.omp/agents/*.md` |
 
-Aider and Windsurf ship install contracts in the catalog but are recognized-only until their renderers land. Kimi, OpenClaw and Mistral Vibe have working multi-file renderers but are not yet wired through every surface — the install path accepts them while `installs_reconcile` and the Tools panel skip them (#49) — so they are deliberately not counted above. Hermes is a single router plugin installed by its own CLI, so it is never a per-agent target.
+Aider, Windsurf, Kimi, OpenClaw and Mistral Vibe ship install contracts in the catalog but are recognized-only: no `convert.sh` port ships here yet, and the install path refuses them rather than writing a file no CLI can read. Hermes is a single router plugin installed by its own CLI, so it is never a per-agent target.
 
 ## What This Isn't
 

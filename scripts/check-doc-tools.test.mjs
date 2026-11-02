@@ -8,6 +8,7 @@ import { fileURLToPath } from "node:url";
 import {
   badgeLabels,
   installableTools,
+  parseFrontendFormats,
   parseImplementedFormats,
   readmeRows,
   scopeLabel,
@@ -22,9 +23,11 @@ function fixture() {
   const dir = mkdtempSync(join(tmpdir(), "doc-tools-"));
   mkdirSync(join(dir, "src-tauri/data"), { recursive: true });
   mkdirSync(join(dir, "src-tauri/src"), { recursive: true });
+  mkdirSync(join(dir, "src/lib/data"), { recursive: true });
   mkdirSync(join(dir, "landing"), { recursive: true });
   cpSync(join(ROOT, "src-tauri/data/tools.json"), join(dir, "src-tauri/data/tools.json"));
   cpSync(join(ROOT, "src-tauri/src/registry.rs"), join(dir, "src-tauri/src/registry.rs"));
+  cpSync(join(ROOT, "src/lib/data/toolRegistry.ts"), join(dir, "src/lib/data/toolRegistry.ts"));
   cpSync(join(ROOT, "landing/index.html"), join(dir, "landing/index.html"));
   cpSync(join(ROOT, "README.md"), join(dir, "README.md"));
   return dir;
@@ -111,6 +114,26 @@ test("reads IMPLEMENTED_FORMATS out of registry.rs, not a copy of the list", () 
   assert.ok(formats.has("identity"), "identity is a rendered format");
   assert.ok(formats.has("antigravity-md"), "antigravity-md is a rendered format");
   assert.ok(!formats.has("aider-conventions"), "aider has no renderer yet");
+});
+
+test("the frontend and backend format lists agree", () => {
+  const backend = parseImplementedFormats(readFileSync(join(ROOT, "src-tauri/src/registry.rs"), "utf8"));
+  const frontend = parseFrontendFormats(readFileSync(join(ROOT, "src/lib/data/toolRegistry.ts"), "utf8"));
+  assert.deepEqual([...frontend].sort(), [...backend].sort());
+});
+
+test("fails when the frontend reinstates a format the backend refuses", () => {
+  const dir = fixture();
+  try {
+    const file = join(dir, "src/lib/data/toolRegistry.ts");
+    const source = readFileSync(file, "utf8");
+    const drifted = source.replace('  "skill-md",\n]);', '  "skill-md",\n  "kimi-agent",\n]);');
+    assert.notEqual(drifted, source, "fixture no longer has the expected format list shape");
+    writeFileSync(file, drifted);
+    expectFailure(dir, /frontend\/backend IMPLEMENTED_FORMATS differ.*frontend only: \[kimi-agent\]/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("plugin tools and unrendered formats derive as non-installable", () => {

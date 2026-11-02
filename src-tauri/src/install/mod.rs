@@ -482,6 +482,10 @@ async fn write_agent_files_to(
     installed_at: &str,
     preferred_dest: Option<&Path>,
 ) -> Result<InstallRecord, AppError> {
+    // Hard gate before any filesystem work: a tool the app does not declare
+    // installable must never produce files (issue #49).
+    ensure_installable(tool)?;
+
     // Render all files (single or multi). Fall back to render_with_hash for
     // tools not yet in render_files (keeps backward compat).
     let rendered = match render::render_files(agent, raw, tool) {
@@ -656,6 +660,26 @@ fn detect(tool: &str, home: &Path) -> (bool, Option<String>) {
 /// file, not editing this list.
 fn supported() -> Vec<&'static str> {
     registry::wired().map(|m| m.id.as_str()).collect()
+}
+
+/// Refuse to touch the filesystem for a tool this app does not declare
+/// installable.
+///
+/// The gate lives at the write choke point on purpose: both `do_install` and
+/// every test helper reach the disk through `write_agent_files_to`, and a
+/// caller-side check is exactly what was missing when Kimi, OpenClaw and
+/// Mistral Vibe installed successfully while `supported()` omitted them, so the
+/// Tools panel and reconcile never saw the result (issue #49).
+fn ensure_installable(tool: &str) -> Result<(), AppError> {
+    match registry::get(tool) {
+        Some(meta) if meta.installable() => Ok(()),
+        Some(meta) => Err(AppError::InvalidArgument {
+            message: format!("tool '{}' is not installable in this app", meta.kebab),
+        }),
+        None => Err(AppError::InvalidArgument {
+            message: format!("unknown tool: {tool}"),
+        }),
+    }
 }
 
 // ---------- Tauri commands ----------
@@ -2047,5 +2071,63 @@ mod tests {
         let back: Vec<InstallRecord> = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].tool, "cursor");
+    }
+
+    #[test]
+    fn ensure_installable_rejects_unported_tools_and_unknown_ids() {
+        // Catalog formats with no renderer here. Before the gate, all three
+        // wrote real files while `supported()` omitted them (issue #49).
+        for tool in ["kimi", "openclaw", "vibe", "aider", "windsurf"] {
+            assert!(ensure_installable(tool).is_err(), "{tool} must be refused");
+        }
+        // Hermes is a plugin, never per-agent installable.
+        assert!(ensure_installable("hermes").is_err());
+
+        for tool in [
+            "claudeCode",
+            "codex",
+            "geminiCli",
+            "antigravity",
+            "zcode",
+            "deepseekHarness",
+        ] {
+            assert!(ensure_installable(tool).is_ok(), "{tool} must be allowed");
+        }
+        assert!(
+            ensure_installable("not-a-tool").is_err(),
+            "unknown ids are refused"
+        );
+    }
+
+    /// The gate has to fire before the first byte reaches the filesystem, not
+    /// after a render succeeds — that ordering is what the bug turned on.
+    #[tokio::test]
+    async fn write_agent_files_refuses_without_touching_disk() {
+        let home = tempfile::tempdir().unwrap();
+        let agent = sample_agent();
+        let raw = "---\nname: Frontend Developer\n---\nORIGINAL\n";
+
+        for tool in ["kimi", "openclaw", "vibe"] {
+            let result = write_agent_files(
+                &agent,
+                raw,
+                tool,
+                home.path(),
+                None,
+                None,
+                "src-1",
+                "body-1",
+                "v1",
+                "2026-06-05T00:00:00Z",
+            )
+            .await;
+            assert!(result.is_err(), "{tool} must be refused before writing");
+        }
+
+        let leftovers: Vec<_> = std::fs::read_dir(home.path()).unwrap().collect();
+        assert!(
+            leftovers.is_empty(),
+            "gate must fail before any write; found {leftovers:?}"
+        );
     }
 }
