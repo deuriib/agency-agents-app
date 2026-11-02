@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.2](https://github.com/deuriib/agency-agents-app/compare/v0.8.1...v0.8.2) (2026-11-02)
+
+
+### Bug Fixes
+
+* **install:** refuse writes to unported tools and stop advertising them ([#51](https://github.com/deuriib/agency-agents-app/issues/51)) ([651f249](https://github.com/deuriib/agency-agents-app/commit/651f249091158f111dc70eab43357271f00c452c))
+
 ## [0.8.1](https://github.com/deuriib/agency-agents-app/compare/v0.8.0...v0.8.1) (2026-11-02)
 
 
