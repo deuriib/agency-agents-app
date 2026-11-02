@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.7.1](https://github.com/deuriib/agency-agents-app/compare/v0.7.0...v0.7.1) (2026-11-02)
+
+
+### Bug Fixes
+
+* **ci:** package the Linux AppImage under umask 0022 ([35925ba](https://github.com/deuriib/agency-agents-app/commit/35925bad1a9a9750e07eda627524866be6f30fb6))
+* **ci:** package the Linux AppImage under umask 0022 ([689343d](https://github.com/deuriib/agency-agents-app/commit/689343d840c749969fe0e9cfdb50b6e49ad60c81))
+
 ## [0.7.0](https://github.com/deuriib/agency-agents-app/compare/v0.6.0...v0.7.0) (2026-11-02)
 
 
