@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.3](https://github.com/deuriib/agency-agents-app/compare/v0.8.2...v0.8.3) (2026-11-02)
+
+
+### Refactors
+
+* **registry:** read IMPLEMENTED_FORMATS from a shared JSON ([#54](https://github.com/deuriib/agency-agents-app/issues/54)) ([fa9e8c6](https://github.com/deuriib/agency-agents-app/commit/fa9e8c69f07948c1a421600d7cd762436bfc1ce2))
+
 ## [0.8.2](https://github.com/deuriib/agency-agents-app/compare/v0.8.1...v0.8.2) (2026-11-02)
 
 
