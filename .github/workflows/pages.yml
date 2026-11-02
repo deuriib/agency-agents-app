@@ -1,0 +1,58 @@
+# Publish the static landing page to GitHub Pages.
+#
+# `landing/` is a self-contained static site with no build step, so the "build"
+# is just packing the directory as the Pages artifact. The site is served as a
+# project site at https://deuriib.github.io/agency-agents-app/, which is why
+# every asset reference in landing/index.html is document-relative — see
+# landing/README.md ("Subpath rule").
+#
+# GitHub Pages must already be switched on for this repository (Settings →
+# Pages → Source = "GitHub Actions"). That is a one-time admin action; the
+# `enablement` input on `configure-pages` cannot do it here because the action
+# requires a token other than the default `GITHUB_TOKEN`.
+
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/pages.yml"
+  workflow_dispatch:
+
+# Least privilege at the workflow level; the deploy job opts into what it needs.
+permissions:
+  contents: read
+
+# Never cancel an in-flight deploy: a half-published site is worse than a
+# slightly stale one, and Pages only serves the last successful deployment.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    name: Deploy landing to Pages
+    runs-on: ubuntu-24.04
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: landing
+
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
