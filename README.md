@@ -20,7 +20,7 @@ It is full source, MIT-licensed, local-first, and does not run telemetry.
 
 ## Why This Exists
 
-The `agency-agents` repo is a useful catalog of specialist AI agent personas, but every coding tool has its own agent format and install path. Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, and Osaurus all want similar content in slightly different places.
+The `agency-agents` repo is a useful catalog of specialist AI agent personas, but every coding tool has its own agent format and install path. Every tool wants similar content in slightly different places — Claude Code, Codex, Cursor, Gemini CLI, opencode, Copilot, and seven more.
 
 Agency Agents gives that catalog a native control surface:
 
@@ -54,23 +54,25 @@ New to directing agents? See **[docs/USING-AGENTS.md](./docs/USING-AGENTS.md)** 
 
 ## Supported Install Targets
 
-The app currently installs to the renderer-backed targets that have deterministic byte parity with the upstream `agency-agents` converter:
+The app currently installs to thirteen renderer-backed targets that have deterministic byte parity with the upstream `agency-agents` converter. Both columns are derived from `src-tauri/data/tools.json` — the registry reads the same file — and `npm run test:scripts` fails when this table drifts from it:
 
 | Tool | Scope Today | Output |
 | ------ | ------------- | -------- |
-| Claude Code | user | `~/.claude/agents/*.md` |
-| Codex | user | `~/.codex/agents/*.toml` |
-| Gemini CLI | user | `~/.gemini/agents/*.md` |
-| GitHub Copilot | user | `~/.github/agents/*.md` and `~/.copilot/agents/*.md` |
-| Qwen Code | user | `~/.qwen/agents/*.md` |
+| Claude Code | user + project | `~/.claude/agents/*.md`, `.claude/agents/*.md` |
+| Codex | user + project | `~/.codex/agents/*.toml`, `.codex/agents/*.toml` |
+| Gemini CLI | user + project | `~/.gemini/agents/*.md`, `.gemini/agents/*.md` |
+| GitHub Copilot | user + project | `~/.copilot/agents/*.md`, `~/.github/agents/*.md`, `.github/agents/*.md` |
+| Qwen Code | user + project | `~/.qwen/agents/*.md`, `.qwen/agents/*.md` |
 | Cursor | project | `.cursor/rules/*.mdc` |
-| opencode | project | `.opencode/agents/*.md` |
-| Osaurus | user | `~/.osaurus/skills/agency-<slug>/SKILL.md` |
-| Antigravity | user | `~/.gemini/config/agents/*.md` |
-| Pi Agent | user | `~/.pi/agent/agents/*.md` |
-| Oh My Pi | user | `~/.omp/agent/agents/*.md` |
+| opencode | user + project | `~/.config/opencode/agents/*.md`, `.opencode/agents/*.md` |
+| Osaurus | user | `~/.osaurus/skills/agency-*/SKILL.md` |
+| Antigravity | user + project | `~/.gemini/config/agents/*.md`, `.agents/agents/*.md` |
+| ZCode | user + project | `~/.zcode/agents/*.md`, `.zcode/agents/*.md` |
+| DeepSeek Harness | user + project | `~/.dsh/skills/agency-*/SKILL.md`, `.dsh/skills/agency-*/SKILL.md` |
+| Pi Agent | user + project | `~/.pi/agent/agents/*.md`, `.pi/agents/*.md` |
+| Oh My Pi | user + project | `~/.omp/agent/agents/*.md`, `.omp/agents/*.md` |
 
-The upstream AA repo also contains integrations for Aider, Windsurf, OpenClaw, and Kimi. Those output shapes need additional app work before they should be exposed as first-class app installs — they appear in the Tools panel as recognized-only.
+The upstream catalog also ships install contracts for Aider, Windsurf, OpenClaw, Kimi, and Mistral Vibe. Those output shapes need additional app work before they are exposed as first-class installs — they appear in the Tools panel as recognized-only. Hermes is a single router plugin installed by its own CLI, so it is never a per-agent target.
 
 ## What This Isn't
 

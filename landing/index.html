@@ -15,10 +15,10 @@
   <!-- Primary meta -->
   <title>Agency Agents — a native installer for AI agents (Tauri + Svelte)</title>
   <meta name="description"
-    content="Browse, install, and track AI agent personas across Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, and Osaurus. Full source. MIT licensed. Local-first, no telemetry, no accounts.">
+    content="Install and track AI agent personas across 13 AI coding tools — Claude Code, Codex, Cursor, Gemini CLI, opencode and more. MIT licensed, local-first, no telemetry.">
   <meta name="author" content="Michael Sitarzewski">
   <meta name="keywords"
-    content="AI agents, agent personas, Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, GitHub Copilot, Osaurus, Tauri, Svelte, Rust, native, MIT, open source, desktop app">
+    content="AI agents, agent personas, Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, GitHub Copilot, Osaurus, Antigravity, ZCode, DeepSeek Harness, Pi Agent, Oh My Pi, Tauri, Svelte, Rust, native, MIT, open source, desktop app">
 
   <!-- Favicons & app icons -->
   <!-- Document-relative paths: GitHub Pages serves this project site from
@@ -67,7 +67,7 @@
     "@context": "https://schema.org",
     "@type": "SoftwareApplication",
     "name": "Agency Agents",
-    "description": "A native installer for AI agents. Browse, install, and track agent personas across Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, and Osaurus. Full source. MIT licensed. No telemetry, no accounts.",
+    "description": "A native installer for AI agents. Browse, install, and track agent personas across 13 AI coding tools — Claude Code, Codex, Cursor, Gemini CLI, opencode, Copilot and more. MIT licensed, local-first, no telemetry, no accounts.",
     "applicationCategory": "DeveloperApplication",
     "applicationSubCategory": "AI Agent Manager",
     "operatingSystem": "macOS 13+, Windows, Linux",
@@ -103,9 +103,10 @@
       <h1>Agency Agents</h1>
       <p class="tagline">A native installer for AI agents.</p>
       <p class="sub">Browse the agent catalog by division and role. Inspect a persona before you install it. Deploy
-        deterministic renders into <strong>Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, and
-          Osaurus</strong> — then track what the app wrote, detect drift, update, or back it out. A small, fast
-        <strong>Tauri 2</strong> app (Rust + Svelte 5). The local install database your AI tools don't share.
+        deterministic renders into <strong>Claude Code, Codex, Cursor, Gemini CLI, Qwen, opencode, Copilot, Osaurus,
+          Antigravity, ZCode, DeepSeek Harness, Pi Agent, and Oh My Pi</strong> — then track what the app wrote, detect
+        drift, update, or back it out. A small, fast <strong>Tauri 2</strong> app (Rust + Svelte 5). The local install
+        database your AI tools don't share.
       </p>
       <div class="cta-row">
         <a class="btn btn-primary" href="https://github.com/deuriib/agency-agents-app/releases/latest">Download</a>
@@ -186,7 +187,8 @@
         <div class="feature">
           <h3>Deterministic renderers</h3>
           <p>Per-tool converters with byte-for-byte parity against the upstream <code>agency-agents</code> converter —
-            Claude Code, Codex, Gemini CLI, Copilot, Qwen, Cursor, opencode, and Osaurus. Tool knowledge is a single
+            thirteen targets today, including Claude Code, Codex, Gemini CLI, Copilot, Qwen, Cursor, opencode, Osaurus,
+            Antigravity, ZCode, DeepSeek Harness, Pi Agent, and Oh My Pi. Tool knowledge is a single
             shared <code>tools.json</code>, so what the app writes is exactly what the catalog defines.</p>
         </div>
 
@@ -218,10 +220,16 @@
         <div class="badge"><code>Cursor</code></div>
         <div class="badge"><code>opencode</code></div>
         <div class="badge"><code>Osaurus</code></div>
+        <div class="badge"><code>Antigravity</code></div>
+        <div class="badge"><code>ZCode</code></div>
+        <div class="badge"><code>DeepSeek Harness</code></div>
+        <div class="badge"><code>Pi Agent</code></div>
+        <div class="badge"><code>Oh My Pi</code></div>
       </div>
-      <p class="small-note">Renderer-backed targets with deterministic byte parity to the upstream converter. More
-        integrations (Antigravity, Aider, Windsurf, OpenClaw, Kimi) need additional app work before they're exposed as
-        first-class installs.</p>
+      <p class="small-note">Renderer-backed targets with deterministic byte parity to the upstream converter. Aider,
+        Windsurf, Kimi, OpenClaw, and Mistral Vibe ship install contracts in the catalog but stay recognized-only in the
+        app until their renderers land. Hermes is a single router plugin owned by its CLI, so it is never a per-agent
+        target.</p>
     </section>
 
     <section class="section section-bordered">
