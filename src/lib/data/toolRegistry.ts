@@ -42,7 +42,12 @@ export interface ToolMeta {
 }
 
 /** The render formats this app implements natively. A tool is installable iff
-    its `format` is one of these — derived from the catalog, never stored there. */
+    its `format` is one of these — derived from the catalog, never stored there.
+    Must stay identical to `IMPLEMENTED_FORMATS` in `src-tauri/src/registry.rs`:
+    the two are hand-maintained in parallel, and they drifted once — this list
+    claimed `kimi-agent`, `openclaw-workspace` and `vibe-toml` while the backend
+    refused them, so the UI offered three installs that never reconciled
+    (issue #49). */
 const IMPLEMENTED_FORMATS = new Set([
   "identity",
   "codex-toml",
@@ -53,9 +58,6 @@ const IMPLEMENTED_FORMATS = new Set([
   "opencode-md",
   "antigravity-md",
   "skill-md",
-  "kimi-agent",
-  "openclaw-workspace",
-  "vibe-toml",
 ]);
 
 // Brand marks (Lobe Icons, MIT) — monochrome SVG keyed by filename stem.

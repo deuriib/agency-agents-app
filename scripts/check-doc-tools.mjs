@@ -19,11 +19,11 @@
 // That mirrors ToolMeta::installable(), and `scope` comes straight from
 // tools.json, which is what render::supports_user / supports_project read.
 //
-// Note this tracks the BACKEND declaration on purpose. The frontend keeps its
-// own copy of IMPLEMENTED_FORMATS in src/lib/data/toolRegistry.ts and currently
-// claims three extra formats (kimi-agent, openclaw-workspace, vibe-toml), so the
-// UI offers 16 tools while `supported()` covers 13. See issue #49; when that is
-// resolved this guard is what forces the docs to follow.
+// Note this tracks the BACKEND declaration deliberately. The frontend keeps its
+// own hand-maintained copy of IMPLEMENTED_FORMATS in
+// src/lib/data/toolRegistry.ts, and the two drifted once (issue #49): the UI
+// offered three installs the backend refused. `compare` now fails when the two
+// lists disagree, which is the invariant that was missing.
 
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -35,6 +35,13 @@ const FORMATS_RE = /const IMPLEMENTED_FORMATS: &\[&str\] = &\[([\s\S]*?)\];/;
 export function parseImplementedFormats(registryRs) {
   const block = registryRs.match(FORMATS_RE);
   if (!block) throw new Error("IMPLEMENTED_FORMATS not found in registry.rs");
+  return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]));
+}
+
+/** The frontend's hand-maintained copy of the same list. */
+export function parseFrontendFormats(toolRegistryTs) {
+  const block = toolRegistryTs.match(/const IMPLEMENTED_FORMATS = new Set\(\[([\s\S]*?)\]\);/);
+  if (!block) throw new Error("IMPLEMENTED_FORMATS not found in src/lib/data/toolRegistry.ts");
   return new Set([...block[1].matchAll(/"([^"]+)"/g)].map((match) => match[1]));
 }
 
@@ -92,6 +99,9 @@ export function readmeRows(markdown) {
 export function compare(root) {
   const tools = JSON.parse(readFileSync(join(root, "src-tauri/data/tools.json"), "utf8")).tools;
   const formats = parseImplementedFormats(readFileSync(join(root, "src-tauri/src/registry.rs"), "utf8"));
+  const frontendFormats = parseFrontendFormats(
+    readFileSync(join(root, "src/lib/data/toolRegistry.ts"), "utf8"),
+  );
   const installable = installableTools(tools, formats);
   const expected = [...installable.keys()].sort();
 
@@ -105,6 +115,8 @@ export function compare(root) {
     expected,
     badged,
     rows,
+    backendOnlyFormats: [...formats].filter((format) => !frontendFormats.has(format)).sort(),
+    frontendOnlyFormats: [...frontendFormats].filter((format) => !formats.has(format)).sort(),
     badgeMissing: expected.filter((label) => !badgedSet.has(label)),
     badgeStale: badged.filter((label) => !installable.has(label)),
     badgeDuplicates: badged.filter((label, index) => badged.indexOf(label) !== index),
@@ -132,6 +144,11 @@ if (isMain) {
   }
 
   const problems = [];
+  if (result.backendOnlyFormats.length || result.frontendOnlyFormats.length) {
+    problems.push(
+      `frontend/backend IMPLEMENTED_FORMATS differ — backend only: [${result.backendOnlyFormats.join(", ")}], frontend only: [${result.frontendOnlyFormats.join(", ")}]`,
+    );
+  }
   if (result.badgeMissing.length) {
     problems.push(`landing badge missing: ${result.badgeMissing.join(", ")}`);
   }
