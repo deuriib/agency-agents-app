@@ -37,7 +37,8 @@ update issues: #23 (stable/beta channels) and #24 (auto-install locale keys).
   the key).
 - ✅ **Tests**: 53 script tests (37 manifest + 13 verifier + 3 existing), 16 new Rust
   tests, `cargo fmt`/`clippy`/`test`, `svelte-check` 0, production frontend build.
-- ✅ PR #38 opened; all 8 CI checks green at the time of writing.
+- ✅ PR #38 merged as `a453bd2` (2026-11-02); all 8 CI checks were green before merge.
+  `release-please` then opened PR #39 (`chore(main): release 0.8.0`).
 
 ## Not yet verified (honest status)
 - The real end-to-end install requires the signing secrets and a signed, published

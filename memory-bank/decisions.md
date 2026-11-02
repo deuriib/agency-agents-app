@@ -305,7 +305,7 @@ satisfies because the runner image ships LLVM; and a from-scratch Windows build 
 
 ### 2026-11-02: The updater manifest is a release asset; channels select a release stream
 
-**Status**: Proposed (PR #38). **Context**: the in-app updater could never install
+**Status**: Approved (merged as `a453bd2`, PR #38, 2026-11-02). **Context**: the in-app updater could never install
 anything. No release ever carried `latest.json` (404), Linux/Windows explicitly disabled
 updater artifacts, the fallback host served a v0.3.2 manifest for the upstream owner, and
 releases stayed drafts. The version decision also used a different source (GitHub

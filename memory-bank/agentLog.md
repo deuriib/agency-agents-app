@@ -782,3 +782,9 @@ check and the key-id-checked secret upload.
 Evidence: 53 script tests, 16 new Rust tests, fmt/clippy/test, svelte-check 0, frontend
 build, actionlint, 8/8 CI checks green. Not verified: the real install needs the signing
 secrets and a published signed release. Task doc: `tasks/2026-11/261102_updater-pipeline.md`.
+
+**Merge (2026-11-02)**: PR #38 squash-merged as `a453bd2`. `release-please` immediately
+opened PR #39 (`chore(main): release 0.8.0`). `gh secret list` is still empty, so #39 must
+not be merged until `mise run set-updater-secrets` has run on the Mac — the Linux/Windows
+preflight fails without the key. The `v0.7.1` draft remains stranded and should be deleted
+after 0.8.0 is published.

@@ -2,12 +2,13 @@
 
 ## Current State
 Post-v0.6.0. The renderer mirrors upstream's Antigravity role policy *and* its per-role
-tool declarations. PR #38 (open, CI green) makes the in-app updater installable
-end-to-end and adds stable/beta channels.
+tool declarations. PR #38 is merged (`a453bd2`): the in-app updater is installable
+end-to-end and stable/beta channels are live in code. `release-please` opened PR #39
+(`0.8.0`), currently blocked on the signing secrets.
 
 ## Goals
 - [ ] Confirm Antigravity runtime semantics for the role flags (issue #27).
-- [ ] Add the updater signing secrets and cut the first release with the new pipeline.
+- [ ] Set the updater signing secrets, merge PR #39, and publish/verify 0.8.0.
 
 ## Recent Achievements
 - Fixed the in-app updater and closed #23/#24 (PR #38): the release pipeline now
