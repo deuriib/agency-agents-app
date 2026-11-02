@@ -1,6 +1,9 @@
 ## Unreleased
 
-> Staging file. Rename to `docs/release-notes/<version>.md` when the next version is cut.
+> Optional narrative notes for the next release. Rename to
+> `docs/release-notes/<version>.md` before the release-please PR for that
+> version merges; the release workflow appends it below the generated
+> changelog. Commits remain the itemized source of truth.
 
 ### Highlights
 

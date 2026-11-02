@@ -20,6 +20,19 @@ Prerequisites:
 - Xcode Command Line Tools on macOS
 - Full Xcode only if you regenerate the macOS Liquid Glass icon assets
 
+The repo ships `.mise.toml` + `mise.lock`. If you use
+[mise](https://mise.jdx.dev/), it installs the pinned toolchain and exposes the
+same checks CI runs:
+
+```sh
+mise install       # node + rust from mise.lock
+mise run setup     # npm ci
+mise run dev       # tauri dev with hot reload
+mise run ci        # fmt, clippy, rust tests, svelte-check, frontend build
+```
+
+The manual loop below works with any toolchain manager.
+
 Loop:
 
 ```sh
@@ -179,10 +192,17 @@ Common local checks:
 
 ```sh
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
-cargo test --manifest-path src-tauri/Cargo.toml --lib
+cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --lib --tests
 npm run check
 npm run build
 ```
+
+These are exactly the jobs in `.github/workflows/pr-check.yml`; a red PR
+check should reproduce locally with the same commands. `mise run ci` runs the
+whole set in one go. The Rust jobs install the Tauri Linux prerequisites
+(`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
+`librsvg2-dev`, `patchelf`, `libssl-dev`).
 
 Phase C batch:
 
@@ -206,6 +226,10 @@ cargo test --manifest-path src-tauri/Cargo.toml upstream_convert_sh_is_byte_iden
 - Avoid new dependencies unless they clearly earn their weight.
 
 ## PR Guidance
+
+PR titles must follow [Conventional Commits](https://www.conventionalcommits.org/)
+(`feat:`, `fix:`, `docs:`, `ci:`, …). They are the input release-please parses
+to build `CHANGELOG.md` and decide the next version, and CI validates them.
 
 Include:
 
@@ -233,6 +257,43 @@ Discuss first:
 - multi-file renderer support
 - signing, updater, or release pipeline changes
 - telemetry, accounts, or sync features
+
+## Releases
+
+Versioning is automatic. Do not bump versions by hand and do not tag releases
+manually.
+
+1. Land changes on `main` with Conventional Commit messages.
+2. `release-please` keeps an open `chore: release X.Y.Z` PR that accumulates the
+   changelog and bumps `package.json`, `package-lock.json`,
+   `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
+   `src-tauri/Cargo.lock` is derived — the next cargo command refreshes the
+   local package entry.
+3. Merge that PR when the release should ship. release-please creates the
+   `vX.Y.Z` tag and a **draft** GitHub Release whose body is the generated
+   changelog.
+4. The same workflow builds Linux (`.deb`, `.rpm`, `.AppImage`) and Windows
+   (x64 + arm64 NSIS) and attaches them to the draft.
+5. Build and notarize macOS locally with `scripts/release.sh`, attach the DMGs
+   and `latest.json`, then publish the draft.
+
+### Narrative release notes
+
+`docs/release-notes/<version>.md` is optional. When the file exists at release
+time it is appended below the generated changelog in the release body. Use it
+for the "why this release matters" narrative; use commits for the itemized
+list. `docs/release-notes/unreleased.md` is a scratchpad, not a merge gate.
+
+### Pre-1.0 versioning
+
+Below `1.0.0`, breaking changes bump the minor version (`bump-minor-pre-major`),
+so a breaking `feat!` moves `0.6.0` → `0.7.0`, not `1.0.0`. Keep the major bump
+for the release that actually declares 1.0.
+
+### Manual fallback
+
+`scripts/bump-version.mjs <version>` still updates the five version manifests in
+lockstep if automation is unavailable. It is not part of the normal flow.
 
 ## Code Of Conduct
 
