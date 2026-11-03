@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.8.4](https://github.com/deuriib/agency-agents-app/compare/v0.8.3...v0.8.4) (2026-11-03)
+
+
+### Bug Fixes
+
+* **catalog:** carry strategy/ and divisions.json in snapshot provisioning ([#59](https://github.com/deuriib/agency-agents-app/issues/59)) ([3355730](https://github.com/deuriib/agency-agents-app/commit/3355730f5b10629cfabd355d6063e34242e42950))
+
 ## [0.8.3](https://github.com/deuriib/agency-agents-app/compare/v0.8.2...v0.8.3) (2026-11-02)
 
 
