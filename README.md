@@ -161,6 +161,8 @@ The catalog comes from `agency-agents`, either as:
 - a managed local clone at `~/.agency-agents`
 - a user-selected clone, such as `/Users/michael/Software/AgentLand/agency-agents`
 
+A catalog carries two kinds of content: the agent personas the app indexes (`<division>/<slug>.md`) and the repo-level content it reads directly — `divisions.json` (division metadata) and `strategy/runbooks.json` (the NEXUS scenario runbooks that power the Runbooks pillar). Snapshot provisioning extracts both; a clone or snapshot that predates `strategy/` shows Runbooks empty until the catalog is refreshed.
+
 Rendering is native Rust, deterministic, and tested against the upstream `scripts/convert.sh` outputs for the supported transform tools. The app does not shell out to converter scripts at runtime.
 
 Important implementation areas:

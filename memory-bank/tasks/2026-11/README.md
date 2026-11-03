@@ -11,6 +11,14 @@ end-to-end and stable/beta channels are live in code. `release-please` opened PR
 - [ ] Set the updater signing secrets, merge PR #39, and publish/verify 0.8.0.
 
 ## Recent Achievements
+- Fixed #58 (Runbooks never populated by app-provisioned catalogs): snapshot
+  provisioning now discovers divisions from `divisions.json` instead of the
+  removed `scripts/convert.sh`, and extracts `strategy/`, `divisions.json` and
+  `scripts/` verbatim instead of an allow-list of division dirs. `provision_managed`
+  repairs a stale division-only root, and a broken manifest now surfaces an error
+  instead of a misleading "sync to unlock". Real-tarball probe: 18 divisions,
+  298 agents, 17 runbooks. See
+  [261102_runbooks-snapshot-provisioning.md](./261102_runbooks-snapshot-provisioning.md).
 - Fixed the in-app updater and closed #23/#24 (PR #38): the release pipeline now
   publishes signed `latest.json` manifests, Linux/Windows updater artifacts are signed,
   the Linux tarball is regenerated after the Wayland repack, stable/beta channels are

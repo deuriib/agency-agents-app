@@ -11,13 +11,16 @@
    *  • Copy activation prompt → a prompt synthesised from the runbook (mode +
    *    roster), mirroring NEXUS's own activation format.
    *
-   * `strategy/` only ships in a synced catalog, so an empty manifest shows a
-   * "sync to unlock" state, not an error.
+   *  An empty manifest is the expected "catalog ships no strategy/" state (the
+   *  offline bundled baseline) → "sync to unlock". A manifest that exists but
+   *  fails to read/parse is a real error → its message + retry, never a
+   *  misleading sync CTA (#58).
    */
   import { errorText } from "$lib/types";
   import { onMount } from "svelte";
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import RocketIcon from "@lucide/svelte/icons/rocket";
+  import TriangleAlertIcon from "@lucide/svelte/icons/triangle-alert";
   import DownloadIcon from "@lucide/svelte/icons/download";
   import CopyIcon from "@lucide/svelte/icons/copy";
   import InstallModal from "./InstallModal.svelte";
@@ -112,6 +115,14 @@
   <div class="rbv-scroll">
     {#if !runbooks.loaded || runbooks.loading}
       <p class="rbv-status">{i18n.t("common.loading")}</p>
+    {:else if runbooks.error}
+      <EmptyState title={i18n.t("runbooks.loadFailedTitle")}>
+        {#snippet icon()}<TriangleAlertIcon size={44} />{/snippet}
+        {i18n.t("runbooks.loadFailed", { error: runbooks.error })}
+        {#snippet cta()}
+          <button class="link" onclick={() => runbooks.load()}>{i18n.t("runbooks.retry")}</button>
+        {/snippet}
+      </EmptyState>
     {:else if runbooks.list.length === 0}
       <EmptyState title={i18n.t("runbooks.needSyncTitle")}>
         {#snippet icon()}<RocketIcon size={44} />{/snippet}
