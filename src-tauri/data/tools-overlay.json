@@ -2,23 +2,35 @@
   "_note": "The ONLY place this app may disagree with vendor/agency-agents/tools.json. scripts/sync-vendor.mjs merges these fields into the generated src-tauri/data/tools.json; a field that duplicates upstream fails the build (dead override), an unknown field fails the build (typo), and a test names every entry. Keep each `_why` next to its value: the reason is part of the contract. Paths are relative to $HOME, exactly like the rest of `detect.dirs`.",
   "overrides": {
     "gemini-cli": {
-      "detectDirs": [".gemini"],
+      "detectDirs": [
+        ".gemini"
+      ],
       "_why": "Upstream lists `.gemini/agents`, which is where Gemini CLI READS agents. Detection has to fire for a user who has the CLI but no agents directory yet, so the app tests the CLI's home (`.gemini`). `agentsDir` still points at the real read path."
     },
     "antigravity": {
-      "detectDirs": [".gemini/antigravity-cli", ".gemini/antigravity-ide"],
-      "_why": "Upstream lists the two agent DESTINATION dirs (`.gemini/config/agents`, `.agents/agents`), which only exist after someone installs agents. Detection must recognise the installed surfaces themselves — the CLI and the IDE — and the two can coexist, so both are listed."
+      "detectDirs": [
+        ".gemini/antigravity",
+        ".gemini/antigravity-cli",
+        ".gemini/antigravity-ide"
+      ],
+      "_why": "Upstream lists the two agent DESTINATION dirs (`.gemini/config/agents`, `.agents/agents`), which only exist after someone installs agents. Detection must recognise the three Antigravity surfaces themselves \u2014 the App (`.gemini/antigravity`), the CLI and the IDE \u2014 and they can coexist, so all three are listed. `agentsDir` still points at the real read path."
     },
     "kimi": {
-      "detectDirs": [".config/kimi"],
+      "detectDirs": [
+        ".config/kimi"
+      ],
       "_why": "Upstream declares no detection roots at all for Kimi. The app can still recognise the CLI's config home, which is what the Tools view needs to report it as present."
     },
     "pi-agent": {
-      "detectDirs": [".pi"],
+      "detectDirs": [
+        ".pi"
+      ],
       "_why": "Upstream lists `.pi/agent/agents`, the agent read path. Detection uses the CLI home (`.pi`) so a fresh install with no agents directory is still recognised."
     },
     "oh-my-pi": {
-      "detectDirs": [".omp"],
+      "detectDirs": [
+        ".omp"
+      ],
       "_why": "Upstream lists `.omp/agent/agents`, the agent read path. Detection uses the CLI home (`.omp`) so a fresh install with no agents directory is still recognised."
     }
   }
