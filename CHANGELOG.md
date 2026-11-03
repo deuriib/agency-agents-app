@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.11.0](https://github.com/deuriib/agency-agents-app/compare/v0.10.0...v0.11.0) (2026-11-03)
+
+
+### Features
+
+* **rules:** compile multi-line frontmatter as block scalars ([#88](https://github.com/deuriib/agency-agents-app/issues/88)) ([d63c7bb](https://github.com/deuriib/agency-agents-app/commit/d63c7bb190d997c087939ffa18482b592ce36aab))
+
 ## [0.10.0](https://github.com/deuriib/agency-agents-app/compare/v0.9.3...v0.10.0) (2026-11-03)
 
 
