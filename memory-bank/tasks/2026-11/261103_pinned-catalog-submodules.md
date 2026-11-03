@@ -9,7 +9,8 @@ impossible to drift silently.
 
 ## Outcome
 
-- ✅ `vendor/agency-agents` pinned to **v1.6.2**, `vendor/agency-rules` to **v0.9.0**
+- ✅ `vendor/agency-agents` pinned to **v1.6.3** (bumped from v1.6.2 by the follow-up below),
+  `vendor/agency-rules` to **v0.9.0**
   (a tag cut for this work: the app already shipped rule artifacts from unreleased
   commits).
 - ✅ `scripts/sync-vendor.mjs` generates `data/tools.json`, `data/rules-tools.json`,
@@ -18,14 +19,14 @@ impossible to drift silently.
 - ✅ Drift reconciled: five `detect.dirs` divergences are now an explicit, reasoned
   overlay (`data/tools-overlay.json`); `data/agency-categories.json` is deleted and the
   Rust floor embeds the catalog's own `divisions.json`.
-- ✅ Baseline refreshed from v1.6.2: 283 → 334 files (297 agents indexed). Seeding is now
-  recursive, so nested divisions (`game-development/unity/…`) survive a first run.
+- ✅ Baseline refreshed: 283 → 334 files, **298 agents indexed**. Seeding is now recursive,
+  so nested divisions (`game-development/unity/…`) survive a first run.
 - ✅ Fail fast: `build.rs` stops before `tauri_build` with the submodule init command.
 - ✅ All 12 `actions/checkout` sites fetch submodules; parity roots default to `vendor/`.
 - ✅ Rust 589 tests, script tests 102, `svelte-check` and the production build green.
-- ⚠️ Pinning surfaced an upstream defect: `finance/finance-profit-first-strategist.md`
-  has frontmatter that is invalid YAML, so 297 of 298 files index. Fix proposed in
-  `deuriib/agency-agents#47`; the corpus test names it until the bump lands.
+- ✅ Pinning surfaced an upstream defect: `finance/finance-profit-first-strategist.md`
+  shipped frontmatter that is invalid YAML, so 297 of 298 files indexed. Fixed upstream
+  (`deuriib/agency-agents#47` → v1.6.3); the pin now indexes all 298.
 - ⚠️ v1.6.2 predates the catalog's move to `python -m agency_agents`, so the bash parity
   test reports "skipping" instead of proving bytes. Manifest-based oracle: #76.
 
@@ -73,6 +74,7 @@ impossible to drift silently.
 ## Follow-ups
 
 - #76 — replace the bash parity oracle with `convert-outputs.sha256`.
-- `deuriib/agency-agents#47` — quote the Profit First description (blocked: the repo's
-  required check `ci/required` is not produced for branch PRs, so no PR can merge).
+- `deuriib/agency-agents#47` — merged; released as v1.6.3 and pinned here. The repo's
+  `ci/required` check is not produced for a new branch until a workflow run is
+  dispatched, which is what unblocked it.
 - #68 now becomes an upstream change in `agency-rules` plus a `mise run sync-vendor`.

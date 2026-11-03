@@ -19,7 +19,7 @@ notarized macOS build are missing, so the updater cannot serve it yet.
   legacy `{{slug}}` form, and a v0.9 ledger row still uninstalls through a read-time alias.
   See [261103_rule-vocabulary.md](./261103_rule-vocabulary.md).
 - Pinned the catalog and rule contracts as git submodules (issue #72): `vendor/agency-agents`
-  at v1.6.2 and `vendor/agency-rules` at v0.9.0, with `scripts/sync-vendor.mjs` generating
+  at v1.6.3 and `vendor/agency-rules` at v0.10.0, with `scripts/sync-vendor.mjs` generating
   every embedded contract and baseline and `--check` failing CI on any staleness. The five
   `detect.dirs` divergences became a reasoned overlay, `agency-categories.json` was deleted
   in favour of the catalog's own `divisions.json`, seeding is recursive, and a submodule-less

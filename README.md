@@ -187,7 +187,7 @@ The catalog comes from `agency-agents`, either as:
 - a user-selected clone, such as `/Users/michael/Software/AgentLand/agency-agents`
 
 The bundled baseline is generated from the `vendor/agency-agents` submodule,
-pinned to **agency-agents v1.6.2**; the Rules baseline is generated from
+pinned to **agency-agents v1.6.3**; the Rules baseline is generated from
 **agency-rules v0.9.0** (`vendor/agency-rules`). Bumping either is a normal
 commit — `git -C vendor/agency-agents checkout vX.Y.Z` followed by
 `mise run sync-vendor` — and CI fails when the generated artifacts do not match

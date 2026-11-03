@@ -14,7 +14,7 @@ unpinned, and the parity checks needed a sibling checkout via environment variab
 **Decision.**
 
 1. **Git submodules pinned to release tags**, under `vendor/` so the app's own `src/`,
-   `docs/` and `scripts/` keep their meaning: `vendor/agency-agents` (v1.6.2) and
+   `docs/` and `scripts/` keep their meaning: `vendor/agency-agents` (v1.6.3) and
    `vendor/agency-rules` (v0.9.0). The submodule pointer is the catalog version.
 2. **One generator, one verifier.** `scripts/sync-vendor.mjs` derives every embedded
    artifact from the checkouts; `--check` (CI job `vendor`, `mise run check-vendor`)
@@ -53,8 +53,9 @@ unpinned, and the parity checks needed a sibling checkout via environment variab
 message and CONTRIBUTING), GitHub source archives cannot be built (stated in the
 README), and a catalog fix reaches users only when the app re-releases or the user
 refreshes. Pinning surfaced a real upstream defect: `finance-profit-first-strategist.md`
-ships frontmatter that is invalid YAML, so the pinned tag indexes 297 agents from 298
-files (fixed upstream in `deuriib/agency-agents#47`). The pinned tag also predates the
+shipped frontmatter that is invalid YAML. It was fixed upstream
+(`deuriib/agency-agents#47`, released as v1.6.3) and the pin now indexes all 298 files.
+The pinned tag also predates the
 catalog's move from `scripts/convert.sh` to `python -m agency_agents` +
 `convert-outputs.sha256`, so the bash parity test now reports "skipping"; a
 manifest-based oracle replaces it in #76.
