@@ -13,6 +13,11 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Added the frontend test runner (issue #62): Vitest + `@testing-library/svelte` on jsdom,
+  48 tests in 9.5 s, wired into `mise run ci` and PR Check. The Rules derivation moved to
+  `src/lib/rules/derive.ts` so the install-state semantics are testable without a component,
+  and four guards were proven by reverting each fix locally. See
+  [261103_frontend-test-runner.md](./261103_frontend-test-runner.md).
 - Unified the agent/rule vocabulary (issue #68): harness ids are now the agent tool ids
   (`piAgent`, `ohMyPi`) and every destination uses `{slug}`, in `agency-rules` v0.10.0 and
   in this repo. `tool_for_harness` collapsed to an existence check, the compiler refuses the

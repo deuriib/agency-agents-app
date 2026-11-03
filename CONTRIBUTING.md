@@ -29,7 +29,7 @@ mise install       # node + rust from mise.lock
 mise run submodules # the pinned catalog + rules checkouts (vendor/)
 mise run setup     # npm ci
 mise run dev       # tauri dev with hot reload
-mise run ci        # vendor check, fmt, clippy, rust + script tests, svelte-check, build
+mise run ci        # vendor check, fmt, clippy, rust + script + UI tests, svelte-check, build
 ```
 
 The manual loop below works with any toolchain manager.
@@ -250,6 +250,7 @@ Common local checks:
 cargo fmt --check --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --lib --tests
+npm run test        # frontend unit + component tests (Vitest)
 npm run check
 npm run build
 ```
@@ -265,6 +266,33 @@ Phase C batch:
 ```sh
 npm run build:phase-c
 ```
+
+Frontend tests:
+
+```sh
+npm run test        # one run — what CI executes
+npm run test:watch  # watch mode while you work
+```
+
+The suite is Vitest + `@testing-library/svelte` on jsdom. Tests live beside the
+module they cover (`src/lib/rules/derive.test.ts`,
+`src/lib/components/Rules.test.ts`) and shared factories in
+`src/lib/test/fixtures.ts`.
+
+Two rules keep it fast and honest:
+
+- **Stub the IPC boundary, never the module under test.** `invoke` is the app's
+  single door to the backend, so `vi.mock("@tauri-apps/api/core")` is enough to
+  drive every state without a Tauri runtime, a corpus, or a filesystem. No
+  network, no real window.
+- **Derive, don't copy.** Pure semantics (install state per scope/root, the
+  disabled-install precedence, the list states) live in `src/lib/rules/derive.ts`
+  and are tested directly; components are tested for what they render from that
+  state. If a rule matters, it belongs in `derive.ts` where an assertion can
+  reach it.
+
+The runner is configured in `vitest.config.ts` (separate from `vite.config.js`
+so a unit run never needs a SvelteKit build).
 
 Renderer parity (defaults to the pinned `vendor/agency-agents`; set
 `AGENCY_AGENTS_PARITY_ROOT` to point at a different checkout):

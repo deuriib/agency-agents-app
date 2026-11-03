@@ -26,6 +26,7 @@
   import Pill from "./Pill.svelte";
   import RuleDetail from "./RuleDetail.svelte";
   import { harnessLabel, installableHarnesses } from "$lib/data/ruleRegistry";
+  import { ruleListState } from "$lib/rules/derive";
   import { i18n } from "$lib/stores/i18n.svelte";
   import { rules } from "$lib/stores/rules.svelte";
   import { toast } from "$lib/stores/toast.svelte";
@@ -39,6 +40,17 @@
 
   const harnesses = installableHarnesses();
   const visible = $derived(rules.filtered());
+  /** The mutually exclusive list states, in check order. */
+  const listState = $derived(
+    ruleListState({
+      loaded: rules.loaded,
+      loading: rules.loading,
+      error: rules.error,
+      listLength: rules.list.length,
+      status: rules.status,
+      visibleLength: visible.length,
+    }),
+  );
   const categories = $derived(rules.categories());
   const invalidCount = $derived(rules.invalidCount());
   const selected = $derived(
@@ -146,9 +158,9 @@
 
   <div class="rv-main">
     <div class="rv-list-pane" role="region" aria-label={i18n.t("rules.list.regionLabel")}>
-      {#if !rules.loaded || rules.loading}
+      {#if listState.kind === "loading"}
         <div class="rv-state"><LoadingState rows={7} /></div>
-      {:else if rules.error !== null}
+      {:else if listState.kind === "error"}
         <div class="rv-state">
           <!-- Load failure is an `alert`, not a `status` (ux §6). `EmptyState`
                hardcodes `role="status"`, and loosening that for every caller
@@ -157,15 +169,15 @@
           <div class="rv-alert" role="alert">
             <span class="rv-alert-ico" aria-hidden="true"><TriangleAlertIcon size={22} /></span>
             <h2 class="rv-alert-title">{i18n.t("rules.loadFailedTitle")}</h2>
-            <p class="rv-alert-body">{i18n.t("rules.loadFailed", { error: rules.error })}</p>
+            <p class="rv-alert-body">{i18n.t("rules.loadFailed", { error: listState.message })}</p>
             <button type="button" class="rv-link" onclick={() => rules.load()}>
               {i18n.t("rules.retry")}
             </button>
           </div>
         </div>
-      {:else if rules.list.length === 0}
+      {:else if listState.kind === "notSynced" || listState.kind === "noRules"}
         <div class="rv-state">
-          {#if rules.status?.emptyReason === "notSynced"}
+          {#if listState.kind === "notSynced"}
             <EmptyState title={i18n.t("rules.empty.notSyncedTitle")}>
               {#snippet icon()}<DownloadIcon size={44} />{/snippet}
               {i18n.t("rules.empty.notSynced")}
@@ -187,7 +199,7 @@
             </EmptyState>
           {/if}
         </div>
-      {:else if visible.length === 0}
+      {:else if listState.kind === "filteredToZero"}
         <div class="rv-filtered">
           <p>{i18n.t("rules.filtered.none")}</p>
           <button type="button" class="rv-link" onclick={() => rules.clearFilters()}>

@@ -36,6 +36,18 @@ import type {
   Scope,
 } from "$lib/types";
 import { errorText } from "$lib/types";
+import {
+  effectiveRoot,
+  filterRules,
+  filtersActive,
+  installFor as installForRow,
+  installedHarnesses as installedHarnessesFor,
+  installsFor as installsForRow,
+  invalidCount as invalidCountOf,
+  isRuleInstall,
+  previewEntry as previewEntryOf,
+  ruleCategories,
+} from "$lib/rules/derive";
 
 /** In-memory preview cache. Never persisted — a stale dest is worse than a refetch. */
 const previewCache = new Map<string, RulePreview>();
@@ -54,34 +66,9 @@ function busyKey(
   return `${slug}\u0000${harness}\u0000${scope}\u0000${projectPath ?? ""}`;
 }
 
-/**
- * The root a `(scope, projectPath)` pair actually writes through.
- *
- * A project scope without a picked root resolves to `null` — which is also the
- * user-scope ledger key. Every consumer must therefore treat
- * `scope === "project" && root === null` as "no state yet", never as "user
- * scope": collapsing the two is what makes the UI offer an Uninstall that
- * deletes the user-global install (and its ledger row).
- */
-function effectiveRoot(scope: Scope, projectPath: string | null): string | null {
-  return scope === "project" ? projectPath : null;
-}
-
 /** Stale-result guards: only the newest in-flight request may write its result. */
 let bodySeq = 0;
 let previewSeq = 0;
-
-/** The backend always sets `domain: "rule"` on rule rows (ruling C3); narrow it. */
-function isRuleInstall(record: InstallRecord): record is RuleInstall {
-  return record.domain === "rule";
-}
-
-/** Deterministic (code-unit) ordering — matches the Rust `Ord` for ASCII. */
-function byCodeUnit(a: string, b: string): number {
-  if (a < b) return -1;
-  if (a > b) return 1;
-  return 0;
-}
 
 class RulesStore {
   /** Rule summaries from `rules_list` (bodies omitted). Empty until loaded. */
@@ -257,11 +244,7 @@ class RulesStore {
     scope: Scope,
     projectPath: string | null,
   ): RulePreviewEntry | null {
-    const result = this.previewResult;
-    if (result === null || result.slug !== slug) return null;
-    if (result.scope !== scope) return null;
-    if ((result.projectPath ?? null) !== effectiveRoot(scope, projectPath)) return null;
-    return result.harnesses.find((entry) => entry.harness === harness) ?? null;
+    return previewEntryOf(this.previewResult, slug, harness, scope, projectPath);
   }
 
   // ── Install lifecycle ───────────────────────────────────────────────────
@@ -282,17 +265,7 @@ class RulesStore {
     scope: Scope,
     projectPath: string | null,
   ): RuleInstall | null {
-    const root = effectiveRoot(scope, projectPath);
-    if (scope === "project" && root === null) return null;
-    return (
-      this.installations.find(
-        (row) =>
-          row.slug === slug &&
-          row.tool === harness &&
-          row.scope === scope &&
-          (row.projectPath ?? null) === root,
-      ) ?? null
-    );
+    return installForRow(this.installations, slug, harness, scope, projectPath);
   }
 
   /**
@@ -306,19 +279,12 @@ class RulesStore {
    * by path, so the list does not reshuffle between renders.
    */
   installsFor(slug: string): RuleInstall[] {
-    return this.installations
-      .filter((row) => row.slug === slug)
-      .sort((a, b) => {
-        const byTool = byCodeUnit(a.tool, b.tool);
-        if (byTool !== 0) return byTool;
-        if (a.scope !== b.scope) return a.scope === "user" ? -1 : 1;
-        return byCodeUnit(a.projectPath ?? "", b.projectPath ?? "");
-      });
+    return installsForRow(this.installations, slug);
   }
 
   /** Harness ids this rule is installed for, across every scope — the row dots. */
   installedHarnesses(slug: string): Set<string> {
-    return new Set(this.installations.filter((row) => row.slug === slug).map((row) => row.tool));
+    return installedHarnessesFor(this.installations, slug);
   }
 
   /** True while THIS `(rule, harness, scope)` mutation is in flight. */
@@ -411,7 +377,11 @@ class RulesStore {
 
   /** True when any search/filter narrows the list (drives the "clear" affordance). */
   filtersActive(): boolean {
-    return this.query.trim() !== "" || this.harnessFilter !== null || this.categoryFilter !== null;
+    return filtersActive({
+      query: this.query,
+      harnessFilter: this.harnessFilter,
+      categoryFilter: this.categoryFilter,
+    });
   }
 
   /**
@@ -425,34 +395,21 @@ class RulesStore {
    * is what the harness dots in each row already show.
    */
   filtered(): RuleSummary[] {
-    const query = this.query.trim().toLowerCase();
-    return this.list.filter((rule) => {
-      if (
-        this.harnessFilter !== null &&
-        !this.installations.some(
-          (row) => row.slug === rule.slug && row.tool === this.harnessFilter,
-        )
-      ) {
-        return false;
-      }
-      if (this.categoryFilter !== null && rule.category !== this.categoryFilter) return false;
-      if (query === "") return true;
-      return (
-        rule.name.toLowerCase().includes(query) ||
-        rule.description.toLowerCase().includes(query) ||
-        rule.slug.toLowerCase().includes(query)
-      );
+    return filterRules(this.list, this.installations, {
+      query: this.query,
+      harnessFilter: this.harnessFilter,
+      categoryFilter: this.categoryFilter,
     });
   }
 
   /** Categories present in the catalog, sorted deterministically. */
   categories(): string[] {
-    return [...new Set(this.list.map((rule) => rule.category))].sort(byCodeUnit);
+    return ruleCategories(this.list);
   }
 
   /** Rules that failed validation — never hidden, only barred from install. */
   invalidCount(): number {
-    return this.list.filter((rule) => !rule.validation.valid).length;
+    return invalidCountOf(this.list);
   }
 }
 
