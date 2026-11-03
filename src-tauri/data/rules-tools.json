@@ -1,0 +1,92 @@
+{
+  "_note": "Rule harness manifest. The `harnesses` object is a verbatim copy of deuriib/agency-rules tools.json — do not rename keys, do not 'improve' values, do not add app-specific fields. Read by BOTH src-tauri/src/rules/registry.rs (include_str!) and src/lib/data/ruleRegistry.ts (JSON import). A harness is installable iff its `format` appears in data/rule-formats.json. Destinations use {{slug}} (DOUBLE braces) — the agent contract uses {slug}; do not unify them.",
+  "version": 1,
+  "harnesses": {
+    "antigravity": {
+      "id": "antigravity",
+      "label": "Google Antigravity",
+      "format": "md-yaml-trigger",
+      "installKind": "per-rule",
+      "integrationPath": "{{slug}}.md",
+      "detect": { "dirs": [".agents", "~/.gemini"], "files": ["GEMINI.md", "AGENTS.md"] },
+      "dest": {
+        "project": ".agents/rules/{{slug}}.md",
+        "user": "~/.gemini/config/rules/{{slug}}.md"
+      },
+      "frontmatter": {
+        "required": ["trigger"],
+        "map": {
+          "trigger": "always_on|glob|model_decision|manual",
+          "globs": "string",
+          "description": "string"
+        }
+      }
+    },
+    "pi-agent": {
+      "id": "pi-agent",
+      "label": "Pi Coding Agent",
+      "format": "md-rules-dir",
+      "installKind": "per-rule",
+      "integrationPath": "{{slug}}/RULES.md",
+      "detect": { "dirs": [".pi", "~/.pi"] },
+      "dest": {
+        "project": ".pi/rules/{{slug}}/RULES.md",
+        "user": "~/.pi/agent/rules/{{slug}}/RULES.md"
+      },
+      "frontmatter": {
+        "required": ["name", "description"],
+        "map": {
+          "name": "string",
+          "description": "string",
+          "tools": "array<string>"
+        }
+      }
+    },
+    "oh-my-pi": {
+      "id": "oh-my-pi",
+      "label": "oh-my-pi (omp)",
+      "format": "md-or-mdc",
+      "installKind": "per-rule",
+      "integrationPath": "{{slug}}.md",
+      "detect": { "dirs": [".omp", "~/.omp"] },
+      "dest": {
+        "project": ".omp/rules/{{slug}}.md",
+        "user": "~/.omp/agent/rules/{{slug}}.md"
+      },
+      "frontmatter": {
+        "required": ["name", "description"],
+        "map": {
+          "name": "string",
+          "description": "string",
+          "globs": "array<string>|string",
+          "alwaysApply": "boolean"
+        }
+      },
+      "extensions": [".md", ".mdc"]
+    },
+    "opencode": {
+      "id": "opencode",
+      "label": "OpenCode (via opencode-rules)",
+      "format": "md-plugin",
+      "installKind": "per-rule",
+      "integrationPath": "{{slug}}.md",
+      "detect": { "dirs": [".opencode", "~/.config/opencode"] },
+      "dest": {
+        "project": ".opencode/rules/{{slug}}.md",
+        "user": "~/.config/opencode/rules/{{slug}}.md"
+      },
+      "frontmatter": {
+        "required": ["description"],
+        "map": {
+          "description": "string",
+          "globs": "array<string>|string",
+          "match": "\"any\"|\"all\""
+        }
+      },
+      "plugin": {
+        "package": "opencode-rules",
+        "entry": "opencode-rules@latest"
+      }
+    }
+  }
+}

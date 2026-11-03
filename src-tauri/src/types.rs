@@ -343,6 +343,209 @@ pub struct ProjectInfo {
     pub installed_count: u32,
 }
 
+// ---------- Rules — the agency-rules corpus (issue #29) ----------
+//
+// The neutral rule format lives once under `rules/<category>/<name>.md`; the
+// four harness variants are compiled, never authored. These DTOs mirror
+// `src/lib/types.ts`. Shape contract: `docs/rules-integration-architecture.md`
+// §3.
+//
+// W1 (tasks 1-4) lands these ahead of the renderers, corpus and commands that
+// consume them (W2-W6 in the same milestone), so production builds cannot reach
+// them yet. `#[allow(dead_code)]` is scoped to these W1 items and goes away as
+// each consumer lands — same arrangement as `registry::ToolMeta`.
+
+/// A rule harness id, e.g. `"oh-my-pi"`. A plain string (not an enum) for the
+/// same reason [`Tool`] is a string: the set lives in embedded JSON
+/// (`data/rules-tools.json`), so adding a harness is a JSON edit — and, per
+/// spec §5.3, a harness is only *installable* when a renderer exists for its
+/// format.
+#[allow(dead_code)]
+pub type RuleHarness = String;
+
+/// Authored `globs` in the neutral format accepts BOTH shapes (`rules/_schema.json`
+/// uses `oneOf`). Untagged preserves which form was authored: oh-my-pi and
+/// OpenCode re-emit the authored shape, while Antigravity always joins with `,`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum RuleGlobs {
+    One(String),
+    Many(Vec<String>),
+}
+
+/// A fully parsed neutral rule (`rules/<category>/<file>.md`).
+///
+/// `slug` is the frontmatter `name`, never the filename — the corpus proves it
+/// (`rules/base/commit-convention.md` declares `name: commit-conventions`).
+/// `relative_path` is required for the same reason: `rules_get` cannot locate a
+/// slug's file without it.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Rule {
+    /// Frontmatter `name` — the identity, and the `{{slug}}` substituted into
+    /// every destination template.
+    pub slug: String,
+    /// Frontmatter `name` again; equal to `slug` by construction. Kept separate
+    /// because the renderers emit a display name while the index is keyed by
+    /// identity.
+    pub name: String,
+    pub description: String,
+    /// Parent directory name, e.g. `"base"` / `"stacks"`.
+    pub category: String,
+    /// Corpus-relative source path, e.g. `"rules/base/commit-convention.md"`.
+    pub relative_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub globs: Option<RuleGlobs>,
+    /// `Option<bool>`, never `bool`: `alwaysApply: false` must stay
+    /// distinguishable from absent, because the oh-my-pi renderer keys on
+    /// presence, not truthiness.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub always_apply: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    /// `match` is a Rust keyword; the serde rename is mandatory — forgetting it
+    /// silently drops the field and the OpenCode renderer loses output.
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_: Option<String>,
+    #[serde(default)]
+    pub tags: Vec<String>,
+    #[serde(default)]
+    pub tools: Vec<String>,
+    /// Markdown body, already `trim()`-ed exactly as the renderers consume it.
+    pub body: String,
+    /// SHA-256 of the whole file bytes (`render::sha256_hex`).
+    pub source_hash: String,
+    /// SHA-256 of the normalized body — the bytes that get written.
+    pub body_hash: String,
+    pub validation: RuleValidation,
+}
+
+/// One row of `<app_data>/state/rules-index.json`. Carries everything the list
+/// view and every renderer need, so a list render is zero filesystem reads.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleEntry {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    /// See [`Rule::relative_path`] — dropping it makes `rules_get` impossible.
+    pub relative_path: String,
+    pub globs: Option<RuleGlobs>,
+    pub always_apply: Option<bool>,
+    pub trigger: Option<String>,
+    #[serde(rename = "match")]
+    pub match_: Option<String>,
+    pub tags: Vec<String>,
+    pub tools: Vec<String>,
+    pub source_hash: String,
+    pub body_hash: String,
+    /// Invalid rules are RETAINED with their errors so the UI can list them and
+    /// explain why install is refused — filtered out of install, not of list.
+    pub validation: RuleValidation,
+}
+
+/// Pure result of `rules/validate.rs`. `errors` are the schema validator's own
+/// messages, unprefixed and untruncated ("surfaced verbatim", spec §8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleValidation {
+    pub valid: bool,
+    pub errors: Vec<String>,
+}
+
+impl RuleValidation {
+    /// A rule that passed the schema gate. Used by callers that build a `Rule`
+    /// without the schema (tests/fixtures) so they cannot accidentally claim
+    /// `valid` with a non-empty error list.
+    #[allow(dead_code)]
+    pub fn passed() -> Self {
+        Self {
+            valid: true,
+            errors: Vec::new(),
+        }
+    }
+}
+
+// ---------- Rule harness contract (data/rules-tools.json) ----------
+
+/// One harness, as authored in `data/rules-tools.json` — a verbatim copy of
+/// `agency-rules/tools.json`. Mirrors the `registry::ToolMeta` + derived
+/// capabilities pattern: the JSON stores what upstream declares; this app
+/// derives what it can install.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleHarnessMeta {
+    pub id: String,
+    pub label: String,
+    pub format: String,
+    pub install_kind: String,
+    pub integration_path: String,
+    /// Parsed so the file stays verbatim; nothing consumes it in M1.
+    #[serde(default)]
+    pub detect: Option<serde_json::Value>,
+    /// Parsed so the file stays verbatim; the renderers hard-code their field
+    /// sets because byte parity, not this map, is the contract.
+    #[serde(default)]
+    pub frontmatter: Option<serde_json::Value>,
+    /// Parsed so the file stays verbatim (oh-my-pi accepts `.md`/`.mdc`; this
+    /// app emits `.md`, which the destination template already carries).
+    #[serde(default)]
+    pub extensions: Vec<String>,
+    /// Consumed by the OpenCode plugin merge (ruling A6). Never hardcode either
+    /// value in code.
+    #[serde(default)]
+    pub plugin: Option<RulePlugin>,
+    pub dest: RuleHarnessDest,
+}
+
+/// NOTE the shape difference from `registry::Dest`: rule destinations are a
+/// SINGLE optional template per scope, not a `Vec`.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize, Default)]
+pub struct RuleHarnessDest {
+    #[serde(default)]
+    pub user: Option<String>,
+    #[serde(default)]
+    pub project: Option<String>,
+}
+
+/// The `opencode.plugin` block. `entry` is the string written into
+/// `opencode.json`; `package` is the npm package it refers to.
+#[allow(dead_code)]
+#[derive(Debug, Clone, Deserialize)]
+pub struct RulePlugin {
+    pub package: String,
+    pub entry: String,
+}
+
+#[allow(dead_code)]
+impl RuleHarnessMeta {
+    /// Derived, never stored.
+    pub fn supports_user(&self) -> bool {
+        self.dest.user.is_some()
+    }
+
+    /// Derived, never stored.
+    pub fn supports_project(&self) -> bool {
+        self.dest.project.is_some()
+    }
+
+    /// Installable iff a native renderer exists for `format` — i.e. the format
+    /// is listed in `data/rule-formats.json`. Adding a harness with an
+    /// unimplemented format must not make it installable.
+    pub fn installable(&self) -> bool {
+        crate::rules::registry::is_installable_with(
+            &self.format,
+            crate::rules::registry::implemented_formats(),
+        )
+    }
+}
+
 // ---------- Tests ----------
 
 #[cfg(test)]
@@ -446,5 +649,103 @@ mod tests {
                 snake
             );
         }
+    }
+
+    // ---------- Rules (issue #29) ----------
+
+    fn sample_rule() -> Rule {
+        Rule {
+            slug: "typescript".into(),
+            name: "typescript".into(),
+            description: "Mandatory rules for editing TypeScript and TSX files.".into(),
+            category: "stacks".into(),
+            relative_path: "rules/stacks/typescript.md".into(),
+            globs: Some(RuleGlobs::Many(vec!["**/*.ts".into(), "**/*.tsx".into()])),
+            always_apply: Some(false),
+            trigger: Some("glob".into()),
+            match_: Some("any".into()),
+            tags: vec!["language".into()],
+            tools: Vec::new(),
+            body: "# TypeScript Rules".into(),
+            source_hash: "a".repeat(64),
+            body_hash: "b".repeat(64),
+            validation: RuleValidation::passed(),
+        }
+    }
+
+    #[test]
+    fn rule_serializes_camel_case_and_keeps_relative_path() {
+        let v = serde_json::to_value(sample_rule()).unwrap();
+        assert_eq!(v["slug"], "typescript");
+        assert_eq!(v["relativePath"], "rules/stacks/typescript.md");
+        assert_eq!(v["alwaysApply"], false);
+        assert_eq!(v["match"], "any");
+        assert_eq!(v["sourceHash"], "a".repeat(64));
+        assert!(v.get("match_").is_none(), "`match_` must not leak");
+        assert!(v.get("relative_path").is_none());
+        assert!(v.get("always_apply").is_none());
+        assert!(v.get("validation").is_some());
+    }
+
+    /// C7: `Some(false)` and `None` are different rules. Absent must not emit
+    /// the key at all; `false` must emit `false`.
+    #[test]
+    fn rule_distinguishes_absent_from_false_always_apply() {
+        let mut absent = sample_rule();
+        absent.always_apply = None;
+        let v = serde_json::to_value(absent).unwrap();
+        assert!(
+            v.get("alwaysApply").is_none(),
+            "absent alwaysApply must not emit a key, got {:?}",
+            v.get("alwaysApply")
+        );
+
+        let v = serde_json::to_value(sample_rule()).unwrap();
+        assert_eq!(v["alwaysApply"], false);
+    }
+
+    #[test]
+    fn rule_globs_accepts_both_authored_shapes() {
+        let one: Option<RuleGlobs> = serde_json::from_value(serde_json::json!("**/*.py")).unwrap();
+        assert_eq!(one, Some(RuleGlobs::One("**/*.py".into())));
+
+        let many: Option<RuleGlobs> =
+            serde_json::from_value(serde_json::json!(["**/*.ts", "**/*.tsx"])).unwrap();
+        assert_eq!(
+            many,
+            Some(RuleGlobs::Many(vec!["**/*.ts".into(), "**/*.tsx".into()]))
+        );
+    }
+
+    #[test]
+    fn rule_entry_carries_the_source_path_and_validation() {
+        let entry = RuleEntry {
+            slug: "commit-conventions".into(),
+            name: "commit-conventions".into(),
+            description: "Enforce Conventional Commits.".into(),
+            category: "base".into(),
+            relative_path: "rules/base/commit-convention.md".into(),
+            globs: None,
+            always_apply: Some(true),
+            trigger: None,
+            match_: None,
+            tags: Vec::new(),
+            tools: Vec::new(),
+            source_hash: "a".repeat(64),
+            body_hash: "b".repeat(64),
+            validation: RuleValidation {
+                valid: false,
+                errors: vec!["boom".into()],
+            },
+        };
+        let v = serde_json::to_value(&entry).unwrap();
+        assert_eq!(v["relativePath"], "rules/base/commit-convention.md");
+        assert_eq!(v["validation"]["valid"], false);
+        assert_eq!(v["validation"]["errors"][0], "boom");
+        // The index row is tailed by the list view, so an absent optional is an
+        // explicit `null` here (the architecture's `RuleEntry` has no
+        // `skip_serializing_if`), unlike `Rule`.
+        assert!(v["globs"].is_null());
+        assert_eq!(v["match"], serde_json::Value::Null);
     }
 }

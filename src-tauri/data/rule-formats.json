@@ -1,0 +1,9 @@
+{
+  "_note": "The rule render formats this app implements natively. A harness is installable iff its rules-tools.json `format` appears in this list. Read by BOTH src-tauri/src/rules/registry.rs (include_str!) and src/lib/data/ruleRegistry.ts (JSON import) — never restate this list in code.",
+  "formats": [
+    "md-or-mdc",
+    "md-plugin",
+    "md-rules-dir",
+    "md-yaml-trigger"
+  ]
+}

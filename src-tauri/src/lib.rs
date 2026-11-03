@@ -17,6 +17,7 @@ mod github;
 mod install;
 mod registry;
 mod render;
+mod rules;
 mod state;
 mod types;
 mod util;
