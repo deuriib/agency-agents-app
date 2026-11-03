@@ -29,6 +29,7 @@ import Gamepad2 from "@lucide/svelte/icons/gamepad-2";
 import Globe from "@lucide/svelte/icons/globe";
 import GraduationCap from "@lucide/svelte/icons/graduation-cap";
 import HelpCircle from "@lucide/svelte/icons/help-circle";
+import Layers from "@lucide/svelte/icons/layers";
 import Lock from "@lucide/svelte/icons/lock";
 import MessageSquare from "@lucide/svelte/icons/message-square";
 import Music from "@lucide/svelte/icons/music";
@@ -68,6 +69,7 @@ const ICONS: Record<string, Component> = {
   Globe,
   GraduationCap,
   HelpCircle,
+  Layers,
   Lock,
   MessageSquare,
   Music,

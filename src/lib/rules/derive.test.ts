@@ -12,8 +12,11 @@ import {
   needsProjectRoot,
   previewEntry,
   ruleCategories,
+  ruleCategoryTiles,
+  ruleLensCounts,
   ruleListState,
 } from "$lib/rules/derive";
+import { declaredRuleCategories, ruleCategoryMeta } from "$lib/data/ruleCategories";
 import { ruleInstall, rulePreview, ruleStatus, ruleSummary } from "$lib/test/fixtures";
 
 describe("effectiveRoot", () => {
@@ -112,41 +115,48 @@ describe("filterRules", () => {
   const installations = [ruleInstall({ slug: "typescript", tool: "opencode" })];
 
   it("returns everything when no filter is set", () => {
-    expect(filterRules(list, [], { query: "", harnessFilter: null, categoryFilter: null })).toHaveLength(2);
-    expect(filtersActive({ query: "  ", harnessFilter: null, categoryFilter: null })).toBe(false);
+    expect(filterRules(list, [], { query: "", categoryFilter: null, lens: "all" })).toHaveLength(2);
+    expect(filtersActive({ query: "  ", categoryFilter: null, lens: "all" })).toBe(false);
   });
 
   it("matches name, description and slug case-insensitively", () => {
-    const byName = filterRules(list, [], { query: "CODING", harnessFilter: null, categoryFilter: null });
+    const byName = filterRules(list, [], { query: "CODING", categoryFilter: null, lens: "all" });
     expect(byName.map((r) => r.slug)).toEqual(["coding-standards"]);
 
     const byDescription = filterRules(list, [], {
       query: "javascript",
-      harnessFilter: null,
       categoryFilter: null,
+      lens: "all",
     });
     expect(byDescription.map((r) => r.slug)).toEqual(["typescript"]);
 
-    const bySlug = filterRules(list, [], { query: "stacks", harnessFilter: null, categoryFilter: null });
+    const bySlug = filterRules(list, [], { query: "stacks", categoryFilter: null, lens: "all" });
     expect(bySlug.map((r) => r.slug)).toEqual([]);
   });
 
-  it("composes the harness lens (from the ledger) with the category filter", () => {
-    const harnessOnly = filterRules(list, installations, {
+  it("composes the install-state lens with the category filter", () => {
+    const installed = filterRules(list, installations, {
       query: "",
-      harnessFilter: "opencode",
       categoryFilter: null,
+      lens: "installed",
     });
-    expect(harnessOnly.map((r) => r.slug)).toEqual(["typescript"]);
+    expect(installed.map((r) => r.slug)).toEqual(["typescript"]);
+
+    const notInstalled = filterRules(list, installations, {
+      query: "",
+      categoryFilter: null,
+      lens: "notInstalled",
+    });
+    expect(notInstalled.map((r) => r.slug)).toEqual(["coding-standards"]);
 
     const contradictory = filterRules(list, installations, {
       query: "",
-      harnessFilter: "opencode",
       categoryFilter: "base",
+      lens: "installed",
     });
     expect(contradictory).toEqual([]);
 
-    expect(filtersActive({ query: "", harnessFilter: "opencode", categoryFilter: null })).toBe(true);
+    expect(filtersActive({ query: "", categoryFilter: null, lens: "installed" })).toBe(true);
   });
 });
 
@@ -267,5 +277,78 @@ describe("ruleListState", () => {
 
   it("keeps an error visible even when a stale list is still in memory", () => {
     expect(ruleListState({ ...base, error: "boom", listLength: 5 }).kind).toBe("error");
+  });
+});
+
+describe("ruleLensCounts", () => {
+  it("counts installed and not-installed rules over the current list", () => {
+    const list = [
+      ruleSummary({ slug: "a" }),
+      ruleSummary({ slug: "b" }),
+      ruleSummary({ slug: "c" }),
+    ];
+    // Duplicate rows for the same rule (two harnesses) count once.
+    const installations = [
+      ruleInstall({ slug: "a", tool: "piAgent" }),
+      ruleInstall({ slug: "a", tool: "opencode" }),
+    ];
+    expect(ruleLensCounts(list, installations)).toEqual({ all: 3, installed: 1, notInstalled: 2 });
+    expect(ruleLensCounts([], [])).toEqual({ all: 0, installed: 0, notInstalled: 0 });
+  });
+});
+
+describe("ruleCategoryTiles", () => {
+  const meta = (slug: string) => ruleCategoryMeta(slug);
+
+  it("orders by count desc, then label, then slug", () => {
+    const list = [
+      ruleSummary({ category: "stacks" }),
+      ruleSummary({ category: "base" }),
+      ruleSummary({ category: "base" }),
+      ruleSummary({ category: "zeta" }),
+      ruleSummary({ category: "zeta" }),
+    ];
+    const tiles = ruleCategoryTiles(list, meta);
+    expect(tiles.map((t) => `${t.slug}:${t.count}`)).toEqual([
+      "base:2",
+      "zeta:2",
+      "stacks:1",
+    ]);
+  });
+
+  it("never drops a category the metadata does not describe", () => {
+    const tiles = ruleCategoryTiles([ruleSummary({ category: "brand-new" })], meta);
+    expect(tiles).toHaveLength(1);
+    expect(tiles[0]).toMatchObject({
+      slug: "brand-new",
+      label: "Brand New",
+      icon: "Layers",
+      color: "#94A3B8",
+      count: 1,
+    });
+  });
+
+  it("uses the declared metadata for a shipped category", () => {
+    const tiles = ruleCategoryTiles([ruleSummary({ category: "stacks" })], meta);
+    expect(tiles[0].label).toBe("Stacks");
+    expect(tiles[0].icon).toBe("Boxes");
+    expect(tiles[0].description).toBeTruthy();
+  });
+});
+
+describe("rules-categories.json", () => {
+  it("describes every category the bundled corpus ships", () => {
+    // The bundled baseline carries exactly these two categories; a new one must
+    // still render (see the fallback test above), but it should be dressed up.
+    expect(declaredRuleCategories()).toEqual(["base", "stacks"]);
+  });
+
+  it("gives every declared category a label, a bound icon and a hex colour", () => {
+    for (const slug of declaredRuleCategories()) {
+      const row = ruleCategoryMeta(slug);
+      expect(row.label.length).toBeGreaterThan(0);
+      expect(row.icon).toMatch(/^[A-Z][A-Za-z0-9]+$/);
+      expect(row.color).toMatch(/^#[0-9A-Fa-f]{6}$/);
+    }
   });
 });

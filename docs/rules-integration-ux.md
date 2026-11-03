@@ -8,6 +8,13 @@
 > `src/lib/styles/tokens.css`; every structural pattern cites the component it is
 > copied from. If a value is not a token, it is a `calc()` of tokens or a stated
 > structural constant — never a magic number chosen for taste.
+>
+> **Superseded in part by issue #66.** Sections 2.1–2.4 described a second,
+> independent workspace (its own `<h1>`, a CSS grid split with no resizer, and
+> native `<select>` filters). The delivered Rules workspace now renders through
+> the shared `WorkspaceShell` and reuses the Agents grammar; those sections were
+> rewritten to match. The state model, the scope control and the preview contract
+> below are unchanged.
 
 ---
 
@@ -95,86 +102,82 @@ justification the repo's reuse rule requires.
 
 ### 2.1 Shell
 
-`Rules.svelte` mirrors `Runbooks.svelte:201-205` exactly so the app reads as one
-product:
+`Rules.svelte` renders through `WorkspaceShell.svelte`, the same component
+`AgentsWorkspace.svelte` uses (issue #66). The shell owns the geometry and the
+chrome; a section owns only its content:
 
-```css
-.rv { display: flex; flex-direction: column; height: 100%; min-height: 0; }
-.rv-head { flex: none; padding: var(--space-3) var(--space-4);
-           border-bottom: 1px solid var(--color-border); }
-.rv-title { font-size: var(--text-h2); font-weight: var(--fw-semibold);
-            color: var(--color-text-primary); }
-.rv-sub   { font-size: var(--text-body-sm); color: var(--color-text-secondary);
-            margin-top: 1px; }
-```
+| Owned by the shell | Owned by the section |
+| --- | --- |
+| `display: flex` pane row, list pane, head slot, scroll container | the search row, the lens, the rows or the state |
+| the resizable, persisted detail pane (`ui.detailPaneWidth`) | the detail body |
+| the close button, `Escape` to close, the narrow-window scrim | — |
+
+**The section renders no `<h1>`.** The shell's titlebar (`+page.svelte`) prints
+the section name; a second one printed it twice. Sections may render a subtitle,
+which Rules does not need (the search row is self-describing) and Runbooks keeps.
 
 ### 2.2 The two panes
 
 ```css
-.rv-main {
-  flex: 1; min-height: 0;
-  display: grid;
-  grid-template-columns: minmax(280px, 40%) minmax(360px, 1fr);
-  gap: var(--space-3);
-  padding: var(--space-3);
-}
-.rv-list-pane { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
-.rv-list      { flex: 1; min-height: 0; overflow-y: auto; list-style: none;
-                margin: 0; padding: 0; display: flex; flex-direction: column;
-                gap: var(--space-1); }
-.rv-detail {
-  min-width: 0; min-height: 0; overflow-y: auto;
-  padding: var(--space-4);
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-lg);
-  background: var(--color-surface-raised);
-}
+.ws         { display: flex; height: 100%; min-height: 0; }
+.list-pane  { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.lp-head    { flex: none; padding: var(--space-3) var(--space-4);
+              border-bottom: 1px solid var(--color-border);
+              display: flex; flex-direction: column; gap: var(--space-3); }
+.lp-list    { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-2) var(--space-3); }
+.detail-pane { flex: none; max-width: 90vw; display: flex; flex-direction: column;
+               min-height: 0; background: var(--color-surface-raised);
+               border-left: 1px solid var(--color-border); }
 ```
 
-**No resizer in M1.** `AgentsWorkspace.svelte:482,702` has a draggable detail pane,
-but it is driven by `ui.detailPaneWidth` — agent-specific store state. Reusing it
-would mean either sharing that width between two sections (surprising) or adding a
-second field to `ui.svelte.ts` (new nav state for a nice-to-have). M1 uses a CSS
-grid split; adopting `ResizeHandle` + `ui.rulesDetailWidth` is M2 polish. Record
-this in the code comment so nobody reads it as an oversight.
+The detail pane is **resizable and persisted**, exactly like Agents: a
+`ResizeHandle` on its left edge writes `ui.detailPaneWidth` through
+`setDetailPaneWidth`. Under 860px it becomes a fixed overlay with a scrim, and
+the handle hides.
 
 ### 2.3 List row
 
 ```css
 .rv-row {
-  width: 100%; display: flex; align-items: center; gap: var(--space-2);
-  padding: var(--space-2) var(--space-3);
-  border: 1px solid transparent; border-radius: var(--radius-md);
-  background: transparent; text-align: start; cursor: pointer;
-  color: var(--color-text-primary);
+  width: 100%; display: flex; align-items: center; gap: var(--space-3);
+  padding: var(--space-2); border-radius: var(--radius-md);
+  background: transparent; color: inherit; text-align: start; cursor: pointer;
 }
-.rv-row:hover           { background: var(--color-surface-sunken); }
-.rv-row[aria-current="true"] { background: var(--color-brand-subtle);
-                               border-color: var(--color-border); }
-.rv-row-name   { font-size: var(--text-body-sm); font-weight: var(--fw-medium);
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.rv-row-meta   { font-size: var(--text-caption); color: var(--color-text-muted);
-                 overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rv-row:hover { background: var(--color-surface-sunken); }
+.rv-row[aria-current="true"] { background: var(--color-brand-subtle); }
 ```
 
-`text-align: start` (not `left`) so the `fa` locale flips correctly.
+Row anatomy matches an agent row: a tinted category icon, name, a secondary line
+(the rule's description), the invalid badge when validation failed, and one dot
+per installable harness (filled when that rule is installed for it). Rules have no
+emoji and no per-agent deploy pills — the category icon takes the emoji's place.
 
 ### 2.4 Toolbar
 
 ```css
-.rv-toolbar { flex: none; display: flex; align-items: center; gap: var(--space-2);
-              padding: var(--space-3) var(--space-4) var(--space-2); }
-.rv-toolbar :global(.wrap) { flex: 1; min-width: 0; }   /* Input's root, per AgentsWorkspace:571 */
-.rv-filter  { height: 30px; padding: 0 var(--space-2);
-              border: 1px solid var(--color-border); border-radius: var(--radius-md);
-              background: var(--color-surface-raised); color: var(--color-text-secondary);
-              font-size: var(--text-body-sm); max-width: 200px; }
+.rv-search-row { display: flex; align-items: center; gap: var(--space-2); }
+.rv-search-row :global(.wrap) { flex: 1; min-width: 0; }   /* Input's root */
+.seg { display: flex; align-items: center; gap: 2px; padding: 2px;
+       background: var(--color-surface-sunken); border: 1px solid var(--color-border);
+       border-radius: var(--radius-md); }
 ```
 
-Native `<select>`, not a custom popover: it is keyboard- and screen-reader-native,
-supports RTL for free, and needs no dismissal logic. (`AgentsWorkspace` uses a
-custom category menu because it needs icons and counts; the rules filters need
-neither, so the simpler control is the correct one — ENG-13.)
+The row holds, in order: the **category dropdown** (`CategoryMenu.svelte`, the
+same component and the same icon + tint + count options Agents uses), the search
+input, a clear-filters button when anything narrows the list, the result count, and
+a **refresh** button that is always available.
+
+Below it, a **segmented install-state lens** (`All`, `Installed`, `Not installed`)
+with counts, mirroring the Agents `LENSES`. It replaces the M1 "Installed for"
+`<select>`: the neutral rule schema has no per-harness target, so that control could
+only answer from the ledger — which is exactly what the per-rule lens now does. The
+harness dimension stays in the detail pane, where each harness has its own install
+control.
+
+Categories come from the corpus, dressed by `src-tauri/data/rules-categories.json`
+(label, Lucide icon, hex accent, optional description). A category with no entry
+renders with the neutral fallback (`Layers`, grey, title-cased slug) and is never
+dropped.
 
 ### 2.5 Detail typography and the preview block
 

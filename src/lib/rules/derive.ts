@@ -104,28 +104,46 @@ export function installedHarnesses(
   return new Set(installations.filter((row) => row.slug === slug).map((row) => row.tool));
 }
 
+/**
+ * The install-state lens: the Rules equivalent of the Agents workspace's
+ * segmented state filter. `all` is the default; the other two are per RULE
+ * (installed for at least one harness), because a rule's install state is a set
+ * of `(harness, scope, root)` rows, not one destination.
+ */
+export type RuleLens = "all" | "installed" | "notInstalled";
+
 export interface RuleFilters {
   query: string;
-  harnessFilter: string | null;
   categoryFilter: string | null;
+  lens: RuleLens;
 }
 
-/** True when any search/filter narrows the list (drives the "clear" affordance). */
+/** True when any search/filter/lens narrows the list (drives "clear"). */
 export function filtersActive(filters: RuleFilters): boolean {
-  return (
-    filters.query.trim() !== "" ||
-    filters.harnessFilter !== null ||
-    filters.categoryFilter !== null
-  );
+  return filters.query.trim() !== "" || filters.categoryFilter !== null || filters.lens !== "all";
+}
+
+/** Counts per lens over an already category/search-filtered list. */
+export function ruleLensCounts(
+  list: readonly RuleSummary[],
+  installations: readonly RuleInstall[],
+): Record<RuleLens, number> {
+  const installed = new Set(installations.map((row) => row.slug));
+  const counts: Record<RuleLens, number> = {
+    all: list.length,
+    installed: 0,
+    notInstalled: 0,
+  };
+  for (const rule of list) {
+    if (installed.has(rule.slug)) counts.installed++;
+    else counts.notInstalled++;
+  }
+  return counts;
 }
 
 /**
  * Search matches `name`, `description`, and `slug` (case-insensitive); the
- * harness and category filters compose with it (AND).
- *
- * The harness filter answers "which rules are deployed to this harness?" from
- * the ledger — the neutral rule schema carries no per-harness target, so
- * answering it from `rules_preview` would cost one compile per row.
+ * category filter and the install-state lens compose with it (AND).
  */
 export function filterRules(
   list: readonly RuleSummary[],
@@ -133,14 +151,11 @@ export function filterRules(
   filters: RuleFilters,
 ): RuleSummary[] {
   const query = filters.query.trim().toLowerCase();
+  const installed = new Set(installations.map((row) => row.slug));
   return list.filter((rule) => {
-    if (
-      filters.harnessFilter !== null &&
-      !installations.some((row) => row.slug === rule.slug && row.tool === filters.harnessFilter)
-    ) {
-      return false;
-    }
     if (filters.categoryFilter !== null && rule.category !== filters.categoryFilter) return false;
+    if (filters.lens === "installed" && !installed.has(rule.slug)) return false;
+    if (filters.lens === "notInstalled" && installed.has(rule.slug)) return false;
     if (query === "") return true;
     return (
       rule.name.toLowerCase().includes(query) ||
@@ -148,6 +163,41 @@ export function filterRules(
       rule.slug.toLowerCase().includes(query)
     );
   });
+}
+
+/** One row of the category landing: metadata plus how many rules it holds. */
+export interface CategoryTile {
+  slug: string;
+  label: string;
+  icon: string;
+  color: string;
+  description?: string;
+  count: number;
+}
+
+export interface CategoryMeta {
+  label: string;
+  icon: string;
+  color: string;
+  description?: string;
+}
+
+/**
+ * The category landing, ordered deterministically: count descending, then label,
+ * then slug. Counts descend so the biggest surface is first; the label/slug
+ * tiebreak keeps the order stable between loads (the corpus order is not).
+ */
+export function ruleCategoryTiles(
+  list: readonly RuleSummary[],
+  meta: (slug: string) => CategoryMeta,
+): CategoryTile[] {
+  const counts = new Map<string, number>();
+  for (const rule of list) counts.set(rule.category, (counts.get(rule.category) ?? 0) + 1);
+  return [...counts.entries()]
+    .map(([slug, count]) => ({ slug, count, ...meta(slug) }))
+    .sort(
+      (a, b) => b.count - a.count || byCodeUnit(a.label, b.label) || byCodeUnit(a.slug, b.slug),
+    );
 }
 
 /** Categories present in the catalog, sorted deterministically. */

@@ -1,0 +1,17 @@
+{
+  "_note": "Presentation metadata for the rules corpus categories, mirroring src-tauri/data/agency-categories.json (the agent side). `icon` is a Lucide PascalCase name bound in src/lib/util/categoryIcon.ts; `color` is a hex accent. The rules corpus is upstream content and will grow, so a category with no entry here is NOT an error: it renders with the neutral fallback (Layers icon, grey accent, title-cased slug) and is never dropped. Read by src/lib/data/ruleCategories.ts; the Rust side never renders a category label, so it does not read this file (issue #66).",
+  "categories": {
+    "base": {
+      "label": "Base",
+      "icon": "Layers",
+      "color": "#6366F1",
+      "description": "Baseline rules that apply to every project: house style, commits, memory and delegation."
+    },
+    "stacks": {
+      "label": "Stacks",
+      "icon": "Boxes",
+      "color": "#0EA5E9",
+      "description": "Per-language rules that only apply when the stack is in use."
+    }
+  }
+}
