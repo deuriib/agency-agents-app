@@ -45,6 +45,14 @@ description = "Verify Rust formatting — CI job: rust-fmt"
 dir = "src-tauri"
 run = "cargo fmt --check"
 
+[tasks.check-lock]
+description = "Verify Cargo.lock matches Cargo.toml — CI job: cargo-lock"
+run = "cargo metadata --manifest-path src-tauri/Cargo.toml --locked --format-version 1 > /dev/null"
+
+[tasks.sync-lock]
+description = "Rewrite the Cargo.lock package entry after a version bump"
+run = "cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 > /dev/null"
+
 [tasks.clippy]
 description = "Lint the Rust crate, warnings as errors — CI job: rust-lint"
 dir = "src-tauri"
@@ -91,7 +99,7 @@ run = "git submodule update --init --recursive"
 
 [tasks.ci]
 description = "Reproduce the full PR Check workflow locally"
-depends = ["check-vendor", "fmt-check", "clippy", "test-rust", "test-scripts", "test-ui", "check", "build-frontend"]
+depends = ["check-vendor", "fmt-check", "clippy", "check-lock", "test-rust", "test-scripts", "test-ui", "check", "build-frontend"]
 
 # ── Build and run ────────────────────────────────────────────────────────────
 

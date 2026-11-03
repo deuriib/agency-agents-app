@@ -4,6 +4,7 @@
 # dependency build:
 #   - rust-fmt     seconds, no system libraries
 #   - rust-lint    rustfmt + clippy (compiles the crate, needs Tauri libs)
+#   - cargo-lock   Cargo.toml and Cargo.lock agree (`--locked`)
 #   - rust-test    the Rust suite (lib + integration tests)
 #   - frontend     svelte-check + production build
 #   - scripts      the Node script tests (bump-version fallback)
@@ -79,6 +80,24 @@ jobs:
 
       - name: cargo clippy
         run: cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  cargo-lock:
+    name: Cargo.lock matches Cargo.toml
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+
+      # `--locked` fails exactly when the lockfile would have to change, which is
+      # what a release bump without a lock sync looks like. It needs no compile:
+      # `cargo metadata` only reads the manifests.
+      - name: cargo metadata --locked
+        run: cargo metadata --manifest-path src-tauri/Cargo.toml --locked --format-version 1 > /dev/null
 
   rust-test:
     name: Rust tests
