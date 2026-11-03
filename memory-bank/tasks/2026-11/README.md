@@ -13,6 +13,10 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Detected the Antigravity app (issue #69): `.gemini/antigravity` joined the CLI and IDE roots
+  in the tools overlay, so a desktop-app-only user is no longer invisible. Three tests on the
+  real detection path; `agentsDir` deliberately unchanged. See
+  [261103_antigravity-app-detection.md](./261103_antigravity-app-detection.md).
 - Made `src-tauri/Cargo.lock` track the release version (issue #81): a
   `cargo metadata --locked` gate in PR Check and `mise run check-lock`, plus
   `release-lock.yml` committing the sync into the release PR so the tagged commit

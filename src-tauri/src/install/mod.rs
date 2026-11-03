@@ -1673,6 +1673,68 @@ mod tests {
         );
     }
 
+    /// Issue #69: Antigravity ships as three surfaces and each writes its own
+    /// directory. Detection used to test only the CLI and the IDE, so a user who
+    /// runs just the desktop app read as "not installed" — absent from the Tools
+    /// view, the deploy pickers and the roster.
+    #[test]
+    fn antigravity_is_detected_from_any_of_its_three_surfaces() {
+        for surface in [
+            ".gemini/antigravity",
+            ".gemini/antigravity-cli",
+            ".gemini/antigravity-ide",
+        ] {
+            let home = tempfile::tempdir().expect("tempdir");
+            std::fs::create_dir_all(home.path().join(surface)).expect("create the surface");
+            let (detected, agents_dir) = detect("antigravity", home.path());
+            assert!(detected, "{surface} must detect Antigravity");
+            // Detection is not a destination guess: the agent read path is the
+            // same one tools.json declares, whatever surface fired.
+            assert_eq!(
+                agents_dir.as_deref(),
+                Some(
+                    home.path()
+                        .join(".gemini/config/agents")
+                        .to_string_lossy()
+                        .as_ref()
+                ),
+                "{surface} must not change agentsDir"
+            );
+        }
+    }
+
+    /// The three surfaces coexist; a home with all of them is still ONE tool.
+    #[test]
+    fn antigravity_with_every_surface_is_reported_once() {
+        let home = tempfile::tempdir().expect("tempdir");
+        for surface in [
+            ".gemini/antigravity",
+            ".gemini/antigravity-cli",
+            ".gemini/antigravity-ide",
+        ] {
+            std::fs::create_dir_all(home.path().join(surface)).expect("create the surface");
+        }
+        assert!(detect("antigravity", home.path()).0);
+        // Detection is a per-tool boolean, so the roster cannot duplicate it.
+        assert_eq!(
+            crate::registry::all()
+                .iter()
+                .filter(|tool| tool.id == "antigravity")
+                .count(),
+            1,
+            "antigravity must appear exactly once in the registry"
+        );
+    }
+
+    #[test]
+    fn antigravity_without_any_surface_is_not_detected() {
+        let home = tempfile::tempdir().expect("tempdir");
+        std::fs::create_dir_all(home.path().join(".gemini")).expect("unrelated gemini dir");
+        // `.gemini` alone belongs to Gemini CLI and must not imply Antigravity.
+        let (detected, _) = detect("antigravity", home.path());
+        assert!(!detected, "no Antigravity surface means not installed");
+    }
+
     #[tokio::test]
     async fn a_missing_ledger_is_an_empty_ledger() {
         let dir = tempfile::tempdir().expect("tempdir");

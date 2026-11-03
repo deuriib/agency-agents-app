@@ -335,6 +335,7 @@
       },
       "detect": {
         "dirs": [
+          ".gemini/antigravity",
           ".gemini/antigravity-cli",
           ".gemini/antigravity-ide"
         ],
