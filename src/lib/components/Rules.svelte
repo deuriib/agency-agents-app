@@ -97,18 +97,20 @@
       onInput={(value) => rules.setQuery(value)}
     />
 
-    <label class="sr-only" for="rv-filter-harness">{i18n.t("rules.filter.harness")}</label>
-    <select
-      id="rv-filter-harness"
-      class="rv-filter"
-      value={rules.harnessFilter ?? ""}
-      onchange={(e) => rules.setHarnessFilter(e.currentTarget.value || null)}
-    >
-      <option value="">{i18n.t("rules.filter.harnessAll")}</option>
-      {#each harnesses as harness (harness.id)}
-        <option value={harness.id}>{harnessLabel(harness.id)}</option>
-      {/each}
-    </select>
+    <label class="rv-filter-field" for="rv-filter-harness">
+      <span class="rv-filter-label">{i18n.t("rules.filter.harness")}</span>
+      <select
+        id="rv-filter-harness"
+        class="rv-filter"
+        value={rules.harnessFilter ?? ""}
+        onchange={(e) => rules.setHarnessFilter(e.currentTarget.value || null)}
+      >
+        <option value="">{i18n.t("rules.filter.harnessAll")}</option>
+        {#each harnesses as harness (harness.id)}
+          <option value={harness.id}>{harnessLabel(harness.id)}</option>
+        {/each}
+      </select>
+    </label>
 
     <label class="sr-only" for="rv-filter-category">{i18n.t("rules.filter.category")}</label>
     <select
@@ -130,7 +132,7 @@
     {/if}
 
     <span class="rv-count" aria-hidden="true">
-      {i18n.t("rules.count", { count: visible.length })}
+      {i18n.count(visible.length, "rules.count.one", "rules.count")}
     </span>
   </div>
 
@@ -266,6 +268,19 @@
     padding: var(--space-3) var(--space-4) var(--space-2);
   }
   .rv-toolbar :global(.wrap) { flex: 1; min-width: 0; }
+  /* Visible, not sr-only: "Installed for" is the filter's real meaning, and a
+     sighted user on an empty ledger otherwise reads every option as broken. */
+  .rv-filter-field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    min-width: 0;
+  }
+  .rv-filter-label {
+    font-size: var(--text-caption);
+    color: var(--color-text-secondary);
+    white-space: nowrap;
+  }
   .rv-filter {
     height: 30px;
     padding: 0 var(--space-2);

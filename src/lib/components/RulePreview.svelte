@@ -171,7 +171,7 @@
       <button type="button" class="rp-copy" onclick={copyBytes}>
         <CopyIcon size={14} />
         <span>{i18n.t("rules.preview.copy")}</span>
-        <span class="rp-bytes-count">{i18n.t("rules.preview.bytes", { count: byteCount })}</span>
+        <span class="rp-bytes-count">{i18n.count(byteCount, "rules.preview.bytes.one", "rules.preview.bytes")}</span>
       </button>
       <span class="rp-live" role="status" aria-live="polite">
         {copied ? i18n.t("rules.preview.copied") : ""}

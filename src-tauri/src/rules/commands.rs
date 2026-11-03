@@ -456,6 +456,36 @@ pub(crate) struct RemovalReport {
     pub missing: Vec<String>,
 }
 
+/// Re-derive the destinations a ledger row should own, from its inputs.
+///
+/// Split out so `remove_rule_files` can distinguish "this row is forged" (the
+/// paths resolve but do not match) from "the inputs are gone" (the project root
+/// was deleted, the harness was retired) — the second case must still let the
+/// row be reaped.
+fn expected_destinations(
+    record: &InstallRecord,
+    tool_paths: &HashMap<String, String>,
+    os_home: &Path,
+) -> Result<Vec<PathBuf>, AppError> {
+    let project_root = match record.scope {
+        Scope::Project => {
+            let raw = record
+                .project_path
+                .as_deref()
+                .ok_or_else(|| AppError::InvalidArgument {
+                    message: format!(
+                        "ledger row for '{}' claims project scope without a project path",
+                        record.slug
+                    ),
+                })?;
+            Some(require_project_root(Path::new(raw))?.to_path_buf())
+        }
+        Scope::User => None,
+    };
+    let base = harness_base(tool_paths, &record.tool, os_home);
+    rule_dests(&record.tool, &record.slug, &base, project_root.as_deref())
+}
+
 /// Delete exactly the paths a ledger row recorded — no wildcards, no directory
 /// walks, no pruning of the now-empty `{{slug}}/` directory pi-agent leaves
 /// behind (ruling A8; spec §10.7 says "file(s)", not directory).
@@ -477,28 +507,31 @@ pub(crate) async fn remove_rule_files(
 ) -> Result<RemovalReport, AppError> {
     let mut report = RemovalReport::default();
 
-    let project_root = match record.scope {
-        Scope::Project => {
-            let raw = record
-                .project_path
-                .as_deref()
-                .ok_or_else(|| AppError::InvalidArgument {
-                    message: format!(
-                        "ledger row for '{}' claims project scope without a project path",
-                        record.slug
-                    ),
-                })?;
-            Some(require_project_root(Path::new(raw))?.to_path_buf())
-        }
-        Scope::User => None,
-    };
-    let base = harness_base(tool_paths, &record.tool, os_home);
-    let expected = rule_dests(&record.tool, &record.slug, &base, project_root.as_deref())?;
-
     let recorded: Vec<&str> = if record.dests.is_empty() {
         vec![record.dest.as_str()]
     } else {
         record.dests.iter().map(String::as_str).collect()
+    };
+
+    // The expected set can only be re-derived while its inputs still exist: a
+    // deleted project root or a harness retired from the contract makes that
+    // impossible. In that case there is nothing safe to delete — the files are
+    // already out of reach — but the ROW must still be reapable, or the UI
+    // shows an install whose Uninstall button can only ever fail.
+    let expected = match expected_destinations(record, tool_paths, os_home) {
+        Ok(paths) => paths,
+        Err(error) => {
+            tracing::warn!(
+                "rules_uninstall: cannot re-derive destinations for '{}' on {} ({error}); \
+                 deleting nothing and reporting the recorded paths as gone",
+                record.slug,
+                record.tool
+            );
+            report
+                .missing
+                .extend(recorded.iter().map(|path| (*path).to_string()));
+            return Ok(report);
+        }
     };
 
     // Phase 1 — verify every path BEFORE deleting anything. A row that names a
@@ -669,6 +702,12 @@ pub async fn rules_install(
     let status = rules_corpus::read_status(&app_data).await?;
     let backups = app_data.join("backups");
     let project_root = resolve_project_root(project_path.as_deref())?;
+
+    // Prove the ledger can be read AND written before the first byte is
+    // written. The row is saved after the file, so a ledger failure here would
+    // otherwise leave an untracked file on disk that the UI cannot remove (F3),
+    // and a read error would be mistaken for "nothing installed" (F2).
+    install::ensure_ledger_writable(&app).await?;
 
     let record = install_rule(RuleInstallRequest {
         corpus_root: &root,
@@ -1755,5 +1794,72 @@ mod tests {
             "unexpected error: {error}"
         );
         assert!(victim.exists(), "the unrelated file must survive");
+    }
+
+    #[tokio::test]
+    async fn uninstall_reaps_the_row_when_the_project_root_is_gone() {
+        let app_data = TempDir::new().expect("app data");
+        let home = TempDir::new().expect("home");
+        let backups = TempDir::new().expect("backups");
+        let project = TempDir::new().expect("project");
+        let root = corpus_with(app_data.path(), &["typescript.md"]);
+        let entry = entry(&root, "typescript");
+
+        let record = install_rule(request(
+            &root,
+            &entry,
+            "antigravity",
+            Scope::Project,
+            Some(project.path()),
+            home.path(),
+            backups.path(),
+            &empty_paths(),
+        ))
+        .await
+        .expect("install");
+
+        // The user deletes or renames the project directory after installing.
+        drop(project);
+        assert!(!Path::new(record.project_path.as_deref().expect("project path")).exists());
+
+        // Nothing is safe to delete, but the operation must succeed so the
+        // ledger row can be reaped — otherwise the UI shows a permanently
+        // un-uninstallable install.
+        let report = remove_rule_files(&record, &empty_paths(), home.path())
+            .await
+            .expect("a vanished project root must not block the row removal");
+        assert!(report.removed.is_empty());
+        assert_eq!(report.missing, vec![record.dest.clone()]);
+    }
+
+    #[tokio::test]
+    async fn uninstall_reaps_the_row_when_the_harness_was_retired() {
+        let app_data = TempDir::new().expect("app data");
+        let home = TempDir::new().expect("home");
+        let backups = TempDir::new().expect("backups");
+        let root = corpus_with(app_data.path(), &["typescript.md"]);
+        let entry = entry(&root, "typescript");
+
+        let mut record = install_rule(request(
+            &root,
+            &entry,
+            "antigravity",
+            Scope::User,
+            None,
+            home.path(),
+            backups.path(),
+            &empty_paths(),
+        ))
+        .await
+        .expect("install");
+
+        // Simulate a contract that no longer ships this harness.
+        record.tool = "retired-harness".to_string();
+
+        let report = remove_rule_files(&record, &empty_paths(), home.path())
+            .await
+            .expect("a retired harness must not block the row removal");
+        assert!(report.removed.is_empty());
+        assert_eq!(report.missing, vec![record.dest.clone()]);
     }
 }

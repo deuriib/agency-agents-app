@@ -39,11 +39,50 @@ fn ledger_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 }
 
 async fn load_ledger(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
-    let path = ledger_path(app)?;
-    match tokio::fs::read(&path).await {
+    read_ledger_at(&ledger_path(app)?).await
+}
+
+/// Read a ledger file, treating ONLY "absent" as "nothing installed".
+///
+/// This used to map every error to an empty ledger. A permission or I/O error
+/// therefore read as "you have nothing installed", and the next save replaced
+/// the file with just the new row — silently erasing every agent AND rule row.
+/// A corrupt ledger must fail loudly; the user can repair or delete the file.
+async fn read_ledger_at(path: &Path) -> Result<Vec<InstallRecord>, AppError> {
+    match tokio::fs::read(path).await {
         Ok(bytes) => parse_ledger(&bytes),
-        Err(_) => Ok(Vec::new()), // no ledger yet — nothing installed
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(AppError::Io {
+            message: format!("read {}: {e}", path.display()),
+        }),
     }
+}
+
+/// Prove a ledger write can succeed BEFORE the first byte of an install is
+/// written.
+///
+/// Reading catches a corrupt or unreadable ledger; the probe write catches a
+/// read-only or full state directory. Without this, a failed ledger save left a
+/// file on disk with no row — untracked and not removable through the UI.
+pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppError> {
+    let path = ledger_path(app)?;
+    let parent = path.parent().ok_or_else(|| AppError::Internal {
+        message: format!("ledger path has no parent: {}", path.display()),
+    })?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| AppError::Io {
+            message: format!("create state dir {}: {e}", parent.display()),
+        })?;
+    let _ = read_ledger_at(&path).await?;
+    let probe = parent.join(".installs-probe.tmp");
+    tokio::fs::write(&probe, b"")
+        .await
+        .map_err(|e| AppError::Io {
+            message: format!("write {}: {e}", probe.display()),
+        })?;
+    let _ = tokio::fs::remove_file(&probe).await;
+    Ok(())
 }
 
 /// Parse an `installs.json` document and backfill `dests` for rows written
@@ -1551,6 +1590,33 @@ fn agent_loadout_entries(af: Agentfile) -> Vec<LoadoutEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_ledger_read_error_is_not_an_empty_ledger() {
+        // A directory at the ledger path makes `read` fail with something other
+        // than NotFound. That MUST propagate: reading it as "nothing installed"
+        // let the next save erase every agent and rule row.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("installs.json");
+        std::fs::create_dir_all(&path).expect("occupy the ledger path");
+
+        let error = read_ledger_at(&path)
+            .await
+            .expect_err("a read error must not become an empty ledger");
+        assert!(
+            error.to_string().contains("read "),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_ledger_is_an_empty_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let records = read_ledger_at(&dir.path().join("installs.json"))
+            .await
+            .expect("a missing ledger is normal");
+        assert!(records.is_empty());
+    }
 
     #[test]
     fn agentfile_roundtrips() {
