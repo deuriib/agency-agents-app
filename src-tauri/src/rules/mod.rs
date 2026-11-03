@@ -22,4 +22,6 @@ pub mod parse;
 #[allow(dead_code)]
 pub mod registry;
 #[allow(dead_code)]
+pub mod render;
+#[allow(dead_code)]
 pub mod validate;

@@ -1403,12 +1403,13 @@ Ruled 2026-11-03. Source: `docs/rules-integration-architecture.md` and
 | C2 | **`dests` holds rule files only.** `opencode.json` is never a tracked destination. `rules_uninstall` must not be able to delete a user config. The plugin registration is reported as a separate boolean on the install result, never as a deletable path. |
 | C3 | **Rust stays `InstallRecord`; TypeScript aliases it as `RuleInstall`.** One wire type, no parallel shape. |
 | C4 | **Every agent-facing ledger consumer must filter rule rows.** Extend TASK 13 to cover `tools_list` (`install/mod.rs:1118`), `projects_list` (`:1234`), and `loadout_export` / `loadout_import` (`:1281`), not just `installs_reconcile` and `installs_for_agent`. Add an explicit regression test per surface. Rationale: the rule rows put a harness id in `tool`, and `antigravity`/`opencode` are byte-equal between the two id schemes, so an unfiltered consumer double-counts silently. |
-| C5 | **Fixtures are 7 rules × 4 harnesses = 28, and that is correct.** `rules/base/mcp-gateway-protocol.md` has no compiled artifact upstream. The env-gated parity test treats a missing upstream artifact as a **reported finding, not a failure**, and lists the affected rules. File the upstream gap separately; do not fix `agency-rules` in this PR. |
+| C5 | **REVISED — fixtures are 8 rules × 4 harnesses = 32, generated from a fresh reference run.** QA proved the checked-in `agency-rules/integrations/` tree is stale (generated at `1c846f5`; `agentmemory` drifted in `82befdc`/`bde758c`, and `mcp-gateway-protocol` compiles but was never regenerated there). Copying it would fail 4/32 assertions against a *correct* renderer. TASK 10 therefore regenerates the oracle with the sibling CLI into a temp dir and vendors that, recording the source commit and the exact command in the fixture header. The env-gated parity test keeps C5's original rule: a missing upstream artifact is a **reported finding, not a failure**. |
 | C6 | **`RuleEntry` gains `relative_path`.** Slug ≠ filename in the real corpus, so `rules_get` cannot locate a rule without it. |
 | C7 | **`always_apply` is `Option<bool>`.** Encoding it as `bool` collapses `false` and absent, which the oh-my-pi renderer needs to distinguish. |
 | C8 | **A5 is extended: `rules_refresh` is approved.** Without it the `notSynced` empty state has no action. |
 | C9 | **The A7 fallback branch needs a synthetic test.** For the shipped contract every harness resolves, so the branch is otherwise untested. |
 | C10 | **A7 supersedes ambiguity #7.** Harnesses honour `settings.tool_paths`. Record the supersession in the PR body so nobody reverts it. |
+| C11 | **Multi-line values fail closed.** A schema-valid rule can carry a multi-line `description`, and the reference compiler emits a folded block (`>`) plus block-end trailing-space trimming that this emitter does not reproduce. `render::render_blockers` reports those fields, and `rules_preview` / `rules_install` MUST refuse such a rule with the blocker message instead of writing bytes that differ from upstream. Implementing `>` folding is a follow-up; the guard stays until then. |
 
 Two implementation notes accepted as constraints:
 
@@ -1418,6 +1419,8 @@ Two implementation notes accepted as constraints:
 - The `nexus-strategy` fixture is the only one exercising the 80-column fold, so
   the emitter's own unit tests — not the fixtures — are the real gate. TASK 5
   must test folding directly.
+- The reference `integrations/` tree is generated output and is gitignored
+  upstream. Never treat it as a checked-in oracle; regenerate it in TASK 10.
 
 ---
 
