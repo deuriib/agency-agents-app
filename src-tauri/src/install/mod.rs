@@ -68,6 +68,14 @@ pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppErr
     ensure_ledger_writable_at(&ledger_path(app)?).await
 }
 
+/// Size of the payload the ledger preflight writes.
+///
+/// Must stay well above zero: a zero-byte write allocates nothing, succeeds on
+/// a full or quota-limited filesystem, and would report a directory as writable
+/// when the ledger cannot be saved. A real ledger write is at least a few
+/// hundred bytes per row, so this is a realistic lower bound.
+const PROBE_PAYLOAD_BYTES: usize = 4096;
+
 /// Path-based core of [`ensure_ledger_writable`], so the preflight is testable
 /// without an `AppHandle`.
 ///
@@ -84,8 +92,12 @@ pub(crate) async fn ensure_ledger_writable_at(path: &Path) -> Result<(), AppErro
             message: format!("create state dir {}: {e}", parent.display()),
         })?;
     let _ = read_ledger_at(path).await?;
-    let probe = parent.join(".installs-probe.tmp");
-    let payload = vec![b' '; 4096];
+    // Unique per call: a fixed name made two concurrent installs remove each
+    // other's probe and report a bogus "cannot write ledger" failure.
+    static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = parent.join(format!(".installs-probe-{}-{seq}.tmp", std::process::id()));
+    let payload = vec![b' '; PROBE_PAYLOAD_BYTES];
     let written = async {
         tokio::fs::write(&probe, &payload)
             .await
@@ -1652,6 +1664,18 @@ mod tests {
                 .join(".installs-probe.tmp")
                 .exists(),
             "the probe file must be removed"
+        );
+    }
+
+    #[test]
+    fn the_preflight_payload_is_not_empty() {
+        // Pins the fix for F3: an empty probe passes on a full filesystem.
+        // `black_box` keeps this a runtime assertion instead of a constant one
+        // (clippy denies those, and rightly so).
+        let payload = std::hint::black_box(PROBE_PAYLOAD_BYTES);
+        assert!(
+            payload >= 4096,
+            "the preflight must write a realistic payload, not an empty buffer"
         );
     }
 
