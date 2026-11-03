@@ -487,7 +487,7 @@ fn expected_destinations(
 }
 
 /// Delete exactly the paths a ledger row recorded — no wildcards, no directory
-/// walks, no pruning of the now-empty `{{slug}}/` directory pi-agent leaves
+/// walks, no pruning of the now-empty `{slug}/` directory piAgent leaves
 /// behind (ruling A8; spec §10.7 says "file(s)", not directory).
 ///
 /// **The recorded paths are re-verified before anything is deleted.** The
@@ -944,8 +944,8 @@ mod tests {
     async fn install_writes_the_conformance_bytes_for_every_harness() {
         let cases = [
             ("antigravity", "antigravity/typescript.md"),
-            ("pi-agent", "pi-agent/typescript/RULES.md"),
-            ("oh-my-pi", "oh-my-pi/typescript.md"),
+            ("piAgent", "piAgent/typescript/RULES.md"),
+            ("ohMyPi", "ohMyPi/typescript.md"),
             ("opencode", "opencode/typescript.md"),
         ];
 
@@ -1172,7 +1172,7 @@ mod tests {
         let sentinel = b"{\n  \"model\": \"a/b\"\n}\n";
         fs::write(&config, sentinel).expect("seed config");
 
-        for harness in ["antigravity", "pi-agent", "oh-my-pi"] {
+        for harness in ["antigravity", "piAgent", "ohMyPi"] {
             let record = install_rule(request(
                 &root,
                 &entry,
@@ -1286,7 +1286,7 @@ mod tests {
         let record = install_rule(request(
             &root,
             &entry,
-            "pi-agent",
+            "piAgent",
             Scope::Project,
             Some(project.path()),
             home.path(),
@@ -1309,7 +1309,7 @@ mod tests {
         );
         assert_eq!(
             fs::read(written).expect("read"),
-            fixture("pi-agent/typescript/RULES.md")
+            fixture("piAgent/typescript/RULES.md")
         );
         assert!(files_under(home.path()).is_empty(), "no user-scope writes");
     }
@@ -1732,7 +1732,7 @@ mod tests {
         let record = install_rule(request(
             &root,
             &entry,
-            "pi-agent",
+            "piAgent",
             Scope::User,
             None,
             home.path(),
@@ -1751,6 +1751,49 @@ mod tests {
             .expect("uninstall");
         assert!(dir.is_dir(), "ruling A8: uninstall deletes files only");
         assert!(!Path::new(&record.dest).exists());
+    }
+
+    /// Issue #68: uninstall re-derives destinations from `record.tool`, so a
+    /// rule row written before the harness-id rename must still resolve. The
+    /// read-time alias in `parse_ledger` is what keeps those installs removable.
+    #[tokio::test]
+    async fn a_v0_9_ledger_row_still_uninstalls_after_the_harness_rename() {
+        let app_data = TempDir::new().expect("app data");
+        let home = TempDir::new().expect("home");
+        let backups = TempDir::new().expect("backups");
+        let root = corpus_with(app_data.path(), &["typescript.md"]);
+        let entry = entry(&root, "typescript");
+
+        let record = install_rule(request(
+            &root,
+            &entry,
+            "piAgent",
+            Scope::User,
+            None,
+            home.path(),
+            backups.path(),
+            &empty_paths(),
+        ))
+        .await
+        .expect("install");
+        assert!(Path::new(&record.dest).exists());
+
+        // Rewrite the row exactly as v0.9 wrote it: kebab harness id.
+        let mut row = serde_json::to_value(&record).expect("row serializes");
+        row["tool"] = serde_json::json!("pi-agent");
+        let raw = serde_json::to_vec(&[row]).expect("ledger serializes");
+        let parsed = crate::install::parse_ledger_for_test(&raw).expect("a v0.9 row parses");
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0].tool, "piAgent", "the alias maps the legacy id");
+        assert_eq!(parsed[0].domain, crate::types::InstallDomain::Rule);
+
+        remove_rule_files(&parsed[0], &empty_paths(), home.path())
+            .await
+            .expect("uninstall resolves the renamed harness");
+        assert!(
+            !Path::new(&parsed[0].dest).exists(),
+            "the legacy row still removes its file"
+        );
     }
 
     #[tokio::test]

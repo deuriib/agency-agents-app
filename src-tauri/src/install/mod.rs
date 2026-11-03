@@ -140,8 +140,31 @@ fn parse_ledger(bytes: &[u8]) -> Result<Vec<InstallRecord>, AppError> {
         if r.dests.is_empty() {
             r.dests = vec![r.dest.clone()];
         }
+        r.tool = normalise_legacy_tool_id(&r.tool).to_string();
     }
     Ok(recs)
+}
+
+/// Test-only door onto [`parse_ledger`], so rule-command tests can prove a
+/// legacy-shaped ledger row still resolves to a harness (issue #68).
+#[cfg(test)]
+pub(crate) fn parse_ledger_for_test(bytes: &[u8]) -> Result<Vec<InstallRecord>, AppError> {
+    parse_ledger(bytes)
+}
+
+/// Rule rows written before issue #68 carry the old kebab harness ids, while
+/// uninstall re-derives destinations from `record.tool`. Without this alias a
+/// v0.9 ledger row would stop resolving to a harness and the install would
+/// become un-uninstallable.
+///
+/// The agent ids are unaffected: `piAgent` was never written as `pi-agent` for
+/// an agent row, and no agent kebab collides with a rule id.
+fn normalise_legacy_tool_id(tool: &str) -> &str {
+    match tool {
+        "pi-agent" => "piAgent",
+        "oh-my-pi" => "ohMyPi",
+        other => other,
+    }
 }
 
 async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), AppError> {

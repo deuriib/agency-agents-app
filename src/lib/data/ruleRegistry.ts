@@ -13,9 +13,11 @@
  * format literal reappears here (the same guard `toolRegistry.ts` has had since
  * issues #49/#53).
  *
- * Destinations use `{{slug}}` (DOUBLE braces) — the agent contract uses
- * `{slug}`. Do not unify them: a mismatch would create a literal `{{slug}}`
- * directory on disk.
+ * Destinations use `{slug}`, the same placeholder the agent contract uses, and
+ * harness ids are the agent tool ids (`piAgent`, `ohMyPi`) — one vocabulary
+ * across agents and rules (issue #68). The compiler refuses a template whose
+ * braces survive substitution, so a legacy `{{slug}}` becomes an error instead
+ * of a literal directory.
  */
 
 import contract from "../../../src-tauri/data/rules-tools.json";
@@ -45,7 +47,7 @@ export interface RuleHarnessMeta {
   format: string;
   /** Install mechanism, upstream truth: "per-rule". */
   installKind: string;
-  /** Path inside a harness integration tree, e.g. `{{slug}}/RULES.md`. */
+  /** Path inside a harness integration tree, e.g. `{slug}/RULES.md`. */
   integrationPath: string;
   detect?: { dirs?: string[]; files?: string[] };
   frontmatter?: { required?: string[]; map?: Record<string, string> };

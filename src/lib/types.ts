@@ -565,7 +565,8 @@ export type InstallDomain = "agent" | "rule";
 export type RuleInstall = InstallRecord & { domain: "rule" };
 
 /**
- * A rule harness id, e.g. `"oh-my-pi"`. A plain string for the same reason
+ * A rule harness id, e.g. `"ohMyPi"` — the same camelCase id the agent registry
+ * uses for the same product (issue #68). A plain string for the same reason
  * `Tool` is: the set lives in `src-tauri/data/rules-tools.json`, and
  * `src/lib/data/ruleRegistry.ts` is the typed reader for it.
  */

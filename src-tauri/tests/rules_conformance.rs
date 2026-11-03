@@ -80,7 +80,7 @@ fn sources() -> Vec<(String, Vec<u8>)> {
 fn fixture_path(integration_path: &str, harness_id: &str, slug: &str) -> PathBuf {
     fixtures_root()
         .join(harness_id)
-        .join(integration_path.replace("{{slug}}", slug))
+        .join(integration_path.replace("{slug}", slug))
 }
 
 /// The first differing byte, or `None` when the two byte strings are equal.
@@ -314,7 +314,7 @@ fn rules_parity_against_checkout() {
         };
 
         for harness in registry::all() {
-            let relative = harness.integration_path.replace("{{slug}}", &rule.slug);
+            let relative = harness.integration_path.replace("{slug}", &rule.slug);
             let artifact = integrations.join(&harness.id).join(&relative);
             let Ok(expected) = fs::read(&artifact) else {
                 missing.push(format!(

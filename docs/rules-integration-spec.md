@@ -59,10 +59,10 @@ issue and defines the M1 build.
 
 | Harness | Format | Project destination | User destination |
 | --- | --- | --- | --- |
-| Google Antigravity | `md-yaml-trigger` | `.agents/rules/{{slug}}.md` | `~/.gemini/config/rules/{{slug}}.md` |
-| pi-agent | `md-rules-dir` | `.pi/rules/{{slug}}/RULES.md` | `~/.pi/agent/rules/{{slug}}/RULES.md` |
-| oh-my-pi (omp) | `md-or-mdc` | `.omp/rules/{{slug}}.md` | `~/.omp/agent/rules/{{slug}}.md` |
-| OpenCode | `md-plugin` | `.opencode/rules/{{slug}}.md` | `~/.config/opencode/rules/{{slug}}.md` |
+| `antigravity` — Google Antigravity | `md-yaml-trigger` | `.agents/rules/{slug}.md` | `~/.gemini/config/rules/{slug}.md` |
+| `piAgent` — pi-agent | `md-rules-dir` | `.pi/rules/{slug}/RULES.md` | `~/.pi/agent/rules/{slug}/RULES.md` |
+| `ohMyPi` — oh-my-pi (omp) | `md-or-mdc` | `.omp/rules/{slug}.md` | `~/.omp/agent/rules/{slug}.md` |
+| `opencode` — OpenCode | `md-plugin` | `.opencode/rules/{slug}.md` | `~/.config/opencode/rules/{slug}.md` |
 
 Source of truth for the table above: `agency-rules/tools.json` (`harnesses.*.dest`).
 The app must read an equivalent declarative contract — it must **not** hardcode

@@ -141,7 +141,7 @@ fn user_config_dir() -> Result<PathBuf, AppError> {
 ///
 /// Used as the C2 guard at the ledger write boundary: a rule record must never
 /// list this file in `dest`/`dests`, or uninstall would delete a user config.
-/// Rule artifacts are `{{slug}}.md`, so this cannot reject a legitimate rule
+/// Rule artifacts are `{slug}.md`, so this cannot reject a legitimate rule
 /// file.
 pub fn is_plugin_config(path: &Path) -> bool {
     path.file_name()

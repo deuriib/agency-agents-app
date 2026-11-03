@@ -98,7 +98,7 @@ test("rust and ts derive the same harness set", () => {
     "both readers must derive the same installable set",
   );
 
-  assert.deepEqual(rustIds, ["antigravity", "oh-my-pi", "opencode", "pi-agent"]);
+  assert.deepEqual(rustIds, ["antigravity", "ohMyPi", "opencode", "piAgent"]);
 });
 
 test("format coverage has zero orphans on both sides", () => {
@@ -118,13 +118,13 @@ test("a reintroduced literal harness list fails the guard", () => {
     const source = readFileSync(file, "utf8");
     const mutated = source.replace(
       "const IMPLEMENTED_FORMATS",
-      'export const HARDCODED = ["antigravity", "pi-agent"];\nconst IMPLEMENTED_FORMATS',
+      'export const HARDCODED = ["antigravity", "piAgent"];\nconst IMPLEMENTED_FORMATS',
     );
     assert.notEqual(mutated, source, "fixture no longer contains the expected anchor");
     writeFileSync(file, mutated);
 
     const ids = harnessIds(readJson(CONTRACT_PATH));
-    assert.deepEqual(restatedHarnessIds(mutated, ids), ["antigravity", "pi-agent"]);
+    assert.deepEqual(restatedHarnessIds(mutated, ids), ["antigravity", "piAgent"]);
     expectFailure(dir, /harness ids hardcoded in src\/lib\/data\/ruleRegistry\.ts/);
   } finally {
     rmSync(dir, { recursive: true, force: true });

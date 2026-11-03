@@ -430,7 +430,7 @@ pub enum RuleGlobs {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rule {
-    /// Frontmatter `name` — the identity, and the `{{slug}}` substituted into
+    /// Frontmatter `name` — the identity, and the `{slug}` substituted into
     /// every destination template.
     pub slug: String,
     /// Frontmatter `name` again; equal to `slug` by construction. Kept separate
