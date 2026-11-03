@@ -1,6 +1,6 @@
 {
-  "_note": "Division (category) label+icon+color metadata for the Agency Agents corpus. Mirrors the catalog repo's divisions.json (the canonical source; this is the bundled floor for first-run / pre-sync clones). Icons are Lucide PascalCase names; colors are hex. Read by src/corpus/mod.rs (load_division_meta / bundled_division_meta).",
-  "categories": {
+  "_note": "Source of truth for the agent division set. Each division (a top-level agent directory) maps to a display label, a Lucide icon name (PascalCase), and a brand color (hex). `uv run python -m agency_agents lint` (job `lint` in .github/workflows/ci.yml) fails the build when this list disagrees with the directories on disk. To add a division: create its directory with at least one frontmatter agent file, add an entry here, then run `uv run python -m agency_agents lint`. NOT every top-level directory is a division: integrations/ holds per-tool conversion outputs, strategy/ holds playbooks and runbooks with no agent frontmatter; both, plus examples/, scripts/ and src/, are excluded in src/agency_agents/core/validator.py (LintEngine.check_divisions_consistency).",
+  "divisions": {
     "academic": { "label": "Academic", "icon": "GraduationCap", "color": "#8B5CF6" },
     "design": { "label": "Design", "icon": "PenTool", "color": "#EC4899" },
     "engineering": { "label": "Engineering", "icon": "Code", "color": "#3B82F6" },

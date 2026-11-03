@@ -16,3 +16,11 @@ useDefault = true
 description = "GitHub OAuth Device Flow client_id (RFC 8628-public)"
 regexTarget = "match"
 regexes = ['''Ov23liJZKbvrSBuiOPkT''']
+
+# `vendor/` holds two pinned, public git submodules (agency-agents,
+# agency-rules). Their content is third-party catalog markdown and is scanned by
+# its own repositories' pipelines; scanning 6k+ vendored files here produces
+# false positives on the catalog's own example text (issue #72).
+[[allowlists]]
+description = "Pinned public catalog submodules"
+paths = ['''^vendor/''']

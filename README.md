@@ -186,6 +186,14 @@ The catalog comes from `agency-agents`, either as:
 - a managed local clone at `~/.agency-agents`
 - a user-selected clone, such as `/Users/michael/Software/AgentLand/agency-agents`
 
+The bundled baseline is generated from the `vendor/agency-agents` submodule,
+pinned to **agency-agents v1.6.2**; the Rules baseline is generated from
+**agency-rules v0.9.0** (`vendor/agency-rules`). Bumping either is a normal
+commit — `git -C vendor/agency-agents checkout vX.Y.Z` followed by
+`mise run sync-vendor` — and CI fails when the generated artifacts do not match
+the pins. Building from a GitHub source archive does not work: archives contain
+no submodule content, so clone with `--recurse-submodules` instead.
+
 A catalog carries two kinds of content: the agent personas the app indexes (`<division>/<slug>.md`) and the repo-level content it reads directly — `divisions.json` (division metadata) and `strategy/runbooks.json` (the NEXUS scenario runbooks that power the Runbooks pillar). Snapshot provisioning extracts both; a clone or snapshot that predates `strategy/` shows Runbooks empty until the catalog is refreshed.
 
 The Rules workspace reads a second managed corpus, `deuriib/agency-rules`, extracted to its own `<app-data>/rules-corpus` with its own bundled baseline, tarball refresh, and `state/rules-index.json`. It deliberately shares neither the agent corpus directory nor its index: the two repositories refresh on independent schedules.

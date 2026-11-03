@@ -1,5 +1,49 @@
 # Building Agency Agents
 
+## Prerequisites: the pinned submodules
+
+Two upstream repositories are pinned as git submodules under `vendor/`
+(`agency-agents` and `agency-rules`), pinned to release tags:
+
+```sh
+git submodule update --init --recursive   # or clone with --recurse-submodules
+```
+
+Everything the app embeds is derived from those checkouts by
+`scripts/sync-vendor.mjs`:
+
+| Generated artifact | Source |
+| --- | --- |
+| `src-tauri/data/tools.json` | `vendor/agency-agents/tools.json` + `src-tauri/data/tools-overlay.json` |
+| `src-tauri/data/rules-tools.json` | `vendor/agency-rules/tools.json` |
+| `src-tauri/resources/corpus-baseline/` | `vendor/agency-agents` divisions + `divisions.json` + `strategy/` + `scripts/` |
+| `src-tauri/resources/rules-baseline/` | `vendor/agency-rules/rules/` |
+
+```sh
+mise run sync-vendor    # regenerate after bumping a submodule
+mise run check-vendor   # what CI runs: fails when anything is stale
+```
+
+`src-tauri/build.rs` checks for both submodules before anything compiles. A
+clone without them stops with:
+
+```text
+vendor/agency-agents is empty.
+
+The app embeds the catalog and rule contracts from pinned git
+submodules. Initialise them and rebuild:
+
+    git submodule update --init --recursive
+```
+
+A GitHub source archive (`/archive/…tar.gz`, "Download ZIP") contains no
+submodule content at all, so it cannot be built; clone the repository instead.
+
+The only sanctioned divergence from upstream is
+`src-tauri/data/tools-overlay.json`: one named field per entry with its reason,
+rejected when it stops differing from upstream. Everything else in
+`tools.json` must match `vendor/`.
+
 ## Development Build
 
 ```sh
@@ -36,17 +80,24 @@ npm run check
 npm run build
 ```
 
-Renderer parity against the active AA repo:
+Renderer parity. Both parity tests default to the pinned submodules, so they run
+on a clean clone with no environment variables; `AGENCY_*_PARITY_ROOT` only
+overrides the checkout:
 
 ```sh
-AGENCY_AGENTS_PARITY_ROOT=/Users/michael/Software/AgentLand/agency-agents \
-cargo test --manifest-path src-tauri/Cargo.toml upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored
+mise run parity                     # defaults to vendor/agency-agents
 ```
 
-Rules parity against the active `agency-rules` repo:
+`vendor/agency-agents` no longer ships `scripts/convert.sh` — the catalog moved
+to `python -m agency_agents` and publishes `convert-outputs.sha256` as its byte
+oracle. The bash-based parity test therefore reports "skipping" against the
+pinned tag; point `AGENCY_AGENTS_PARITY_ROOT` at an older checkout that still
+has the script, or wait for the manifest-based oracle (issue #76).
+
+Rules parity against `vendor/agency-rules`:
 
 ```sh
-AGENCY_RULES_PARITY_ROOT=/Users/michael/Software/AgentLand/agency-rules \
+AGENCY_RULES_PARITY_ROOT=$PWD/vendor/agency-rules \
 cargo test --manifest-path src-tauri/Cargo.toml --test rules_conformance \
   rules_parity_against_checkout -- --ignored
 ```

@@ -28,6 +28,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          submodules: recursive
 
       - name: Sync labels
         uses: kjanat/github-labelmanager@9ebc59b4ab81d78b0ad0036097786a956ca45a4f # v1.1.1

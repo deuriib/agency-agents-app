@@ -73,9 +73,21 @@ run = "npm run test:scripts"
 description = "Run every test suite"
 depends = ["test-rust", "test-scripts"]
 
+[tasks.sync-vendor]
+description = "Regenerate the embedded contracts and baselines from the pinned submodules"
+run = "node scripts/sync-vendor.mjs"
+
+[tasks.check-vendor]
+description = "Verify the contracts and baselines match the pinned submodules"
+run = "node scripts/sync-vendor.mjs --check"
+
+[tasks.submodules]
+description = "Fetch the pinned catalog and rule submodules"
+run = "git submodule update --init --recursive"
+
 [tasks.ci]
 description = "Reproduce the full PR Check workflow locally"
-depends = ["fmt-check", "clippy", "test-rust", "test-scripts", "check", "build-frontend"]
+depends = ["check-vendor", "fmt-check", "clippy", "test-rust", "test-scripts", "check", "build-frontend"]
 
 # ── Build and run ────────────────────────────────────────────────────────────
 
@@ -98,7 +110,7 @@ run = "npm run tauri --"
 # ── Optional gates ───────────────────────────────────────────────────────────
 
 [tasks.parity]
-description = "Renderer parity test (needs AGENCY_AGENTS_PARITY_ROOT pointed at an agency-agents checkout)"
+description = "Renderer parity test against the pinned catalog submodule (defaults to vendor/agency-agents)"
 dir = "src-tauri"
 run = "cargo test upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored"
 

@@ -2,16 +2,16 @@
  * Lucide icon-name → Svelte component binding for the category icons.
  *
  * The icon CHOICE is data-driven: each category's label + Lucide icon name live
- * in `src-tauri/data/agency-categories.json` (read by `corpus/mod.rs::category_meta`).
- * This UI does not re-decide icons in code.
+ * in the pinned catalog's `divisions.json` (embedded by `corpus/mod.rs` from
+ * `vendor/agency-agents`). This UI does not re-decide icons in code.
  *
  * This map is NOT a second source of truth — it's purely the bundler binding
  * from the data-provided Lucide name to its tree-shakeable Svelte component.
  * Lucide-svelte has no render-by-name without bundling all ~1600 icons, so the
  * components we use must be statically imported here.
  *
- * Adding a category? Set its Lucide `icon` name in `agency-categories.json`,
- * then add the one matching Lucide import below. Unknown names fall back to
+ * Adding a category? Set its Lucide `icon` name in the catalog's
+ * `divisions.json`, then add the one matching Lucide import below. Unknown names fall back to
  * `HelpCircle` so a missing import never crashes — but it WILL look out of
  * place, so keep this in sync with the taxonomy.
  */
@@ -38,7 +38,7 @@ import Settings from "@lucide/svelte/icons/settings";
 import Terminal from "@lucide/svelte/icons/terminal";
 import Video from "@lucide/svelte/icons/video";
 
-// Agency Agents category icons (the 16 agent categories — agency-categories.json).
+// Agency Agents category icons (the 18 divisions — catalog divisions.json).
 import Box from "@lucide/svelte/icons/box";
 import Boxes from "@lucide/svelte/icons/boxes";
 import ClipboardList from "@lucide/svelte/icons/clipboard-list";

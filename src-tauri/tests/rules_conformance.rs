@@ -262,7 +262,9 @@ fn checkout_rule_files(rules_root: &Path) -> Vec<PathBuf> {
 /// Staleness guard (ruling A14, `docs/BUILD.md`): re-render the live checkout's
 /// `rules/` and diff its `integrations/`.
 ///
-/// Run with:
+/// Defaults to the pinned `vendor/agency-rules` submodule, so `mise run parity`
+/// works on a clean clone; `AGENCY_RULES_PARITY_ROOT` overrides it for an
+/// unrelated checkout:
 ///
 /// ```sh
 /// AGENCY_RULES_PARITY_ROOT=/home/deuriib/projects/agency-rules \
@@ -274,22 +276,23 @@ fn checkout_rule_files(rules_root: &Path) -> Vec<PathBuf> {
 /// checkout legitimately has no artifacts (and the checked-in one is known
 /// stale — ruling C5).
 #[test]
-#[ignore = "needs AGENCY_RULES_PARITY_ROOT pointing at an agency-rules checkout"]
+#[ignore = "needs an agency-rules checkout (defaults to vendor/agency-rules)"]
 fn rules_parity_against_checkout() {
-    let root = match std::env::var_os("AGENCY_RULES_PARITY_ROOT") {
-        Some(root) => PathBuf::from(root),
-        None => {
-            eprintln!("AGENCY_RULES_PARITY_ROOT is not set; nothing to compare");
-            return;
-        }
-    };
+    let root = std::env::var_os("AGENCY_RULES_PARITY_ROOT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .parent()
+                .expect("src-tauri has a parent")
+                .join("vendor/agency-rules")
+        });
     let rules_root = root.join("rules");
-    let integrations = root.join("integrations");
     assert!(
         rules_root.is_dir(),
-        "{} has no rules/ directory",
+        "{} has no rules/ directory — is the submodule initialised?",
         root.display()
     );
+    let integrations = root.join("integrations");
 
     let mut compared = 0usize;
     let mut missing: Vec<String> = Vec::new();
