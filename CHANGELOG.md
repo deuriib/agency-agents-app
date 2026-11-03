@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.3](https://github.com/deuriib/agency-agents-app/compare/v0.9.2...v0.9.3) (2026-11-03)
+
+
+### Refactors
+
+* **ui:** render Rules through the shared workspace shell with category parity ([#83](https://github.com/deuriib/agency-agents-app/issues/83)) ([92aae31](https://github.com/deuriib/agency-agents-app/commit/92aae3160f46cd732fe381d6f3ddd202395bcb4b))
+
 ## [0.9.2](https://github.com/deuriib/agency-agents-app/compare/v0.9.1...v0.9.2) (2026-11-03)
 
 
