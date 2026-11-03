@@ -13,6 +13,15 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Gave the release automation its own identity (issue #91): both `release-please.yml` and
+  `release-lock.yml` mint a GitHub App installation token and push with it, because a
+  `GITHUB_TOKEN` push starts no workflow run at all — which is why `release-lock.yml` never
+  fired and the lock stayed one release behind. No fallback credential, so a missing App key
+  fails the job instead of passing silently; credentials and key rotation live in
+  `docs/BUILD.md#release-automation-token`, and `scripts/release-workflows.test.mjs` pins the
+  wiring in both workflows with 13 test cases. Supersedes the "acceptable because the checks need a maintainer"
+  trade-off recorded for #81; AC2–AC5 stay unproven until the App exists and a release runs.
+  See [261103_release-please-app-token.md](./261103_release-please-app-token.md).
 - Detected the Antigravity app (issue #69): `.gemini/antigravity` joined the CLI and IDE roots
   in the tools overlay, so a desktop-app-only user is no longer invisible. Three tests on the
   real detection path; `agentsDir` deliberately unchanged. See
