@@ -102,6 +102,7 @@ You are a **Voice AI Integration Engineer**, an expert in designing and building
 ```python
 import subprocess
 import json
+import math
 from pathlib import Path
 
 SUPPORTED_EXTENSIONS = {".wav", ".mp3", ".m4a", ".ogg", ".flac", ".mp4", ".mov", ".webm"}
@@ -121,11 +122,16 @@ def validate_audio_file(file_path: str) -> dict:
         "ffprobe", "-v", "quiet",
         "-print_format", "json",
         "-show_streams", "-show_format",
-        str(path)
+        "-i", str(path)  # Treat leading-dash filenames as input operands.
     ], capture_output=True, text=True, check=True)
 
     probe = json.loads(result.stdout)
-    duration = float(probe["format"]["duration"])
+    try:
+        duration = float(probe['format']['duration'])
+    except (KeyError, TypeError, ValueError) as error:
+        raise ValueError('Audio duration must be known, finite and positive') from error
+    if not math.isfinite(duration) or duration <= 0:
+        raise ValueError('Audio duration must be known, finite and positive')
 
     if duration > MAX_DURATION_SECONDS:
         raise ValueError(f"File exceeds max duration: {duration:.0f}s > {MAX_DURATION_SECONDS}s")
@@ -171,7 +177,7 @@ def preprocess_audio(input_path: str, output_path: str) -> str:
         "-ar", "16000",               # 16kHz sample rate
         "-ac", "1",                   # mono
         "-af", "loudnorm=I=-16:TP=-1.5:LRA=11",  # EBU R128 loudness normalization
-        output_path
+        str(Path(output_path).absolute())  # Output paths must not look like options.
     ]
     subprocess.run(cmd, check=True, capture_output=True)
     return output_path
@@ -195,7 +201,7 @@ def chunk_audio(input_path: str, chunk_dir: str,
         raise ValueError("overlap must be finite and nonnegative")
     result = subprocess.run([
         "ffprobe", "-v", "quiet", "-show_entries", "format=duration",
-        "-of", "default=noprint_wrappers=1:nokey=1", input_path
+        "-of", "default=noprint_wrappers=1:nokey=1", "-i", input_path
     ], capture_output=True, text=True, check=True)
     total_duration = float(result.stdout.strip())
     if not math.isfinite(total_duration) or total_duration <= 0:
@@ -216,7 +222,7 @@ def chunk_audio(input_path: str, chunk_dir: str,
             "-t", str(end - start),
             "-map", "0:a:0", "-vn",
             "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1",
-            out_path
+            str(Path(out_path).absolute())
         ], check=True, capture_output=True)
         chunks.append({"path": out_path, "start_offset": start, "index": chunk_index})
         start += chunk_duration
@@ -292,6 +298,7 @@ def assemble_chunks(chunk_results: list[dict],
                 start=adjusted_start,
                 end=seg.end + offset,
                 text=seg.text,
+                speaker=seg.speaker,
                 confidence=seg.confidence
             ))
     return merged
@@ -356,6 +363,7 @@ def assign_speakers(transcript_segments: list[TranscriptSegment],
 ```python
 import json
 import re
+import math
 
 def normalize_transcript(segments: list[TranscriptSegment]) -> list[TranscriptSegment]:
     """
@@ -382,20 +390,28 @@ def export_srt(segments: list[TranscriptSegment], output_path: str) -> str:
     """
     Export transcript as SRT subtitle file.
 
-    Validates reading speed (max 20 chars/second per broadcast standard).
-    Splits long segments to comply with line length limits.
+    Serializes validated cue times at millisecond precision.
+    Reading-speed and line-length checks belong to the application adapter;
+    this serialization example preserves the supplied text without splitting.
     """
     def format_timestamp(seconds: float) -> str:
-        h = int(seconds // 3600)
-        m = int((seconds % 3600) // 60)
-        s = int(seconds % 60)
-        ms = int((seconds % 1) * 1000)
+        if not math.isfinite(seconds) or seconds < 0:
+            raise ValueError("Subtitle timestamps must be finite and nonnegative")
+        milliseconds = round(seconds * 1000)
+        h, milliseconds = divmod(milliseconds, 3_600_000)
+        m, milliseconds = divmod(milliseconds, 60_000)
+        s, ms = divmod(milliseconds, 1000)
         return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
 
     lines = []
     for i, seg in enumerate(segments, 1):
+        if seg.end <= seg.start:
+            raise ValueError("Subtitle cues need a positive duration")
+        start, end = format_timestamp(seg.start), format_timestamp(seg.end)
+        if start == end:
+            raise ValueError("Subtitle cue collapses at millisecond precision")
         lines.append(str(i))
-        lines.append(f"{format_timestamp(seg.start)} --> {format_timestamp(seg.end)}")
+        lines.append(f"{start} --> {end}")
         speaker_prefix = f"[{seg.speaker}] " if seg.speaker else ""
         lines.append(f"{speaker_prefix}{seg.text}")
         lines.append("")

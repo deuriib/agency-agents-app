@@ -4,7 +4,7 @@ Thanks for considering a contribution. This project is small, opinionated, and o
 
 ## TL;DR
 
-1. Fork the repo and create a topic branch off `main`.
+1. Clone with submodules (`git clone --recurse-submodules`) and create a topic branch off `main`.
 2. Make a focused change.
 3. Run the relevant checks.
 4. Open a PR with what changed, why, and what you tested.
@@ -26,9 +26,10 @@ same checks CI runs:
 
 ```sh
 mise install       # node + rust from mise.lock
+mise run submodules # the pinned catalog + rules checkouts (vendor/)
 mise run setup     # npm ci
 mise run dev       # tauri dev with hot reload
-mise run ci        # fmt, clippy, rust tests, svelte-check, frontend build
+mise run ci        # vendor check, fmt, clippy, rust + script tests, svelte-check, build
 ```
 
 The manual loop below works with any toolchain manager.
@@ -36,7 +37,7 @@ The manual loop below works with any toolchain manager.
 Loop:
 
 ```sh
-git clone https://github.com/<your-fork>/agency-agents-app
+git clone --recurse-submodules https://github.com/<your-fork>/agency-agents-app
 cd agency-agents-app
 npm install
 npm run tauri dev
@@ -44,11 +45,46 @@ npm run check
 cargo test --manifest-path src-tauri/Cargo.toml --lib
 ```
 
-The app uses the `agency-agents` catalog. For local catalog testing, use an existing clone or create one at:
+Already cloned without them? `git submodule update --init --recursive`.
+Without the submodules the build stops with that exact instruction — it does
+not produce a Rust error.
+
+## Pinned catalog and rules
+
+Two upstream repositories are pinned as git submodules, so the catalog content,
+the contracts and the app live in one tree and one clone:
+
+| Path | Upstream | What it supplies |
+| --- | --- | --- |
+| `vendor/agency-agents` | `deuriib/agency-agents`, pinned to a release tag | the agent catalog, `tools.json`, `divisions.json` |
+| `vendor/agency-rules` | `deuriib/agency-rules`, pinned to a release tag | the rule catalog and its `tools.json` harness contract |
+
+Everything the app embeds is **generated** from those checkouts by
+`scripts/sync-vendor.mjs`:
 
 ```text
-~/Software/AgentLand/agency-agents
+src-tauri/data/tools.json               vendor tools.json + data/tools-overlay.json
+src-tauri/data/rules-tools.json         vendor rule harness contract
+src-tauri/resources/corpus-baseline/    division markdown + divisions.json + strategy/ + scripts/
+src-tauri/resources/rules-baseline/     agency-rules rules/
 ```
+
+Never edit those by hand. After bumping a submodule:
+
+```sh
+git -C vendor/agency-agents checkout vX.Y.Z
+mise run sync-vendor            # rewrite the generated artifacts
+mise run ci                     # includes `sync-vendor --check`
+```
+
+`mise run check-vendor` (the same check CI runs) fails when any generated file
+is stale, missing or extra, so a bump cannot ship half-applied. The one
+sanctioned divergence from upstream is `src-tauri/data/tools-overlay.json`:
+each entry names one field and why, and a field that stops differing is
+rejected so the file cannot rot.
+
+To test the app against a catalog clone you are editing, use the in-app catalog
+source picker; the vendored copy is only the shipped baseline.
 
 ## Project Structure
 
@@ -230,11 +266,11 @@ Phase C batch:
 npm run build:phase-c
 ```
 
-Renderer parity:
+Renderer parity (defaults to the pinned `vendor/agency-agents`; set
+`AGENCY_AGENTS_PARITY_ROOT` to point at a different checkout):
 
 ```sh
-AGENCY_AGENTS_PARITY_ROOT=/Users/deuriib/Software/AgentLand/agency-agents \
-cargo test --manifest-path src-tauri/Cargo.toml upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored
+mise run parity
 ```
 
 ## Code Style

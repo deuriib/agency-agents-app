@@ -51,8 +51,8 @@ use crate::util::process::headless_command;
 /// (the canonical division truth the agency-agents repo declares, shared with
 /// the CLI installer and the linters). Read the active root's file when present
 /// (a clone, or the seeded baseline once it carries one); otherwise fall back to
-/// the bundled floor (`agency-categories.json`, itself a mirror of the catalog's
-/// `divisions.json`).
+/// the bundled floor, which is `divisions.json` from the pinned
+/// `vendor/agency-agents` submodule (issue #72 — no mirror file, no key rename).
 ///
 /// Deriving from `divisions.json` rather than parsing `convert.sh`'s `AGENT_DIRS`
 /// fixes a class of drift: a top-level dir that ISN'T a declared division — e.g.
@@ -193,7 +193,7 @@ pub struct Corpus {
     category_order: Vec<String>,
     /// Division presentation metadata (label / icon / color) keyed by slug,
     /// resolved at build time: the catalog root's `divisions.json` overlaid on
-    /// the bundled `agency-categories.json` floor (see [`load_division_meta`]).
+    /// the pinned catalog's `divisions.json` floor (see [`load_division_meta`]).
     /// Carrying it on the corpus means `categories()` never touches disk and a
     /// catalog that ships a new division presents correctly without an app
     /// update.
@@ -286,13 +286,7 @@ impl Corpus {
 
 // ---------- Category metadata ----------
 
-/// The bundled `categories.json` shape we read label + icon from. Only
-/// the `categories` map is needed here.
-#[derive(Debug, Deserialize)]
-struct CategoriesFile {
-    categories: BTreeMap<String, CategoryMetaRow>,
-}
-
+/// One division's presentation metadata, exactly as the catalog authors it.
 #[derive(Debug, Clone, Deserialize)]
 struct CategoryMetaRow {
     label: String,
@@ -323,15 +317,24 @@ fn default_division_color() -> String {
     "#94A3B8".to_string()
 }
 
-const CATEGORIES_JSON: &str = include_str!("../../data/agency-categories.json");
+/// The catalog's own `divisions.json`, embedded from the pinned
+/// `vendor/agency-agents` submodule (issue #72).
+///
+/// This used to be a hand-maintained `data/agency-categories.json` that mirrored
+/// the catalog under a DIFFERENT key (`categories`), so the two files claimed to
+/// describe each other without sharing a schema. Embedding the submodule file
+/// removes the copy, the rename and the drift: the offline floor IS the catalog
+/// manifest at the pinned tag.
+const BUNDLED_DIVISIONS_JSON: &str = include_str!("../../../vendor/agency-agents/divisions.json");
 const DIVISIONS_FILENAME: &str = "divisions.json";
 
-/// The bundled `agency-categories.json` parsed into a slug → row map. This is
+/// The pinned catalog's `divisions.json` parsed into a slug → row map. This is
 /// the floor the app always ships — used directly on first run / for an old
-/// clone, and as the base that `divisions.json` overlays onto.
+/// clone, and as the base that the active catalog's `divisions.json` overlays
+/// onto.
 fn bundled_division_meta() -> BTreeMap<String, CategoryMetaRow> {
-    serde_json::from_str::<CategoriesFile>(CATEGORIES_JSON)
-        .map(|f| f.categories)
+    serde_json::from_str::<DivisionsFile>(BUNDLED_DIVISIONS_JSON)
+        .map(|f| f.divisions)
         .unwrap_or_default()
 }
 
@@ -704,26 +707,35 @@ async fn seed_from_baseline(
     let mut seeded = 0u32;
     for category in categories.iter() {
         let src_cat = baseline.join(category);
-        let mut read = match tokio::fs::read_dir(&src_cat).await {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
+        if !src_cat.is_dir() {
+            continue;
+        }
         let dst_cat = dest.join(category);
         tokio::fs::create_dir_all(&dst_cat)
             .await
             .map_err(|e| AppError::Io {
                 message: format!("create {}: {e}", dst_cat.display()),
             })?;
-        while let Ok(Some(ent)) = read.next_entry().await {
-            let path = ent.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("md") {
-                continue;
-            }
-            let Some(fname) = path.file_name() else {
+        // Recursive: upstream nests agents inside a division
+        // (`game-development/unity/<slug>.md`). A flat read_dir used to drop
+        // those silently, so a first launch offline shipped fewer agents than a
+        // refreshed catalog of the same commit (issue #72). Paths are preserved
+        // relative to the division so the seeded tree mirrors the baseline.
+        let files = collect_md_files(&src_cat);
+        for path in files {
+            let Ok(rel) = path.strip_prefix(&src_cat) else {
                 continue;
             };
             let bytes = read_capped(&path, MAX_AGENT_BYTES).await?;
-            atomic_write(&dst_cat.join(fname), &bytes).await?;
+            let target = dst_cat.join(rel);
+            if let Some(parent) = target.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| AppError::Io {
+                        message: format!("create {}: {e}", parent.display()),
+                    })?;
+            }
+            atomic_write(&target, &bytes).await?;
             seeded += 1;
         }
     }
@@ -2210,10 +2222,10 @@ mod tests {
     /// malformed real agent (bad frontmatter fence, missing `name`) fails CI
     /// rather than shipping. `cargo test` runs with cwd = crate root, so the
     /// relative resource path resolves. Divisions come from the bundled floor
-    /// (`agency-categories.json`, a mirror of the catalog's `divisions.json`), so
-    /// `strategy/` (playbooks/runbooks) is NOT a division and `integrations/`
-    /// (convert.sh output) is NOT either. Counts are pinned to the agency-agents
-    /// snapshot — bump them on a corpus refresh.
+    /// (`vendor/agency-agents/divisions.json` at the pinned tag), so `strategy/`
+    /// (playbooks/runbooks) is NOT a division and `integrations/` (converter
+    /// output) is NOT either. Counts are pinned to the pinned catalog tag — bump
+    /// them in the same commit as a submodule bump.
     #[tokio::test]
     async fn real_bundled_baseline_parses_completely() {
         let dir = Path::new("resources/corpus-baseline");
@@ -2236,9 +2248,23 @@ mod tests {
             .await
             .unwrap();
 
-        // The baseline is agency-agents main @ d3f71c4 (2026-10-01): every
-        // division's agents, flattened exactly as `corpus_refresh` extracts them.
-        assert_eq!(corpus.count(), 282, "all bundled agent personas indexed");
+        // The baseline is agency-agents v1.6.2, generated by
+        // `scripts/sync-vendor.mjs` exactly as `corpus_refresh` extracts a
+        // catalog: every division `*.md` (nested paths preserved), plus
+        // `divisions.json`, `strategy/` and `scripts/`.
+        //
+        // 298 files, 297 indexed: upstream ships
+        // `finance/finance-profit-first-strategist.md` with an unquoted
+        // `description` whose `: ` makes the frontmatter invalid YAML, so the
+        // parser skips it (as every consumer does). Fixed upstream in
+        // deuriib/agency-agents#47; bumping the submodule past that fix turns
+        // this into 298 and this assertion into the reminder to update it.
+        assert_eq!(corpus.count(), 297, "all bundled agent personas indexed");
+        assert_eq!(
+            corpus.agents.len(),
+            297,
+            "every parsed agent is also indexed — a mismatch means two files slug to the same id"
+        );
 
         // Every agent parsed real frontmatter: non-empty name + slug, real category.
         for a in &corpus.agents {
@@ -2262,8 +2288,10 @@ mod tests {
                 .map(|c| c.count)
                 .unwrap_or(0)
         };
-        assert_eq!(count_of("engineering"), 65);
-        assert_eq!(count_of("specialized"), 59);
+        assert_eq!(count_of("engineering"), 75);
+        assert_eq!(count_of("specialized"), 62);
+        // 7 files ship; one is the unparseable Profit First frontmatter above.
+        assert_eq!(count_of("finance"), 6);
         // game-development nests agents in unity/, godot/, unreal-engine/ etc.
         // upstream; a flat seeding would silently undercount these.
         assert_eq!(

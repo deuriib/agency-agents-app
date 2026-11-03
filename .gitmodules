@@ -1,0 +1,6 @@
+[submodule "vendor/agency-agents"]
+	path = vendor/agency-agents
+	url = https://github.com/deuriib/agency-agents.git
+[submodule "vendor/agency-rules"]
+	path = vendor/agency-rules
+	url = https://github.com/deuriib/agency-rules.git

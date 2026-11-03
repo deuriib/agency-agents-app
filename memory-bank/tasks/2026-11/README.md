@@ -13,6 +13,13 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Pinned the catalog and rule contracts as git submodules (issue #72): `vendor/agency-agents`
+  at v1.6.2 and `vendor/agency-rules` at v0.9.0, with `scripts/sync-vendor.mjs` generating
+  every embedded contract and baseline and `--check` failing CI on any staleness. The five
+  `detect.dirs` divergences became a reasoned overlay, `agency-categories.json` was deleted
+  in favour of the catalog's own `divisions.json`, seeding is recursive, and a submodule-less
+  clone fails with the init command instead of a Rust backtrace. See
+  [261103_pinned-catalog-submodules.md](./261103_pinned-catalog-submodules.md).
 - Shipped the Rules integration (issue #29, M1; PR #61): native Rust compilation of the
   four `agency-rules` renderers with 32/32 byte-parity against a fresh upstream compile
   and an 88/88 adversarial matrix; a second managed corpus with its own baseline,

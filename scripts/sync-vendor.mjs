@@ -1,0 +1,325 @@
+#!/usr/bin/env node
+// Keep every upstream contract and bundled baseline in one place.
+//
+// The app consumes two pinned git submodules:
+//
+//     vendor/agency-agents   (pinned tag)  → agent catalog + tools.json/divisions.json
+//     vendor/agency-rules    (pinned tag)  → rule catalog + tools.json
+//
+// Everything the app embeds is DERIVED from those checkouts by this script:
+//
+//     src-tauri/data/tools.json          ← vendor tools.json + app overlay
+//     src-tauri/data/rules-tools.json    ← vendor rule harness contract
+//     src-tauri/resources/corpus-baseline/   ← vendor division markdown + divisions.json,
+//                                             strategy/ and scripts/
+//     src-tauri/resources/rules-baseline/    ← vendor agency-rules rules/
+//
+// Two generated artifacts carry a real transformation, so they are checked, not
+// trusted:
+//
+//   - `tools.json` merges `src-tauri/data/tools-overlay.json`. The overlay is the
+//     ONLY place the app may disagree with upstream, one named field per entry.
+//     An override that changes nothing is an error, so the file cannot rot.
+//   - the baselines mirror exactly what `corpus_refresh` extracts at runtime
+//     (division `*.md`, `divisions.json`, `strategy/`, `scripts/`), so a first
+//     launch offline and a refreshed catalog contain the same shape.
+//
+// Usage:
+//
+//     node scripts/sync-vendor.mjs            # rewrite the generated artifacts
+//     node scripts/sync-vendor.mjs --check    # exit 1 if any is stale (CI)
+//
+// A checkout without the submodules fails with the init instructions instead of
+// a stack trace.
+
+import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+
+export const AGENTS_ROOT = "vendor/agency-agents";
+export const RULES_ROOT = "vendor/agency-rules";
+
+/** Generated artifacts, relative to the repository root. */
+export const TOOLS_PATH = "src-tauri/data/tools.json";
+export const RULE_CONTRACT_PATH = "src-tauri/data/rules-tools.json";
+export const CORPUS_BASELINE = "src-tauri/resources/corpus-baseline";
+export const RULES_BASELINE = "src-tauri/resources/rules-baseline";
+export const OVERLAY_PATH = "src-tauri/data/tools-overlay.json";
+
+export const SUBMODULE_HINT =
+  "vendor/ is empty — run `git submodule update --init --recursive` (or clone with --recurse-submodules)";
+
+/**
+ * Overlay fields the app may override on a `tools.json` entry.
+ *
+ * Deliberately a closed set: an unknown field is a typo, not a new capability,
+ * and silently applying it would make the overlay a general patch format nobody
+ * reviews. `detectDirs` maps onto `detect.dirs`; every other value is applied
+ * verbatim as a top-level field.
+ */
+export const OVERLAY_FIELDS = new Map([["detectDirs", ["detect", "dirs"]]]);
+
+function readJson(path) {
+  return JSON.parse(readFileSync(path, "utf8"));
+}
+
+function fail(message) {
+  const error = new Error(message);
+  error.userFacing = true;
+  throw error;
+}
+
+/** Apply the overlay to a parsed `tools.json`, returning a new object. */
+export function applyOverlay(catalog, overlay) {
+  const tools = structuredClone(catalog.tools ?? {});
+  const overrides = overlay?.overrides ?? {};
+  const applied = [];
+
+  for (const [kebab, fields] of Object.entries(overrides)) {
+    const tool = tools[kebab];
+    if (!tool) {
+      fail(`${OVERLAY_PATH}: override for '${kebab}', which ${AGENTS_ROOT}/tools.json does not declare`);
+    }
+    for (const [field, value] of Object.entries(fields)) {
+      // `_why` documents the override next to the value; it is not applied.
+      if (field.startsWith("_")) continue;
+      const path = OVERLAY_FIELDS.get(field);
+      if (!path) {
+        const known = [...OVERLAY_FIELDS.keys()].join(", ");
+        fail(`${OVERLAY_PATH}: '${kebab}.${field}' is not an overridable field (allowed: ${known})`);
+      }
+      const current = deepGet(tool, path);
+      if (JSON.stringify(current) === JSON.stringify(value)) {
+        // An override that equals upstream is dead weight: either upstream caught
+        // up (delete it) or the author misread the file. Both deserve a failure.
+        fail(`${OVERLAY_PATH}: '${kebab}.${field}' duplicates upstream — remove the override`);
+      }
+      deepSet(tool, path, value);
+      applied.push(`${kebab}.${field}`);
+    }
+  }
+
+  return { tools, applied };
+}
+
+function deepGet(object, path) {
+  return path.reduce((node, key) => (node == null ? undefined : node[key]), object);
+}
+
+function deepSet(object, path, value) {
+  const parent = path.slice(0, -1).reduce((node, key) => {
+    node[key] ??= {};
+    return node[key];
+  }, object);
+  parent[path.at(-1)] = value;
+}
+
+// ---------- Generated files ----------
+
+const TOOLS_NOTE =
+  "GENERATED by scripts/sync-vendor.mjs from vendor/agency-agents/tools.json plus data/tools-overlay.json — do not edit by hand. Run `mise run sync-vendor` after bumping the submodule; `mise run ci` fails when this file is stale. The overlay is the only sanctioned divergence from upstream: each entry names one field and why, and a test proves it still differs.";
+
+const RULE_CONTRACT_NOTE =
+  "GENERATED by scripts/sync-vendor.mjs from vendor/agency-rules/tools.json — do not edit by hand. This is the upstream rule-harness contract verbatim (ids, formats, destinations); the app adds nothing. Read by BOTH src-tauri/src/rules/registry.rs (include_str!) and src/lib/data/ruleRegistry.ts (JSON import). A harness is installable iff its `format` appears in data/rule-formats.json. Destinations use {{slug}} (double braces), the upstream `agency-rules` syntax; the agent contract uses {slug}.";
+
+/** Build the in-memory desired state for the two JSON contracts. */
+export function contracts(root = ROOT) {
+  const agentCatalog = readJson(join(root, AGENTS_ROOT, "tools.json"));
+  const overlay = readJson(join(root, OVERLAY_PATH));
+  const { tools, applied } = applyOverlay(agentCatalog, overlay);
+
+  const rulesContract = readJson(join(root, RULES_ROOT, "tools.json"));
+
+  return {
+    applied,
+    [TOOLS_PATH]: `${JSON.stringify({ _note: TOOLS_NOTE, tools }, null, 2)}\n`,
+    [RULE_CONTRACT_PATH]: `${JSON.stringify(
+      { _note: RULE_CONTRACT_NOTE, version: rulesContract.version, harnesses: rulesContract.harnesses },
+      null,
+      2,
+    )}\n`,
+  };
+}
+
+/** Every file the corpus baseline must contain, as `relative path → source path`. */
+export function corpusBaselineFiles(root = ROOT) {
+  const source = join(root, AGENTS_ROOT);
+  const divisions = Object.keys(readJson(join(source, "divisions.json")).divisions);
+  const out = new Map();
+
+  const walk = (dir, keep) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path, keep);
+      } else if (entry.isFile() && keep(path)) {
+        out.set(relative(source, path).split(sep).join("/"), path);
+      }
+    }
+  };
+
+  for (const division of divisions) {
+    const dir = join(source, division);
+    if (!existsSync(dir)) continue;
+    walk(dir, (path) => path.endsWith(".md") && !path.endsWith(`${sep}README.md`));
+  }
+  out.set("divisions.json", join(source, "divisions.json"));
+
+  // Repo-level content the app reads directly; identical to what
+  // `corpus_refresh` extracts, so a seeded baseline and a refreshed catalog
+  // have the same shape.
+  for (const extra of ["strategy", "scripts"]) {
+    const dir = join(source, extra);
+    if (existsSync(dir)) walk(dir, () => true);
+  }
+
+  return out;
+}
+
+/** Every file the rules baseline must contain, as `relative path → source path`. */
+export function rulesBaselineFiles(root = ROOT) {
+  const source = join(root, RULES_ROOT);
+  const out = new Map();
+  const walk = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (entry.isFile()) {
+        out.set(relative(source, path).split(sep).join("/"), path);
+      }
+    }
+  };
+  const rules = join(source, "rules");
+  if (existsSync(rules)) walk(rules);
+  return out;
+}
+
+/** Compare a desired file map against a directory: missing, changed, extra. */
+export function diffBaseline(dest, files) {
+  const desired = new Set(files.keys());
+  const missing = [];
+  const changed = [];
+  for (const [rel, source] of files) {
+    const target = join(dest, rel);
+    if (!existsSync(target)) {
+      missing.push(rel);
+    } else if (!readFileSync(target).equals(readFileSync(source))) {
+      changed.push(rel);
+    }
+  }
+  const extra = [];
+  const walk = (dir) => {
+    if (!existsSync(dir)) return;
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        walk(path);
+      } else if (!desired.has(relative(dest, path).split(sep).join("/"))) {
+        extra.push(relative(dest, path).split(sep).join("/"));
+      }
+    }
+  };
+  walk(dest);
+  return { missing: missing.sort(), changed: changed.sort(), extra: extra.sort() };
+}
+
+/** Write a desired file map, pruning anything the map does not declare. */
+export function writeBaseline(dest, files) {
+  const { extra } = diffBaseline(dest, files);
+  for (const rel of extra) rmSync(join(dest, rel), { force: true });
+  for (const [rel, source] of files) {
+    const target = join(dest, rel);
+    mkdirSync(dirname(target), { recursive: true });
+    writeFileSync(target, readFileSync(source));
+  }
+  return files.size;
+}
+
+/** Everything `--check` reports. Empty arrays mean the tree is in sync. */
+export function check(root = ROOT) {
+  const problems = [];
+  let generated;
+  try {
+    generated = contracts(root);
+  } catch (error) {
+    if (!error.userFacing) throw error;
+    fail(error.message);
+  }
+
+  for (const [rel, content] of Object.entries(generated)) {
+    if (rel === "applied") continue;
+    const path = join(root, rel);
+    if (!existsSync(path)) {
+      problems.push(`${rel}: missing (run \`mise run sync-vendor\`)`);
+    } else if (readFileSync(path, "utf8") !== content) {
+      problems.push(`${rel}: stale (run \`mise run sync-vendor\`)`);
+    }
+  }
+
+  for (const [label, dest, files] of [
+    ["corpus baseline", CORPUS_BASELINE, corpusBaselineFiles(root)],
+    ["rules baseline", RULES_BASELINE, rulesBaselineFiles(root)],
+  ]) {
+    const diff = diffBaseline(join(root, dest), files);
+    for (const rel of diff.missing) problems.push(`${dest}/${rel}: missing (run \`mise run sync-vendor\`)`);
+    for (const rel of diff.changed) problems.push(`${dest}/${rel}: stale (run \`mise run sync-vendor\`)`);
+    for (const rel of diff.extra) problems.push(`${dest}/${rel}: not in ${label} (run \`mise run sync-vendor\`)`);
+  }
+
+  return { problems, applied: generated.applied };
+}
+
+/** Rewrite every generated artifact from the submodule checkouts. */
+export function sync(root = ROOT) {
+  const generated = contracts(root);
+  for (const [rel, content] of Object.entries(generated)) {
+    if (rel === "applied") continue;
+    const path = join(root, rel);
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, content);
+  }
+  const corpus = writeBaseline(join(root, CORPUS_BASELINE), corpusBaselineFiles(root));
+  const rules = writeBaseline(join(root, RULES_BASELINE), rulesBaselineFiles(root));
+  return { applied: generated.applied, corpus, rules };
+}
+
+/** Both submodules must be checked out before anything can be derived. */
+export function assertSubmodules(root = ROOT) {
+  for (const module of [AGENTS_ROOT, RULES_ROOT]) {
+    const marker = join(root, module, "tools.json");
+    if (!existsSync(marker) || statSync(marker).size === 0) {
+      fail(`${module}/tools.json not found. ${SUBMODULE_HINT}`);
+    }
+  }
+}
+
+const isMain = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+
+if (isMain) {
+  const checkOnly = process.argv.includes("--check");
+  try {
+    assertSubmodules();
+    if (checkOnly) {
+      const { problems, applied } = check();
+      if (problems.length) {
+        console.error("sync-vendor: generated artifacts are out of date");
+        for (const problem of problems) console.error(`  - ${problem}`);
+        process.exit(1);
+      }
+      console.log(
+        `sync-vendor: ${applied.length} documented overlay override(s), contracts and baselines in sync`,
+      );
+    } else {
+      const { applied, corpus, rules } = sync();
+      console.log(
+        `sync-vendor: wrote contracts (${applied.length} overlay override(s)) and baselines (${corpus} corpus files, ${rules} rule files)`,
+      );
+    }
+  } catch (error) {
+    console.error(`sync-vendor: ${error.message}`);
+    process.exit(error.userFacing ? 2 : 1);
+  }
+}

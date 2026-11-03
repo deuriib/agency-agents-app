@@ -1,5 +1,68 @@
 # Decisions (ADRs) — Agency Agents
 
+## 2026-11-03 — The catalog and rule contracts are pinned submodules, generated into the tree
+
+**Context.** Issue #72. The app consumed `agency-agents` and `agency-rules` by
+hand-vendored copy: a 4.6 MB `resources/corpus-baseline/` with no record of the commit
+it came from, a 52 KB `resources/rules-baseline/`, a `data/tools.json` copy that had
+drifted from upstream in five `detect.dirs`, and a `data/agency-categories.json` that
+described itself as a mirror of `divisions.json` while using a different top-level key.
+Nothing tested the relationship, so a re-vendor would silently revert deliberate edits,
+and a deleted upstream agent kept shipping. Runtime refresh fetched `refs/heads/main`,
+unpinned, and the parity checks needed a sibling checkout via environment variables.
+
+**Decision.**
+
+1. **Git submodules pinned to release tags**, under `vendor/` so the app's own `src/`,
+   `docs/` and `scripts/` keep their meaning: `vendor/agency-agents` (v1.6.2) and
+   `vendor/agency-rules` (v0.9.0). The submodule pointer is the catalog version.
+2. **One generator, one verifier.** `scripts/sync-vendor.mjs` derives every embedded
+   artifact from the checkouts; `--check` (CI job `vendor`, `mise run check-vendor`)
+   fails when any generated file is stale, missing or extra. All four workflows that
+   build or test the app check out submodules.
+3. **A closed overlay, not a silent divergence.** `src-tauri/data/tools-overlay.json`
+   is the only sanctioned difference from upstream: one named field per tool with a
+   `_why`, rejected when it stops differing (dead override) or names an unknown field.
+   Detection roots are the genuine case — upstream lists agent *destination* dirs,
+   the installer must recognise *installed surfaces*.
+4. **No mirror files.** `data/agency-categories.json` is gone; the Rust floor now
+   embeds `vendor/agency-agents/divisions.json` directly, so there is no second schema
+   and no `_note` overstating a relationship the code did not have.
+5. **Baselines are generated copies, not read-through.** Tauri bundles a resource tree,
+   so the corpus stays a physical baseline — but one produced by the generator and
+   verified by CI, which removes the drift class without making the crate depend on a
+   build-time file walk.
+6. **Fail fast without the submodules.** `src-tauri/build.rs` stops before
+   `tauri_build` and prints the `git submodule update --init --recursive` line.
+
+**Alternatives rejected**:
+- *Lockfile + verified tarball*: reproducible and archive-friendly, but keeps three
+  trees separate and adds a sync step — the opposite of working on everything in one
+  checkout.
+- *`git subtree`*: no clone friction, but 4.6 MB recommitted and review noise on every
+  catalog change.
+- *Runtime-only* (drop the baseline): breaks offline first launch.
+- *Read `tools.json` through a runtime merge in Rust and TypeScript*: two
+  implementations of the same overlay, and the Node guards would need a third. One
+  generated file keeps every consumer unchanged.
+- *Push the `detect.dirs` correction upstream instead of an overlay*: right long term,
+  but it couples this PR to an `agency-agents` release; the overlay keeps the
+  divergence explicit and testable today.
+
+**Consequences**: contributors must initialise submodules (mitigated by the preflight
+message and CONTRIBUTING), GitHub source archives cannot be built (stated in the
+README), and a catalog fix reaches users only when the app re-releases or the user
+refreshes. Pinning surfaced a real upstream defect: `finance-profit-first-strategist.md`
+ships frontmatter that is invalid YAML, so the pinned tag indexes 297 agents from 298
+files (fixed upstream in `deuriib/agency-agents#47`). The pinned tag also predates the
+catalog's move from `scripts/convert.sh` to `python -m agency_agents` +
+`convert-outputs.sha256`, so the bash parity test now reports "skipping"; a
+manifest-based oracle replaces it in #76.
+
+**References**: `scripts/sync-vendor.mjs`, `src-tauri/build.rs`,
+`src-tauri/data/tools-overlay.json`, `.gitmodules`, `.github/workflows/pr-check.yml`,
+`CONTRIBUTING.md`, `docs/BUILD.md`, `tasks/2026-11/261103_pinned-catalog-submodules.md`.
+
 ## 2026-11-03 — Rules compile natively and share the agent ledger
 
 **Context.** Issue #29 folds `deuriib/agency-rules` into the app: write a rule once,
