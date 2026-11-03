@@ -478,14 +478,15 @@ path join.
 - `render_rule_files(rule, harness) -> Result<Vec<RenderedFile>, AppError>`
   dispatches on the harness's `format` read from the registry. Returns exactly
   one file for all four harnesses; `RenderedFile.relative` stays `""` because the
-  destination template already carries the nesting (`{{slug}}/RULES.md`).
+  destination template already carries the nesting (`{slug}/RULES.md`).
 - `rule_dests(harness, slug, home, project_root) -> Result<Vec<PathBuf>, AppError>`
-  substitutes `{{slug}}` in the template the contract declares, expanding a
+  substitutes `{slug}` in the template the contract declares, expanding a
   leading `~/` against `home`. It must not special-case any harness id.
-- **`{{slug}}` (double braces)** is the placeholder in the mirrored contract.
-  Do not silently accept `{slug}` (the agent registry's form) — a mismatch would
-  create a literal `{{slug}}` directory on disk. A test asserts the substitution
-  happened and no `{{` survives in any resolved path.
+- **`{slug}` (single braces)** is the placeholder, shared with the agent
+  contract (issue #68 supersedes the original double-brace form). A template
+  left with the legacy `{{slug}}` resolves to `{…}` and is rejected rather than
+  written: a test asserts the substitution happened and no brace survives in any
+  resolved path.
 - Slug is re-validated against `^[a-z][a-z0-9-]*$` **inside** the dest resolver,
   before `root.join(...)`, and again before any write in TASK 16. A slug like
   `../../etc/passwd` or `a/b` returns an error; nothing is joined.
@@ -1338,12 +1339,12 @@ where they conflict; the dev agents implement the ruling, not the original text.
 | ID | Ruling | Note |
 | --- | --- | --- |
 | A1 | **Approved** | `src-tauri/src/rules/{registry,parse,validate,render,corpus,commands}.rs` behind `rules/mod.rs`, matching the `corpus/` precedent. |
-| A2 | **Approved** | `{{slug}}` is honoured verbatim; the no-residual-placeholder test is mandatory. |
+| A2 | **SUPERSEDED by #68** | `{{slug}}` was honoured verbatim; issue #68 unified the placeholder to `{slug}` and inverted the guard — a double-brace template is now the rejected form. The no-residual-placeholder test remains mandatory. |
 | A3 | **Approved** | Slug = frontmatter `name`. Proven by the fixtures, not assumed. |
 | A4 | **Approved** | Corpus lands at TASK 11–12. |
 | A5 | **Approved** | `rules_status` and `rules_installs` are required to satisfy spec §8 and §10.6. |
 | A6 | **OVERRULED — implement it** | Registering the `opencode-rules` plugin is part of a working OpenCode install, not a follow-up. See "A6 addendum" below. |
-| A7 | **OVERRULED — reuse the registry** | Resolve the harness → tool mapping from `tools.json`'s existing `kebab` field, so `settings.tool_paths` is honoured. See "A7 addendum" below. |
+| A7 | **SUPERSEDED by #68** | The `kebab` lookup existed only because the two id schemes disagreed. Harness ids are now the `tools.json` ids, so `tool_for_harness` is an existence check and `settings.tool_paths` is still honoured. See "A7 addendum" below. |
 | A8 | **Approved** | Delete recorded files only; never prune directories. |
 | A9 | **Approved** | `project_path: Option<String>`; the response reports the scope rendered. |
 | A10 | **Approved** | Document the `tools`/`match` fixture gap in the test header; cover both with unit tests. |
@@ -1376,19 +1377,25 @@ failing its intent. Implement, tightly scoped:
   conventions). If the file does not exist, create it with only the `plugin`
   key.
 
-### A7 addendum — harness → tool mapping via `kebab`
+### A7 addendum — harness → tool mapping (superseded by #68)
 
-`agency-rules` harness ids already equal the `kebab` field in
-`src-tauri/data/tools.json` (`pi-agent` → `piAgent`, `oh-my-pi` → `ohMyPi`).
-Resolve the mapping by `kebab` lookup in the existing registry rather than
-starting a second table:
+Originally: `agency-rules` harness ids equalled the `kebab` field in
+`src-tauri/data/tools.json` (`pi-agent` → `piAgent`), so the resolver compared
+against `kebab` instead of adding a second table.
+
+Issue #68 removed the mismatch at the source: `agency-rules` v0.10.0 uses the
+agent tool ids themselves (`piAgent`, `ohMyPi`), so the harness id **is** the
+registry id and `tool_for_harness` is an existence check. The behavioural
+requirements are unchanged:
 
 - User-scope destinations expand `~/` against `settings.tool_paths[tool_id]`
   when that override is set, else the OS home.
-- A harness whose `kebab` matches no registry entry falls back to the OS home
-  and the resolver stays total (no panic, no error).
+- A harness the registry does not declare falls back to the OS home and the
+  resolver stays total (no panic, no error).
 - This must not change any resolved agent path. The regression task (TASK 25)
   proves it.
+- Ledger rows written before the rename still uninstall: `parse_ledger` maps
+  `pi-agent → piAgent` and `oh-my-pi → ohMyPi` at read time.
 
 ---
 

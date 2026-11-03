@@ -9,8 +9,10 @@
 //!
 //! The frontend (`src/lib/data/ruleRegistry.ts`) imports the same two files, so
 //! the two sides cannot drift. Never restate the harness or format list here
-//! (spec §5.5, `registry.rs:12-14`, issue #49). Destinations use `{{slug}}`
-//! (double braces) — the agent contract uses `{slug}`; do not unify them.
+//! (spec §5.5, `registry.rs:12-14`, issue #49). Harness ids ARE the agent
+//! registry's `tools.json` ids (`piAgent`, `ohMyPi`) and destinations use the
+//! same `{slug}` placeholder, so one vocabulary covers agents and rules
+//! (issue #68).
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
@@ -77,7 +79,7 @@ pub fn all() -> &'static [RuleHarnessMeta] {
     registry().as_slice()
 }
 
-/// Look up a harness by its contract id, e.g. `"oh-my-pi"`.
+/// Look up a harness by its contract id, e.g. `"ohMyPi"`.
 pub fn get(id: &str) -> Option<&'static RuleHarnessMeta> {
     registry().iter().find(|h| h.id == id)
 }
@@ -94,19 +96,16 @@ pub fn plugin_entry(id: &str) -> Option<&'static str> {
     get(id)?.plugin.as_ref().map(|plugin| plugin.entry.as_str())
 }
 
-/// The agent-registry entry a rule harness maps onto, resolved through the
-/// existing `tools.json` `kebab` field (ruling A7).
+/// The agent-registry entry a rule harness maps onto.
 ///
-/// Ruling A7 asks the dest resolver to honour `settings.tool_paths`; the
-/// harness ids already equal the `kebab` values in `data/tools.json`
-/// (`pi-agent` → `piAgent`, `oh-my-pi` → `ohMyPi`), so the link is a lookup
-/// rather than a second mapping table. Total: `None` for a harness with no
-/// registry match (a future harness, or a typo) — callers fall back to the OS
-/// home.
+/// Ruling A7 asks the dest resolver to honour `settings.tool_paths`, so a
+/// harness has to resolve to the tool whose override it shares. Since issue #68
+/// the harness id *is* the `tools.json` id (`piAgent`, `ohMyPi`), so this is an
+/// existence check — the `kebab` comparison that compensated for two id schemes
+/// is gone. `None` for a harness the agent registry does not declare (a future
+/// harness, or a typo) — callers fall back to the OS home.
 pub fn tool_for_harness(harness: &str) -> Option<&'static crate::registry::ToolMeta> {
-    crate::registry::all()
-        .iter()
-        .find(|tool| tool.kebab == harness)
+    crate::registry::get(harness)
 }
 
 // =========================================================
@@ -127,10 +126,10 @@ mod tests {
           "label": "Google Antigravity",
           "format": "md-yaml-trigger",
           "installKind": "per-rule",
-          "integrationPath": "{{slug}}.md",
+          "integrationPath": "{slug}.md",
           "dest": {
-            "project": ".agents/rules/{{slug}}.md",
-            "user": "~/.gemini/config/rules/{{slug}}.md"
+            "project": ".agents/rules/{slug}.md",
+            "user": "~/.gemini/config/rules/{slug}.md"
           }
         },
         "future-harness": {
@@ -138,8 +137,8 @@ mod tests {
           "label": "Future Harness",
           "format": "md-future-format",
           "installKind": "per-rule",
-          "integrationPath": "{{slug}}.md",
-          "dest": { "project": ".future/rules/{{slug}}.md" }
+          "integrationPath": "{slug}.md",
+          "dest": { "project": ".future/rules/{slug}.md" }
         }
       }
     }"#;
@@ -153,7 +152,7 @@ mod tests {
         assert_eq!(all().len(), 4, "expected the four bundled rule harnesses");
         let mut ids: Vec<&str> = all().iter().map(|h| h.id.as_str()).collect();
         ids.sort_unstable();
-        assert_eq!(ids, vec!["antigravity", "oh-my-pi", "opencode", "pi-agent"]);
+        assert_eq!(ids, vec!["antigravity", "ohMyPi", "opencode", "piAgent"]);
     }
 
     #[test]
@@ -225,21 +224,16 @@ mod tests {
         assert!(tool_for_harness("not-a-harness").is_none());
     }
 
-    /// Ruling A7: every shipped harness resolves to an agent-registry tool via
-    /// the `kebab` field, so `settings.tool_paths` can be honoured without a
-    /// second mapping table. The expected ids are the camelCase wire ids.
+    /// Ruling A7: every shipped harness resolves to an agent-registry tool, so
+    /// `settings.tool_paths` can be honoured without a second mapping table.
+    /// Since issue #68 the harness id IS the tool id — the assertion is that no
+    /// translation is needed.
     #[test]
-    fn every_harness_maps_to_a_registry_tool_by_kebab() {
-        let cases = [
-            ("antigravity", "antigravity"),
-            ("pi-agent", "piAgent"),
-            ("oh-my-pi", "ohMyPi"),
-            ("opencode", "opencode"),
-        ];
-        for (harness, tool_id) in cases {
-            let tool = tool_for_harness(harness)
-                .unwrap_or_else(|| panic!("{harness} must map onto tools.json"));
-            assert_eq!(tool.id, tool_id, "{harness} maps onto {tool_id}");
+    fn every_harness_id_is_a_registry_tool_id() {
+        for harness in all() {
+            let tool = tool_for_harness(&harness.id)
+                .unwrap_or_else(|| panic!("{} must exist in tools.json", harness.id));
+            assert_eq!(tool.id, harness.id, "{} maps onto itself", harness.id);
         }
     }
 
@@ -268,8 +262,8 @@ mod tests {
     fn plugin_entry_comes_from_the_contract() {
         assert_eq!(plugin_entry("opencode"), Some("opencode-rules@latest"));
         assert!(plugin_entry("antigravity").is_none());
-        assert!(plugin_entry("pi-agent").is_none());
-        assert!(plugin_entry("oh-my-pi").is_none());
+        assert!(plugin_entry("piAgent").is_none());
+        assert!(plugin_entry("ohMyPi").is_none());
     }
 
     #[test]
@@ -283,8 +277,8 @@ mod tests {
                 harness.id
             );
             assert!(
-                harness.integration_path.contains("{{slug}}"),
-                "{} integrationPath must use {{{{slug}}}}",
+                harness.integration_path.contains("{slug}"),
+                "{} integrationPath must use {{slug}}",
                 harness.id
             );
             for template in [
@@ -295,16 +289,17 @@ mod tests {
             .flatten()
             {
                 assert!(
-                    template.contains("{{slug}}"),
-                    "{} destination template must use {{{{slug}}}}: {template}",
+                    template.contains("{slug}"),
+                    "{} destination template must use {{slug}}: {template}",
                     harness.id
                 );
-                // `{{slug}}` itself contains `{slug}`, so strip the double-brace
-                // placeholder first and assert nothing brace-like survives.
-                let residual = template.replace("{{slug}}", "");
+                // Nothing brace-like may survive substitution: a legacy
+                // `{{slug}}` would leave `{…}` behind and create a directory no
+                // harness reads.
+                let residual = template.replace("{slug}", "");
                 assert!(
-                    !residual.contains('{'),
-                    "{} destination template must not use the agent placeholder: {template}",
+                    !residual.contains('{') && !residual.contains('}'),
+                    "{} destination template must not use the legacy double-brace form: {template}",
                     harness.id
                 );
             }

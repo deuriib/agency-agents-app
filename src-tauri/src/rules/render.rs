@@ -171,7 +171,7 @@ fn antigravity_trigger(rule: &Rule) -> &str {
 
 /// pi-agent (`md-rules-dir`): `name`, `description`, and `tools` only when it is
 /// a non-empty array. `globs`, `alwaysApply`, `trigger`, `match` and `tags` are
-/// dropped, and the directory nesting (`{{slug}}/RULES.md`) comes from the
+/// dropped, and the directory nesting (`{slug}/RULES.md`) comes from the
 /// destination template — not from here.
 pub(crate) fn render_pi_agent(rule: &Rule) -> String {
     let mut fields: Vec<(&str, YamlValue)> = Vec::with_capacity(3);
@@ -692,7 +692,7 @@ fn width(text: &str) -> usize {
 /// `format` the contract declares (mirrors `render::render_files`).
 ///
 /// Exactly one file for every format this app implements, and `relative` stays
-/// empty: the destination template (`{{slug}}.md`, `{{slug}}/RULES.md`) already
+/// empty: the destination template (`{slug}.md`, `{slug}/RULES.md`) already
 /// carries any nesting, so emitting it here would duplicate it on disk.
 ///
 /// Fails closed (ruling C11): a rule carrying a shape the emitter cannot
@@ -772,7 +772,7 @@ pub fn validate_slug(slug: &str) -> Result<(), AppError> {
 /// ignores `home`.
 ///
 /// Never special-cases a harness id: the template comes from the contract, and
-/// `{{slug}}` is substituted with the validated slug. A template still holding a
+/// `{slug}` is substituted with the validated slug. A template still holding a
 /// brace after substitution (e.g. the agent registry's `{slug}`) is an error,
 /// not a literal directory name.
 pub fn rule_dests(
@@ -844,15 +844,16 @@ fn rule_dests_with(
     }
 
     let stripped = template.strip_prefix("~/").unwrap_or(template);
-    let rendered = stripped.replace("{{slug}}", slug);
+    let rendered = stripped.replace("{slug}", slug);
 
-    // The agent contract uses `{slug}`. Accepting it here would create a
-    // literal `{slug}` directory and write nothing the harness reads.
+    // One placeholder across agents and rules (issue #68). A template that
+    // still carries the legacy double-brace form resolves to `{{piAgent}}` →
+    // `{piAgent}` and would create a literally braced directory that no
+    // harness reads, so refuse it instead of writing it.
     if rendered.contains('{') || rendered.contains('}') {
         return Err(AppError::InvalidArgument {
             message: format!(
-                "rule harness '{}' destination template must use the double-braced \
-                 {{{{slug}}}} placeholder: {template}",
+                "rule harness '{}' destination template must use the {{slug}} placeholder: {template}",
                 meta.id
             ),
         });
@@ -1748,8 +1749,8 @@ mod tests {
         rule.always_apply = Some(false);
         for (harness, expected) in [
             ("antigravity", render_antigravity(&rule)),
-            ("pi-agent", render_pi_agent(&rule)),
-            ("oh-my-pi", render_oh_my_pi(&rule)),
+            ("piAgent", render_pi_agent(&rule)),
+            ("ohMyPi", render_oh_my_pi(&rule)),
             ("opencode", render_opencode(&rule)),
         ] {
             let files = render_rule_files(&rule, harness).expect("renderable");
@@ -1857,7 +1858,7 @@ mod tests {
             label: id.to_string(),
             format: "md-or-mdc".to_string(),
             install_kind: "per-rule".to_string(),
-            integration_path: "{{slug}}.md".to_string(),
+            integration_path: "{slug}.md".to_string(),
             detect: None,
             frontmatter: None,
             extensions: Vec::new(),
@@ -1930,7 +1931,7 @@ mod tests {
     #[test]
     fn pi_agent_nests_one_directory_and_the_others_do_not() {
         let home = temp_home();
-        let pi = rule_dests("pi-agent", "typescript", home.path(), None).expect("pi-agent");
+        let pi = rule_dests("piAgent", "typescript", home.path(), None).expect("piAgent");
         assert_eq!(
             pi[0],
             home.path().join(".pi/agent/rules/typescript/RULES.md")
@@ -1940,7 +1941,7 @@ mod tests {
             .expect("dest under home")
             .components()
             .count();
-        for harness in ["antigravity", "oh-my-pi", "opencode"] {
+        for harness in ["antigravity", "ohMyPi", "opencode"] {
             let dests = rule_dests(harness, "typescript", home.path(), None).expect("resolves");
             let relative = dests[0]
                 .strip_prefix(home.path())
@@ -1969,12 +1970,12 @@ mod tests {
                 "/work/project/.agents/rules/typescript.md",
             ),
             (
-                "pi-agent",
+                "piAgent",
                 "/home/tester/.pi/agent/rules/typescript/RULES.md",
                 "/work/project/.pi/rules/typescript/RULES.md",
             ),
             (
-                "oh-my-pi",
+                "ohMyPi",
                 "/home/tester/.omp/agent/rules/typescript.md",
                 "/work/project/.omp/rules/typescript.md",
             ),
@@ -2002,7 +2003,7 @@ mod tests {
     fn hostile_slugs_are_rejected_with_zero_filesystem_contact() {
         let home = temp_home();
         for slug in ["../../etc/passwd", "a/b", "A-B", ""] {
-            for harness in ["antigravity", "pi-agent", "oh-my-pi", "opencode"] {
+            for harness in ["antigravity", "piAgent", "ohMyPi", "opencode"] {
                 assert!(
                     rule_dests(harness, slug, home.path(), None).is_err(),
                     "{harness} accepted {slug:?}"
@@ -2034,7 +2035,7 @@ mod tests {
     #[test]
     fn project_only_harness_without_a_root_needs_a_project_path() {
         let home = temp_home();
-        let meta = harness_meta("project-only", None, Some(".only/rules/{{slug}}.md"));
+        let meta = harness_meta("project-only", None, Some(".only/rules/{slug}.md"));
         let error =
             rule_dests_with(&meta, "typescript", home.path(), None).expect_err("must refuse");
         assert!(
@@ -2060,7 +2061,7 @@ mod tests {
     fn user_only_harness_refuses_project_scope() {
         let home = temp_home();
         let project = temp_home();
-        let meta = harness_meta("user-only", Some("~/.only/rules/{{slug}}.md"), None);
+        let meta = harness_meta("user-only", Some("~/.only/rules/{slug}.md"), None);
         let error = rule_dests_with(&meta, "typescript", home.path(), Some(project.path()))
             .expect_err("must refuse");
         assert!(
@@ -2073,17 +2074,17 @@ mod tests {
         );
     }
 
-    /// The agent placeholder must not be silently accepted: it would create a
-    /// literal `{slug}` directory on disk.
+    /// The legacy double-brace placeholder must not be silently accepted: it
+    /// resolves to a literal `{slug}` directory that no harness reads.
     #[test]
-    fn single_brace_templates_are_rejected() {
+    fn double_brace_templates_are_rejected() {
         let home = temp_home();
-        let mut meta = harness_meta("agent-style", Some("~/.agent/rules/{slug}.md"), None);
-        meta.integration_path = "{slug}.md".to_string();
+        let mut meta = harness_meta("legacy", Some("~/.agent/rules/{{slug}}.md"), None);
+        meta.integration_path = "{{slug}}.md".to_string();
         let error = rule_dests_with(&meta, "typescript", home.path(), None)
-            .expect_err("must refuse the agent placeholder");
+            .expect_err("must refuse the legacy double-brace placeholder");
         assert!(
-            matches!(&error, AppError::InvalidArgument { message } if message.contains("double-braced")),
+            matches!(&error, AppError::InvalidArgument { message } if message.contains("{slug} placeholder")),
             "{error:?}"
         );
         assert!(
@@ -2098,7 +2099,7 @@ mod tests {
     #[test]
     fn absolute_destination_templates_are_rejected() {
         let home = temp_home();
-        let meta = harness_meta("absolute", Some("/etc/rules/{{slug}}.md"), None);
+        let meta = harness_meta("absolute", Some("/etc/rules/{slug}.md"), None);
         assert!(rule_dests_with(&meta, "typescript", home.path(), None).is_err());
     }
 
@@ -2107,7 +2108,7 @@ mod tests {
     #[test]
     fn dot_segments_in_a_template_are_rejected() {
         let home = temp_home();
-        for template in ["a/../{{slug}}.md", "./{{slug}}.md"] {
+        for template in ["a/../{slug}.md", "./{slug}.md"] {
             let meta = harness_meta("dotty", Some(template), None);
             let error = rule_dests_with(&meta, "typescript", home.path(), None)
                 .expect_err("must refuse a dot segment");
@@ -2142,7 +2143,7 @@ mod tests {
             ("opencode".to_string(), "/opt/opencode-home".to_string()),
         ]);
         assert_eq!(
-            harness_base(&tool_paths, "pi-agent", home),
+            harness_base(&tool_paths, "piAgent", home),
             PathBuf::from("/wsl/home/me")
         );
         assert_eq!(
@@ -2153,7 +2154,7 @@ mod tests {
         assert_eq!(harness_base(&tool_paths, "antigravity", home), home);
         // An empty override is "not set" (the `resolve_tool_base` contract).
         let empty = HashMap::from([("ohMyPi".to_string(), String::new())]);
-        assert_eq!(harness_base(&empty, "oh-my-pi", home), home);
+        assert_eq!(harness_base(&empty, "ohMyPi", home), home);
     }
 
     /// C9: the "no registry match → OS home" branch is unreachable with the
