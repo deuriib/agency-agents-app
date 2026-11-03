@@ -242,3 +242,7 @@ Expected: both versions agree and the newest lockfile commit is
   `release-please--branches--main--components--agency-agents-app`. If the mint step
   succeeds but `Release lock sync` stays at zero runs, suspect the filter second,
   after credentials; do not widen it to `**`, which would run the sync on `main`.
+
+## Artifacts
+
+- Pull request: [#93](https://github.com/deuriib/agency-agents-app/pull/93)
