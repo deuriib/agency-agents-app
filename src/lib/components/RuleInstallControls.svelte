@@ -22,6 +22,7 @@
   import DestructiveConfirm from "./DestructiveConfirm.svelte";
   import Pill from "./Pill.svelte";
   import { harnessLabel, isHarnessInstallable, ruleHarness } from "$lib/data/ruleRegistry";
+  import { installBlockReason, needsProjectRoot } from "$lib/rules/derive";
   import { i18n } from "$lib/stores/i18n.svelte";
   import { rules } from "$lib/stores/rules.svelte";
   import { toast } from "$lib/stores/toast.svelte";
@@ -62,7 +63,7 @@
    *  and there is NO install state — the user row shares the same ledger key
    *  (`project_path: null`), so resolving one here would offer an Uninstall that
    *  deletes the user-global install. */
-  const needsRoot = $derived(scope === "project" && projectPath === null);
+  const needsRoot = $derived(needsProjectRoot(scope, projectPath));
   const installed = $derived(
     harness === null || needsRoot ? null : rules.installFor(slug, harness, scope, projectPath),
   );
@@ -76,16 +77,30 @@
    * "this harness cannot be written" line.
    */
   const reason = $derived.by((): string | null => {
-    if (!valid) return i18n.t("rules.install.reasonInvalid");
-    if (needsRoot) return i18n.t("rules.install.reasonNoProjectRoot");
-    if (harness === null || meta === null || !isHarnessInstallable(meta)) {
-      return i18n.t("rules.install.reasonNotInstallable");
+    const key = installBlockReason({
+      valid,
+      harness,
+      installable: meta !== null && isHarnessInstallable(meta),
+      scope,
+      projectPath,
+      previewLoading,
+      previewError,
+      dest,
+    });
+    switch (key) {
+      case null:
+        return null;
+      case "invalid":
+        return i18n.t("rules.install.reasonInvalid");
+      case "noProjectRoot":
+        return i18n.t("rules.install.reasonNoProjectRoot");
+      case "notInstallable":
+        return i18n.t("rules.install.reasonNotInstallable");
+      case "previewLoading":
+        return i18n.t("rules.install.reasonPreviewLoading");
+      case "previewFailed":
+        return i18n.t("rules.install.reasonPreviewFailed");
     }
-    if (previewLoading) return i18n.t("rules.install.reasonPreviewLoading");
-    if (previewError !== null) return i18n.t("rules.install.reasonPreviewFailed");
-    // Settled with no error yet no destination: the app has no path to state.
-    if (dest === null) return i18n.t("rules.install.reasonNotInstallable");
-    return null;
   });
 
   const projectName = $derived(

@@ -136,6 +136,11 @@ jobs:
       - name: svelte-check
         run: npm run check
 
+      # Unit + component tests for the stores and the Rules workspace. jsdom,
+      # stubbed IPC, no Tauri runtime and no network (issue #62).
+      - name: Frontend tests (Vitest)
+        run: npm test
+
       - name: Build frontend
         run: npm run build
 
