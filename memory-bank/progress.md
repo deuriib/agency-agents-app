@@ -1,17 +1,30 @@
 # Project Progress — Agency Agents
 
-## Version 0.8.x (Current)
-- [ ] **PR #39 (`chore(main): release 0.8.0`)** opened by release-please. Do not merge
-  until the signing secrets exist: the Linux/Windows preflight fails without them.
-- [ ] Set `TAURI_SIGNING_PRIVATE_KEY` and `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`
-  (`mise run set-updater-secrets` on the Mac).
-- [ ] Merge PR #39 → `v0.8.0` draft → CI attaches signed Linux/Windows payloads and
-  `latest.json`.
-- [ ] Publish with `./scripts/release.sh` (macOS notarization + `darwin-*` entries).
-- [ ] Verify with `mise run verify-updater -- --check-urls`, then update an installed
-  0.7.x build end-to-end.
-- [ ] Delete the stranded `v0.7.1` draft.
-- [ ] Native review of the new translations.
+## Version 0.9.x (Current)
+- [x] **PR #61 (merged `1ab9453`)**: Rules integration, milestone M1 of issue #29.
+  Native Rust compilation of the four `agency-rules` renderers (32/32 byte-identical
+  to a fresh upstream compile), a second managed corpus with its own index and
+  refresh, ledger tracking with a domain discriminator, OpenCode plugin registration,
+  and a Rules workspace in all 12 locales. See
+  [261103_rules-integration.md](tasks/2026-11/261103_rules-integration.md).
+- [x] Fixed `atomic_write` (missing `flush()` before `sync_all` silently truncated on
+  a full disk) and `load_ledger` (any read error became "nothing installed").
+- [x] **v0.9.0** released by release-please (`00b9576`, PR #67).
+- [ ] **Publish v0.9.0**: it is still a draft with Linux assets only. Missing
+  `latest.json`, Windows artifacts and the notarized macOS payload. Needs the signing
+  secrets and a local `./scripts/release.sh`, then `mise run verify-updater`.
+- [ ] Native review of the 12-locale Rules strings.
+- [ ] Triage the #61 review follow-ups (#62–#72); suggested order: #72 → #68 → #62 →
+  #66, with #63/#65/#69 independent.
+
+## Version 0.8.x (Completed)
+- [x] 0.8.0 → 0.8.4 shipped: updater installable end-to-end (`latest.json` + signing +
+  channels), auto-install locale keys, and the `verify-updater` /
+  `set-updater-secrets` tasks.
+- [x] 0.8.3/0.8.4: catalog snapshot carries `strategy/` and `divisions.json`;
+  `IMPLEMENTED_FORMATS` read from a shared JSON (#54, #59).
+- [ ] Each 0.8.x release still needs the macOS publish step performed locally; the
+  draft left behind by CI only holds the Linux payloads.
 
 ## Version 0.7.x (Completed)
 - [x] **PR #38 (merged `a453bd2`)**: updater installable end-to-end (`latest.json` +

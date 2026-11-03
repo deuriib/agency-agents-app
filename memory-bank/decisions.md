@@ -1,5 +1,58 @@
 # Decisions (ADRs) — Agency Agents
 
+## 2026-11-03 — Rules compile natively and share the agent ledger
+
+**Context.** Issue #29 folds `deuriib/agency-rules` into the app: write a rule once,
+compile it to four harness formats (Antigravity, pi-agent, oh-my-pi, OpenCode), then
+track and remove it. The upstream project ships a Node CLI whose renderers are the
+reference implementation. The app had three plausible shapes: invoke that CLI, design
+a plugin system, or port the renderers.
+
+Two constraints decided it. First, `systemPatterns.md` §3 already fixes the contract
+for agents: conversion is done natively in Rust, and the reference converter is a
+*spec*, never a runtime dependency — a Tauri app that bundles Node to convert Markdown
+is a much larger dependency surface than four small renderers. Second, the app's core
+differentiator is being the database: `rendered_hash` is what makes reconciliation
+possible, so the output bytes have to be stable and defensible.
+
+**Decision.**
+
+1. **Native Rust port** of the four renderers, with a purpose-built emitter that
+   reproduces `yaml@2`'s scalar decisions. Byte-parity with the reference compiler is
+   the contract, proven by golden fixtures generated from a fresh upstream run plus an
+   adversarial matrix.
+2. **A second managed corpus** for `agency-rules` (`rules-corpus/`,
+   `state/rules-index.json`), mirroring the agent corpus model: bundled baseline,
+   tarball refresh, atomic swap, independent schedule.
+3. **One ledger, a domain discriminator.** Rule rows carry `domain: "rule"` and are
+   filtered out of every agent-facing surface, in both directions, rather than living
+   in a second file that would drift from the first.
+4. **Fail closed on shapes the emitter cannot reproduce.** A schema-valid rule can
+   carry a multi-line value that upstream folds; writing bytes that differ from
+   upstream would make `rendered_hash` lie, so those rules are refused with a visible
+   reason instead of installed.
+
+**Why not the alternatives.**
+- *Invoke the `agency-rules` CLI* — rejected: bundles a Node runtime into a Tauri app,
+  contradicts §3, and makes the build depend on a second toolchain.
+- *Plugin system with `agency-rules` as the first plugin* — rejected: no concrete pain
+  point justifies the abstraction (ENG-13), and there is exactly one plugin.
+- *A second ledger file for rules* — rejected: two sources of truth for "what is
+  installed", and every consumer would have to remember to read both.
+- *One id scheme for both domains, now* — deferred (#68): the rule contract mirrors
+  upstream verbatim, so unifying `{{slug}}`/`{slug}` and `pi-agent`/`piAgent` requires
+  a coordinated upstream change plus a ledger alias migration, not a rename.
+
+**Consequence.** Rules and agents now share one corpus model, one ledger and one
+render-time contract. The cost is that the renderer is a compatibility surface: a
+reference-compiler change needs a corresponding fixture refresh, and the parity run is
+load-bearing (`docs/BUILD.md`). Fixtures must be generated from a fresh compiler run,
+never copied from the upstream `integrations/` tree, which is gitignored generated
+output and was already stale when this landed.
+
+**References.** PR #61 (`1ab9453`), `docs/rules-integration-spec.md`,
+`docs/rules-integration-tasks.md` (rulings A1–A14, C1–C11).
+
 ## 2026-11-02 — Snapshot provisioning mirrors the catalog tree, not an allow-list of divisions
 
 **Context.** The Runbooks pillar stayed empty (#58) because the app's snapshot
