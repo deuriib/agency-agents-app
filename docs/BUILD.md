@@ -382,7 +382,9 @@ alone — it only commits one file and pushes it. A `permission-*` entry the
 installation does not grant fails the token step outright, so a permission
 mismatch is a loud failure rather than a degraded run.
 
-Set once, values never echoed:
+Once the App exists, its **Client ID** is on the App's *General* page. The private
+key is under **Credentials → Private keys → Generate a private key**; GitHub
+downloads a `.pem`. Set both once, values never echoed:
 
 ```sh
 gh variable set RELEASE_APP_CLIENT_ID -R deuriib/agency-agents-app \
@@ -395,7 +397,7 @@ gh secret list -R deuriib/agency-agents-app   # names only — never prints a va
 The key goes in through a redirect; `gh secret set` never receives it on argv, so
 nothing lands in shell history. Delete the downloaded `.pem` after the upload.
 
-**Rotation**: App settings → *Private keys* → *Generate a private key*, then
+**Rotation**: App settings → **Credentials** → *Private keys* → *Generate a private key*, then
 `gh secret set RELEASE_APP_PRIVATE_KEY -R deuriib/agency-agents-app < <new>.pem`, then delete the old key in
 the App settings. The secret name never changes, so no workflow edit is needed.
 
