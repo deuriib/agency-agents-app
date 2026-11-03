@@ -187,10 +187,37 @@ pub struct CorpusMeta {
 
 // ---------- Install ledger ----------
 
+/// Which domain a ledger row belongs to. Rules reuse the existing
+/// `installs.json` (spec §5.4) instead of getting a second ledger file, so every
+/// row carries this discriminator.
+///
+/// `Default = Agent` is load-bearing: every row written before M1 has no
+/// `domain` key, and `#[serde(default)]` must read those as agent rows.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum InstallDomain {
+    #[default]
+    Agent,
+    Rule,
+}
+
+/// Serde predicate for `skip_serializing_if` on agent rows. MUST stay a free
+/// function: serde resolves the path, so a `Self::` method cannot be used here.
+///
+/// Without the skip, every agent row would gain `"domain": "agent"` and a
+/// v0.8.x ledger could no longer round-trip byte-identically (spec §5.4).
+pub(crate) fn is_agent_domain(domain: &InstallDomain) -> bool {
+    matches!(domain, InstallDomain::Agent)
+}
+
 /// One row of `installs.json` — the ledger of local install actions.
 /// `source_hash` records the corpus version installed from;
 /// `rendered_hash` is the SHA-256 of the exact bytes written after
 /// per-tool conversion, used by reconciliation to classify state.
+///
+/// The same shape is used for agent and rule rows (ruling C3: one wire type, no
+/// parallel DTO). A rule row puts the rule slug in `slug` and the harness id in
+/// `tool`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct InstallRecord {
@@ -221,6 +248,23 @@ pub struct InstallRecord {
     pub rendered_hash: String,
     pub installed_at: String,
     pub corpus_version: String,
+    /// Domain discriminator, appended after every pre-existing field so the
+    /// declaration order (= serialization order) of existing keys is unchanged.
+    /// `#[serde(default)]` keeps v0.8.x ledgers parsing;
+    /// `skip_serializing_if` keeps agent rows byte-identical.
+    #[serde(default, skip_serializing_if = "is_agent_domain")]
+    pub domain: InstallDomain,
+    /// The OpenCode plugin registration, on `opencode` rule rows only
+    /// (ruling A6): `Some(true)` = this install added the `opencode-rules` entry
+    /// to `opencode.json`, `Some(false)` = the entry was already present and
+    /// nothing was written, `None` = not an OpenCode rule row.
+    ///
+    /// `opencode.json` itself is NEVER a tracked destination — it must not
+    /// appear in `dest`/`dests` and uninstall must never delete it (ruling C2) —
+    /// so this boolean is the only trace of that side-effect write. Absent
+    /// everywhere else, including every agent row, so agent bytes do not move.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin_registered: Option<bool>,
 }
 
 // ---------- Reconciliation ----------

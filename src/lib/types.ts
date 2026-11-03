@@ -520,6 +520,9 @@ export interface CatalogDetection {
  * One row of `installs.json` — the ledger of local install actions.
  * `sourceHash` records the corpus version installed from; `renderedHash`
  * is the SHA-256 of the exact bytes written after per-tool conversion.
+ *
+ * Rules share this ledger (issue #29) and are told apart by `domain`: a rule row
+ * puts the rule slug in `slug` and the harness id in `tool`.
  */
 export interface InstallRecord {
   slug: string;
@@ -534,7 +537,19 @@ export interface InstallRecord {
   renderedHash: string;
   installedAt: string;
   corpusVersion: string;
+  /** Absent on agent rows — the backend skips the key entirely. */
+  domain?: InstallDomain;
+  /**
+   * OpenCode rule rows only: `true` when this install added the
+   * `opencode-rules` entry, `false` when it was already present (nothing was
+   * written). `opencode.json` itself is never a tracked destination, so this
+   * boolean is the only trace of that write.
+   */
+  pluginRegistered?: boolean;
 }
+
+/** Which domain a ledger row belongs to. Absent means `"agent"`. */
+export type InstallDomain = "agent" | "rule";
 
 /**
  * The five reconciliation states (like a package manager's installed /

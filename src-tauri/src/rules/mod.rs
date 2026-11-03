@@ -12,6 +12,7 @@
 
 pub mod commands;
 pub mod corpus;
+pub mod opencode;
 pub mod parse;
 pub mod registry;
 pub mod render;
