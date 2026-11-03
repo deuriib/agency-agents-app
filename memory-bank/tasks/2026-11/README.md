@@ -21,6 +21,10 @@ notarized macOS build are missing, so the updater cannot serve it yet.
   `cargo metadata --locked` gate in PR Check and `mise run check-lock`, plus
   `release-lock.yml` committing the sync into the release PR so the tagged commit
   matches its manifest. See [261103_cargo-lock-sync.md](./261103_cargo-lock-sync.md).
+- Lifted the multi-line install guard (issue #63): the literal block, all three chomping
+  indicators, the indent indicator and the quoted fallbacks are ported from `yaml@2` and
+  proven against a generated 28-case oracle; only the folded (`>`) shape stays refused, with
+  a message that names it. See [261103_block-scalar-folding.md](./261103_block-scalar-folding.md).
 - Unified the Rules workspace with the Agents grammar (issue #66): one `WorkspaceShell`
   (resizable, persisted detail pane), one `CategoryMenu`, a category landing with an
   "all" destination, a category overview, and an install-state lens with counts. Categories

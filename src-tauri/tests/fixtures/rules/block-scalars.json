@@ -1,0 +1,145 @@
+{
+  "note": "Generated with yaml@2 (the reference compiler) via src/lib/renderers/_util.mjs semantics: stringify(...).trimEnd(). Do not hand-edit.",
+  "cases": [
+    {
+      "name": "short two lines",
+      "value": "alpha\nbeta",
+      "expected": "description: |-\n  alpha\n  beta"
+    },
+    {
+      "name": "three lines",
+      "value": "alpha\nbeta\ngamma",
+      "expected": "description: |-\n  alpha\n  beta\n  gamma"
+    },
+    {
+      "name": "leading space",
+      "value": " alpha\nbeta",
+      "expected": "description: |2-\n   alpha\n  beta"
+    },
+    {
+      "name": "leading two spaces",
+      "value": "  alpha\nbeta",
+      "expected": "description: |2-\n    alpha\n  beta"
+    },
+    {
+      "name": "leading newline",
+      "value": "\nalpha",
+      "expected": "description: |-\n  \n  alpha"
+    },
+    {
+      "name": "trailing space before newline",
+      "value": "alpha \nbeta",
+      "expected": "description: |-\n  alpha \n  beta"
+    },
+    {
+      "name": "clip (one trailing newline)",
+      "value": "alpha\nbeta\n",
+      "expected": "description: |\n  alpha\n  beta"
+    },
+    {
+      "name": "keep (two trailing newlines)",
+      "value": "alpha\nbeta\n\n",
+      "expected": "description: |+\n  alpha\n  beta"
+    },
+    {
+      "name": "keep (three trailing newlines)",
+      "value": "alpha\nbeta\n\n\n",
+      "expected": "description: |+\n  alpha\n  beta"
+    },
+    {
+      "name": "blank line in the middle",
+      "value": "alpha\n\nbeta",
+      "expected": "description: |-\n  alpha\n\n  beta"
+    },
+    {
+      "name": "two blank lines in the middle",
+      "value": "alpha\n\n\nbeta",
+      "expected": "description: |-\n  alpha\n\n\n  beta"
+    },
+    {
+      "name": "more-indented line",
+      "value": "alpha\n  indented\nbeta",
+      "expected": "description: |-\n  alpha\n    indented\n  beta"
+    },
+    {
+      "name": "tab-indented line",
+      "value": "alpha\n\tindented\nbeta",
+      "expected": "description: |-\n  alpha\n  \tindented\n  beta"
+    },
+    {
+      "name": "more-indented then blank",
+      "value": "alpha\n  indented\n\nbeta",
+      "expected": "description: |-\n  alpha\n    indented\n\n  beta"
+    },
+    {
+      "name": "trailing whitespace after newline (quoted fallback)",
+      "value": "alpha\n  ",
+      "expected": "description: \"alpha\\n  \""
+    },
+    {
+      "name": "trailing tab after newline (quoted fallback)",
+      "value": "alpha\n\t",
+      "expected": "description: \"alpha\\n\\t\""
+    },
+    {
+      "name": "long foldable paragraph",
+      "value": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\nbeta beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta",
+      "expected": "description: >-\n  alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n  alpha alpha alpha\n\n  beta beta beta beta beta beta beta beta beta beta beta beta beta beta beta\n  beta"
+    },
+    {
+      "name": "long first line only",
+      "value": "alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\nshort",
+      "expected": "description: >-\n  alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n  alpha alpha alpha\n\n  short"
+    },
+    {
+      "name": "long with blank",
+      "value": "short\nalpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n\nshort",
+      "expected": "description: >-\n  short\n\n  alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha\n  alpha alpha alpha\n\n\n  short"
+    },
+    {
+      "name": "long more-indented (overflow fallback)",
+      "value": "short\n   alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha",
+      "expected": "description: >-\n  short\n     alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha alpha"
+    },
+    {
+      "name": "single long word",
+      "value": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+      "expected": "description: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    },
+    {
+      "name": "one line",
+      "value": "alpha",
+      "expected": "description: alpha"
+    },
+    {
+      "name": "empty",
+      "value": "",
+      "expected": "description: \"\""
+    },
+    {
+      "name": "percent at line start",
+      "value": "%alpha\nbeta",
+      "expected": "description: |-\n  %alpha\n  beta"
+    },
+    {
+      "name": "colon space",
+      "value": "alpha: beta\ngamma",
+      "expected": "description: |-\n  alpha: beta\n  gamma"
+    },
+    {
+      "name": "hash in line",
+      "value": "alpha\n#beta",
+      "expected": "description: |-\n  alpha\n  #beta"
+    },
+    {
+      "name": "unicode and emoji",
+      "value": "héllo wörld\n🎯 target line\nplain",
+      "expected": "description: |-\n  héllo wörld\n  🎯 target line\n  plain"
+    },
+    {
+      "name": "windows-style",
+      "value": "alpha\r\nbeta",
+      "expected": "description: \"alpha\\r\\nbeta\""
+    }
+  ]
+}

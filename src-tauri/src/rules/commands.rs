@@ -1003,7 +1003,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_blocked_multiline_rule_writes_nothing_and_returns_no_row() {
+    async fn a_multiline_rule_installs_as_a_literal_block() {
+        // Issue #63: a short multi-line value used to be refused (the emitter
+        // only wrote single lines). It now renders as the reference's literal
+        // block, so the rule installs and the ledger row exists.
         let app_data = TempDir::new().expect("app data");
         let home = TempDir::new().expect("home");
         let backups = TempDir::new().expect("backups");
@@ -1020,6 +1023,62 @@ mod tests {
         assert!(entry.validation.valid, "the rule is schema-valid");
         let tool_paths = empty_paths();
 
+        let record = install_rule(request(
+            &root,
+            &entry,
+            "antigravity",
+            Scope::User,
+            None,
+            home.path(),
+            backups.path(),
+            &tool_paths,
+        ))
+        .await
+        .expect("a short multi-line value is installable");
+
+        let written = fs::read_to_string(&record.dest).expect("read the installed rule");
+        assert!(
+            written.contains("description: |\n  first line\n  second line"),
+            "expected the literal block, got: {written}"
+        );
+        assert!(!files_under(home.path()).is_empty());
+
+        // Preview agrees with what install wrote: same bytes, no surprise.
+        let preview = preview_rule(&root, &entry, Scope::User, None, &tool_paths, home.path())
+            .expect("preview renders the same shape");
+        let rendered = preview
+            .harnesses
+            .iter()
+            .find(|harness| harness.harness == "antigravity")
+            .expect("antigravity preview");
+        assert_eq!(
+            rendered.bytes.as_bytes(),
+            fs::read(&record.dest).expect("read"),
+            "preview and install must be the same bytes"
+        );
+    }
+
+    /// The residual guard: a value the reference would fold into `>` is still
+    /// refused, and a refusal writes nothing (ruling C11).
+    #[tokio::test]
+    async fn a_foldable_multiline_rule_writes_nothing_and_returns_no_row() {
+        let app_data = TempDir::new().expect("app data");
+        let home = TempDir::new().expect("home");
+        let backups = TempDir::new().expect("backups");
+        let root = rules_corpus::rules_corpus_dir(app_data.path());
+        let dir = root.join("rules/base");
+        fs::create_dir_all(&dir).expect("create dir");
+        let long = "alpha ".repeat(20).trim().to_string();
+        fs::write(
+            dir.join("folded.md"),
+            format!("---\nname: folded\ndescription: |\n  short\n  {long}\n---\n\nBody.\n"),
+        )
+        .expect("write rule");
+
+        let entry = entry(&root, "folded");
+        assert!(entry.validation.valid, "the rule is schema-valid");
+        let tool_paths = empty_paths();
+
         let error = install_rule(request(
             &root,
             &entry,
@@ -1031,11 +1090,11 @@ mod tests {
             &tool_paths,
         ))
         .await
-        .expect_err("C11: the emitter cannot reproduce multi-line values");
+        .expect_err("C11: the folded branch is not ported");
 
         match error {
             AppError::InvalidArgument { message } => {
-                assert!(message.contains("spans multiple lines"), "{message}");
+                assert!(message.contains("longer than"), "{message}");
             }
             other => panic!("expected InvalidArgument, got {other:?}"),
         }
@@ -1044,15 +1103,6 @@ mod tests {
             "a refused install must write zero files: {:?}",
             files_under(home.path())
         );
-
-        // Preview must refuse the same rule: showing bytes that install would
-        // never write would be a lie (ruling C11).
-        let preview = preview_rule(&root, &entry, Scope::User, None, &tool_paths, home.path());
-        assert!(
-            matches!(preview, Err(AppError::InvalidArgument { .. })),
-            "{preview:?}"
-        );
-        assert!(files_under(home.path()).is_empty());
     }
 
     #[tokio::test]
