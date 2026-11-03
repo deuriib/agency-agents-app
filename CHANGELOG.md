@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.1](https://github.com/deuriib/agency-agents-app/compare/v0.9.0...v0.9.1) (2026-11-03)
+
+
+### Bug Fixes
+
+* **release:** take the Apple identity from the environment ([#74](https://github.com/deuriib/agency-agents-app/issues/74)) ([7f58af3](https://github.com/deuriib/agency-agents-app/commit/7f58af3c74b3aafbbc30eb67c884873e04848d60))
+
 ## [0.9.0](https://github.com/deuriib/agency-agents-app/compare/v0.8.4...v0.9.0) (2026-11-03)
 
 
