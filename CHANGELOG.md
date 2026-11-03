@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/deuriib/agency-agents-app/compare/v0.9.1...v0.9.2) (2026-11-03)
+
+
+### Refactors
+
+* **rules:** use {slug} and the agent tool ids for rule harnesses ([#78](https://github.com/deuriib/agency-agents-app/issues/78)) ([b6b13ee](https://github.com/deuriib/agency-agents-app/commit/b6b13ee58b30701ee9f4f14bfecdc092ecfb6c56))
+
 ## [0.9.1](https://github.com/deuriib/agency-agents-app/compare/v0.9.0...v0.9.1) (2026-11-03)
 
 
