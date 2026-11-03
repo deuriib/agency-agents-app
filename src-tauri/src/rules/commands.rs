@@ -569,6 +569,26 @@ pub(crate) async fn remove_rule_files(
     Ok(report)
 }
 
+/// Remove the files a failed install had already written, so the command's
+/// error and the filesystem agree.
+///
+/// Best-effort by design: if a removal fails we log and continue. The
+/// alternative — reporting success over an untracked file — is worse, and a
+/// pre-existing divergent file stays recoverable from the backup the install
+/// took. The OpenCode plugin entry is left alone: it is idempotent and no rule
+/// depends on it having been removed.
+pub(crate) async fn rollback_written_files(dests: &[String]) {
+    for dest in dests {
+        match tokio::fs::remove_file(dest).await {
+            Ok(()) => tracing::info!("rules_install: rolled back {dest}"),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                "rules_install: rollback could not remove {dest}: {e}; the install is untracked"
+            ),
+        }
+    }
+}
+
 /// A project root must be absolute and an existing directory.
 ///
 /// A relative root resolves against the process CWD — the repo in dev, the
@@ -729,14 +749,7 @@ pub async fn rules_install(
         // command's error and the filesystem agree. A pre-existing divergent
         // file stays recoverable from the backup the install took; the OpenCode
         // plugin entry is idempotent and harmless to leave registered.
-        for dest in &record.dests {
-            if let Err(remove) = tokio::fs::remove_file(dest).await {
-                tracing::warn!(
-                    "rules_install: rollback could not remove {dest}: {remove}; \
-                     the install is untracked"
-                );
-            }
-        }
+        rollback_written_files(&record.dests).await;
         return Err(error);
     }
     Ok(record)
@@ -1738,6 +1751,38 @@ mod tests {
             .expect("uninstall");
         assert!(dir.is_dir(), "ruling A8: uninstall deletes files only");
         assert!(!Path::new(&record.dest).exists());
+    }
+
+    #[tokio::test]
+    async fn a_failed_ledger_save_rolls_the_written_files_back() {
+        let app_data = TempDir::new().expect("app data");
+        let home = TempDir::new().expect("home");
+        let backups = TempDir::new().expect("backups");
+        let root = corpus_with(app_data.path(), &["typescript.md"]);
+        let entry = entry(&root, "typescript");
+
+        let record = install_rule(request(
+            &root,
+            &entry,
+            "antigravity",
+            Scope::User,
+            None,
+            home.path(),
+            backups.path(),
+            &empty_paths(),
+        ))
+        .await
+        .expect("install");
+
+        assert!(Path::new(&record.dest).exists(), "the install wrote a file");
+        rollback_written_files(&record.dests).await;
+        assert!(
+            !Path::new(&record.dest).exists(),
+            "a rolled-back install must leave no file behind"
+        );
+
+        // Idempotent: a second rollback (file already gone) is not an error.
+        rollback_written_files(&record.dests).await;
     }
 
     #[tokio::test]
