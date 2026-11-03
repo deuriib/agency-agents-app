@@ -1,16 +1,27 @@
 # November 2026 — Antigravity parity + updater pipeline
 
 ## Current State
-Post-v0.6.0. The renderer mirrors upstream's Antigravity role policy *and* its per-role
-tool declarations. PR #38 is merged (`a453bd2`): the in-app updater is installable
-end-to-end and stable/beta channels are live in code. `release-please` opened PR #39
-(`0.8.0`), currently blocked on the signing secrets.
+**v0.9.0** (`00b9576`) shipped the Rules integration (PR #61, merged `1ab9453`) on top
+of the 0.8.x updater work. `main` is green. The v0.9.0 GitHub release is still a
+**draft** with Linux artifacts only: `latest.json`, the Windows payloads and the
+notarized macOS build are missing, so the updater cannot serve it yet.
 
 ## Goals
-- [ ] Confirm Antigravity runtime semantics for the role flags (issue #27).
-- [ ] Set the updater signing secrets, merge PR #39, and publish/verify 0.8.0.
+- [ ] Publish v0.9.0: signing secrets, local macOS release run, `verify-updater`.
+- [ ] Triage the #61 review follow-ups (#62–#72). Suggested order: #72 (submodules) →
+  #68 (rule vocabulary) → #62 (frontend tests) → #66 (workspace/category parity).
+- [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Shipped the Rules integration (issue #29, M1; PR #61): native Rust compilation of the
+  four `agency-rules` renderers with 32/32 byte-parity against a fresh upstream compile
+  and an 88/88 adversarial matrix; a second managed corpus with its own baseline,
+  refresh and index; ledger tracking via a `domain` discriminator filtered out of six
+  agent surfaces; OpenCode plugin registration; a Rules workspace in all 12 locales.
+  Also fixed two pre-existing data-integrity defects (`atomic_write` never flushed, so
+  a full disk silently truncated the ledger; `load_ledger` treated any read error as an
+  empty ledger). See
+  [261103_rules-integration.md](./261103_rules-integration.md).
 - Fixed #58 (Runbooks never populated by app-provisioned catalogs): snapshot
   provisioning now discovers divisions from `divisions.json` instead of the
   removed `scripts/convert.sh`, and extracts `strategy/`, `divisions.json` and
