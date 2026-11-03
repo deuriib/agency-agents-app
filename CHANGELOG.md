@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/deuriib/agency-agents-app/compare/v0.9.3...v0.10.0) (2026-11-03)
+
+
+### Features
+
+* **tools:** detect the Antigravity app via .gemini/antigravity ([#86](https://github.com/deuriib/agency-agents-app/issues/86)) ([4b52142](https://github.com/deuriib/agency-agents-app/commit/4b52142801b3af05d0e0633590c7ff63710b7c89))
+
 ## [0.9.3](https://github.com/deuriib/agency-agents-app/compare/v0.9.2...v0.9.3) (2026-11-03)
 
 
