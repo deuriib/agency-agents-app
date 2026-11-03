@@ -99,7 +99,11 @@ async fn tool_home(state: &AppState, tool: &str) -> Result<PathBuf, AppError> {
 /// Pure per-tool base resolution: a configured, non-empty custom path wins;
 /// otherwise the OS home. Split out from [`tool_home`] so it's unit-testable
 /// without standing up an `AppState`.
-fn resolve_tool_base(
+///
+/// `pub(crate)` because the rule dest resolver (`rules::render::harness_base`,
+/// ruling A7) reuses this ONE implementation — copying it would let the agent
+/// and rule paths drift.
+pub(crate) fn resolve_tool_base(
     tool_paths: &std::collections::HashMap<String, String>,
     tool: &str,
     os_home: &Path,

@@ -17,7 +17,11 @@ mod github;
 mod install;
 mod registry;
 mod render;
-mod rules;
+// `pub` so `tests/rules_conformance.rs` can drive the real parser + renderers
+// against the vendored fixtures instead of reimplementing them (the module map
+// in `docs/rules-integration-architecture.md` §1 keeps commands inside the
+// domain module; exposing the read/render surface is the test seam).
+pub mod rules;
 mod state;
 mod types;
 mod util;

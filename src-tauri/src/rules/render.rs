@@ -32,7 +32,13 @@
 //! with no blank line; reusing that template fails every conformance
 //! comparison.
 
-use crate::types::{Rule, RuleGlobs};
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+
+use crate::error::AppError;
+use crate::render::RenderedFile;
+use crate::rules::registry;
+use crate::types::{Rule, RuleGlobs, RuleHarnessMeta};
 
 /// `yaml@2`'s default `lineWidth`.
 const LINE_WIDTH: usize = 80;
@@ -114,7 +120,7 @@ pub fn emit_block(fields: &[(&str, YamlValue)]) -> String {
 /// commas into a single scalar; `description` when non-empty.
 ///
 /// `name`, `alwaysApply`, `match`, `tags` and `tools` are never emitted.
-pub fn render_antigravity(rule: &Rule) -> String {
+pub(crate) fn render_antigravity(rule: &Rule) -> String {
     let trigger = antigravity_trigger(rule);
     let mut fields: Vec<(&str, YamlValue)> = Vec::with_capacity(3);
     fields.push(("trigger", YamlValue::Scalar(trigger.to_string())));
@@ -167,7 +173,7 @@ fn antigravity_trigger(rule: &Rule) -> &str {
 /// a non-empty array. `globs`, `alwaysApply`, `trigger`, `match` and `tags` are
 /// dropped, and the directory nesting (`{{slug}}/RULES.md`) comes from the
 /// destination template — not from here.
-pub fn render_pi_agent(rule: &Rule) -> String {
+pub(crate) fn render_pi_agent(rule: &Rule) -> String {
     let mut fields: Vec<(&str, YamlValue)> = Vec::with_capacity(3);
     fields.push(("name", YamlValue::Scalar(rule.name.clone())));
     fields.push(("description", YamlValue::Scalar(rule.description.clone())));
@@ -181,7 +187,7 @@ pub fn render_pi_agent(rule: &Rule) -> String {
 /// `alwaysApply` keyed on PRESENCE, not truthiness — `alwaysApply: false` is
 /// emitted, because `false` and absent mean different things to the harness.
 /// `trigger`, `match`, `tags` and `tools` are dropped.
-pub fn render_oh_my_pi(rule: &Rule) -> String {
+pub(crate) fn render_oh_my_pi(rule: &Rule) -> String {
     let mut fields: Vec<(&str, YamlValue)> = Vec::with_capacity(4);
     fields.push(("name", YamlValue::Scalar(rule.name.clone())));
     fields.push(("description", YamlValue::Scalar(rule.description.clone())));
@@ -199,7 +205,7 @@ pub fn render_oh_my_pi(rule: &Rule) -> String {
 ///
 /// Pure by ruling C1: the `opencode-rules` plugin registration in
 /// `opencode.json` belongs to `rules/opencode.rs`, never to a renderer.
-pub fn render_opencode(rule: &Rule) -> String {
+pub(crate) fn render_opencode(rule: &Rule) -> String {
     let mut fields: Vec<(&str, YamlValue)> = Vec::with_capacity(3);
     fields.push(("description", YamlValue::Scalar(rule.description.clone())));
     if let Some(globs) = rule.globs.as_ref() {
@@ -676,6 +682,226 @@ fn fold(text: &str, indent: &str, indent_at_start: Option<usize>, mode: FoldMode
 /// Width in UTF-16 code units, matching how `yaml@2` measures columns.
 fn width(text: &str) -> usize {
     text.encode_utf16().count()
+}
+
+// =========================================================
+// Entry point, destinations, and the harness base resolver
+// =========================================================
+
+/// The rule entry point: render ONE file for `harness`, dispatching on the
+/// `format` the contract declares (mirrors `render::render_files`).
+///
+/// Exactly one file for every format this app implements, and `relative` stays
+/// empty: the destination template (`{{slug}}.md`, `{{slug}}/RULES.md`) already
+/// carries any nesting, so emitting it here would duplicate it on disk.
+///
+/// Fails closed (ruling C11): a rule carrying a shape the emitter cannot
+/// reproduce byte-for-byte is refused before any renderer runs, with
+/// [`render_blockers`]' message, rather than producing bytes that disagree with
+/// upstream.
+pub fn render_rule_files(rule: &Rule, harness: &str) -> Result<Vec<RenderedFile>, AppError> {
+    let meta = registry::get(harness).ok_or_else(|| AppError::InvalidArgument {
+        message: format!("unknown rule harness: {harness}"),
+    })?;
+
+    let blockers = render_blockers(rule);
+    if !blockers.is_empty() {
+        return Err(AppError::InvalidArgument {
+            message: blockers.join("\n"),
+        });
+    }
+
+    let bytes = render_for_format(&meta.format, rule).ok_or_else(|| AppError::InvalidArgument {
+        message: format!(
+            "rule harness '{harness}' has no renderer in this app (format {})",
+            meta.format
+        ),
+    })?;
+
+    Ok(vec![RenderedFile {
+        relative: String::new(),
+        bytes,
+    }])
+}
+
+/// The format → renderer dispatch. `None` means the contract declares a format
+/// this app has no renderer for — reachable only by adding a harness to
+/// `data/rules-tools.json` without porting its renderer, which is exactly the
+/// state `installable()` already hides from the UI.
+fn render_for_format(format: &str, rule: &Rule) -> Option<String> {
+    match format {
+        "md-yaml-trigger" => Some(render_antigravity(rule)),
+        "md-rules-dir" => Some(render_pi_agent(rule)),
+        "md-or-mdc" => Some(render_oh_my_pi(rule)),
+        "md-plugin" => Some(render_opencode(rule)),
+        _ => None,
+    }
+}
+
+/// `^[a-z][a-z0-9-]*$` — the schema's `name` pattern, re-checked in Rust before
+/// any path join (spec §8, DENY-03).
+///
+/// One implementation, called by [`rule_dests`] before the join and again by
+/// `rules_install` at the write boundary. A slug is the only user-controlled
+/// component of a destination path, so this is the traversal gate.
+pub fn validate_slug(slug: &str) -> Result<(), AppError> {
+    let mut chars = slug.chars();
+    let well_formed = match chars.next() {
+        Some(first) if first.is_ascii_lowercase() => {
+            chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '-')
+        }
+        _ => false,
+    };
+    // The schema caps `name` at 64 characters. Mirroring that here keeps a
+    // caller that skipped schema validation from reaching the filesystem with a
+    // name no filesystem can hold (`ENAMETOOLONG` is a write error, not a
+    // guard).
+    if well_formed && slug.len() <= 64 {
+        Ok(())
+    } else {
+        Err(AppError::InvalidArgument {
+            message: format!("invalid rule slug: {slug:?}"),
+        })
+    }
+}
+
+/// Absolute destination(s) for `(harness, slug, scope)`.
+///
+/// `home` is the USER-SCOPE base resolved by [`harness_base`] (ruling A7) —
+/// not necessarily the OS home. `project_root` selects project scope and
+/// ignores `home`.
+///
+/// Never special-cases a harness id: the template comes from the contract, and
+/// `{{slug}}` is substituted with the validated slug. A template still holding a
+/// brace after substitution (e.g. the agent registry's `{slug}`) is an error,
+/// not a literal directory name.
+pub fn rule_dests(
+    harness: &str,
+    slug: &str,
+    home: &Path,
+    project_root: Option<&Path>,
+) -> Result<Vec<PathBuf>, AppError> {
+    validate_slug(slug)?;
+    let meta = registry::get(harness).ok_or_else(|| AppError::InvalidArgument {
+        message: format!("unknown rule harness: {harness}"),
+    })?;
+    rule_dests_with(meta, slug, home, project_root)
+}
+
+/// [`rule_dests`] against a harness record the caller already resolved.
+///
+/// Split out so the two scope errors are unit-testable: every shipped harness
+/// supports both scopes, so the shipped contract cannot reach either branch
+/// (the same reason `registry::is_installable_with` exists).
+fn rule_dests_with(
+    meta: &RuleHarnessMeta,
+    slug: &str,
+    home: &Path,
+    project_root: Option<&Path>,
+) -> Result<Vec<PathBuf>, AppError> {
+    validate_slug(slug)?;
+
+    let (template, root) = match project_root {
+        Some(root) => {
+            let template =
+                meta.dest
+                    .project
+                    .as_deref()
+                    .ok_or_else(|| AppError::InvalidArgument {
+                        message: format!(
+                            "rule harness '{}' is user-scoped; a project path is not supported",
+                            meta.id
+                        ),
+                    })?;
+            (template, root)
+        }
+        None => {
+            let template = meta
+                .dest
+                .user
+                .as_deref()
+                .ok_or_else(|| AppError::InvalidArgument {
+                    // The agent path's wording, reused verbatim (spec §8): a
+                    // project-only harness asked for user scope needs a root.
+                    message: format!(
+                        "rule harness '{}' is project-scoped; a project path is required",
+                        meta.id
+                    ),
+                })?;
+            (template, home)
+        }
+    };
+
+    // A destination is always a relative template. An absolute one would
+    // escape the selected root entirely (DENY-03).
+    if Path::new(template).is_absolute() {
+        return Err(AppError::InvalidArgument {
+            message: format!(
+                "rule harness '{}' declares an absolute destination template: {template}",
+                meta.id
+            ),
+        });
+    }
+
+    let stripped = template.strip_prefix("~/").unwrap_or(template);
+    let rendered = stripped.replace("{{slug}}", slug);
+
+    // The agent contract uses `{slug}`. Accepting it here would create a
+    // literal `{slug}` directory and write nothing the harness reads.
+    if rendered.contains('{') || rendered.contains('}') {
+        return Err(AppError::InvalidArgument {
+            message: format!(
+                "rule harness '{}' destination template must use the double-braced \
+                 {{{{slug}}}} placeholder: {template}",
+                meta.id
+            ),
+        });
+    }
+    // Belt and braces behind the slug gate: no template may climb out of its
+    // root, and the final path must stay under the root we chose.
+    if rendered
+        .split(['/', '\\'])
+        .any(|segment| segment == ".." || segment == ".")
+    {
+        return Err(AppError::InvalidArgument {
+            message: format!(
+                "rule harness '{}' destination template escapes its root: {template}",
+                meta.id
+            ),
+        });
+    }
+
+    let path = root.join(&rendered);
+    if !path.starts_with(root) {
+        return Err(AppError::InvalidArgument {
+            message: format!(
+                "resolved rule destination escapes its root: {}",
+                path.display()
+            ),
+        });
+    }
+    Ok(vec![path])
+}
+
+/// The USER-SCOPE base for a rule harness (ruling A7).
+///
+/// `settings.tool_paths[tool_id]` wins when set, by resolving the harness to an
+/// agent-registry entry through its `kebab` field; otherwise the OS home. Total:
+/// no panic and no error, even for a harness with no registry match (a future
+/// harness, or a typo), which falls back to `os_home`.
+///
+/// Project scope never consults this — it roots at the picked project.
+pub fn harness_base(
+    tool_paths: &HashMap<String, String>,
+    harness: &str,
+    os_home: &Path,
+) -> PathBuf {
+    match registry::tool_for_harness(harness) {
+        None => os_home.to_path_buf(),
+        // Reuse the ONE implementation of "custom path wins, else home" instead
+        // of copying it — the agent and rule paths must not drift.
+        Some(tool) => crate::install::resolve_tool_base(tool_paths, &tool.id, os_home),
+    }
 }
 
 // =========================================================
@@ -1490,6 +1716,468 @@ mod tests {
         assert!(
             block.contains("\n    "),
             "a continuation must indent 4 spaces, not 2: {block:?}"
+        );
+    }
+
+    // ── entry point: one file, dispatched on the contract's format ─────────
+
+    #[test]
+    fn every_harness_renders_exactly_one_file_with_no_relative_suffix() {
+        for harness in registry::all() {
+            let files = render_rule_files(&sample(), &harness.id)
+                .unwrap_or_else(|e| panic!("{} must render: {e:?}", harness.id));
+            assert_eq!(files.len(), 1, "{} renders one file", harness.id);
+            assert!(
+                files[0].relative.is_empty(),
+                "{}: the dest template carries the nesting, not `relative`",
+                harness.id
+            );
+            assert!(
+                files[0].bytes.starts_with("---\n"),
+                "{} rendered a document: {:?}",
+                harness.id,
+                files[0].bytes
+            );
+        }
+    }
+
+    #[test]
+    fn render_rule_files_matches_the_individual_renderer() {
+        let mut rule = sample();
+        rule.globs = Some(RuleGlobs::Many(vec!["**/*.ts".to_string()]));
+        rule.always_apply = Some(false);
+        for (harness, expected) in [
+            ("antigravity", render_antigravity(&rule)),
+            ("pi-agent", render_pi_agent(&rule)),
+            ("oh-my-pi", render_oh_my_pi(&rule)),
+            ("opencode", render_opencode(&rule)),
+        ] {
+            let files = render_rule_files(&rule, harness).expect("renderable");
+            assert_eq!(files[0].bytes, expected, "{harness}");
+        }
+    }
+
+    #[test]
+    fn render_rule_files_rejects_an_unknown_harness() {
+        let error = render_rule_files(&sample(), "not-a-harness").expect_err("must refuse");
+        assert!(
+            matches!(&error, AppError::InvalidArgument { message } if message == "unknown rule harness: not-a-harness"),
+            "{error:?}"
+        );
+    }
+
+    /// A format the contract declares but this app has not ported. Unreachable
+    /// with the bundled contract (every harness resolves), so exercise the
+    /// dispatch directly rather than leaving the branch untested.
+    #[test]
+    fn an_unimplemented_format_has_no_renderer() {
+        assert!(render_for_format("md-future-format", &sample()).is_none());
+        for format in ["md-yaml-trigger", "md-rules-dir", "md-or-mdc", "md-plugin"] {
+            assert!(
+                render_for_format(format, &sample()).is_some(),
+                "{format} must dispatch to a renderer"
+            );
+        }
+    }
+
+    /// Ruling C11: the entry point refuses a rule whose frontmatter the emitter
+    /// cannot reproduce byte-for-byte, with `render_blockers`' own message.
+    #[test]
+    fn render_rule_files_refuses_a_blocked_rule_on_every_harness() {
+        let mut rule = sample();
+        rule.description = "line one\nline two".to_string();
+        let blocker = render_blockers(&rule).join("\n");
+        for harness in registry::all() {
+            let error = render_rule_files(&rule, &harness.id).expect_err("must refuse");
+            match error {
+                AppError::InvalidArgument { message } => {
+                    assert_eq!(message, blocker, "{}", harness.id);
+                }
+                other => panic!("{} returned {other:?}", harness.id),
+            }
+        }
+    }
+
+    // ── slug validation ────────────────────────────────────────────────────
+
+    #[test]
+    fn validate_slug_accepts_the_schema_pattern() {
+        for slug in ["a", "typescript", "oh-my-pi", "a1", "a-b-c1"] {
+            assert!(validate_slug(slug).is_ok(), "{slug} must be accepted");
+        }
+    }
+
+    #[test]
+    fn validate_slug_rejects_every_traversal_and_shape_violation() {
+        for slug in [
+            "",
+            "A-B",
+            "Upper",
+            "a/b",
+            "../../etc/passwd",
+            "..",
+            ".hidden",
+            "-leading",
+            "a_b",
+            "a b",
+            "a\\b",
+            "á",
+        ] {
+            assert!(validate_slug(slug).is_err(), "{slug:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn validate_slug_mirrors_the_schema_length_cap() {
+        // 64 is the schema's `name` maxLength and must be accepted.
+        let ok = "a".repeat(64);
+        assert!(validate_slug(&ok).is_ok(), "64 chars must be accepted");
+
+        // One more is not, even though it matches the pattern: without this a
+        // caller that skipped schema validation could reach a write with a name
+        // no filesystem can hold.
+        let too_long = "a".repeat(65);
+        assert!(
+            validate_slug(&too_long).is_err(),
+            "65 chars must be rejected before any join"
+        );
+    }
+
+    // ── destinations ───────────────────────────────────────────────────────
+
+    fn temp_home() -> tempfile::TempDir {
+        tempfile::tempdir().expect("tempdir")
+    }
+
+    /// A synthetic harness record, so the scope/template rejection branches can
+    /// be reached without editing the bundled contract.
+    fn harness_meta(id: &str, user: Option<&str>, project: Option<&str>) -> RuleHarnessMeta {
+        RuleHarnessMeta {
+            id: id.to_string(),
+            label: id.to_string(),
+            format: "md-or-mdc".to_string(),
+            install_kind: "per-rule".to_string(),
+            integration_path: "{{slug}}.md".to_string(),
+            detect: None,
+            frontmatter: None,
+            extensions: Vec::new(),
+            plugin: None,
+            dest: crate::types::RuleHarnessDest {
+                user: user.map(str::to_string),
+                project: project.map(str::to_string),
+            },
+        }
+    }
+
+    #[test]
+    fn every_harness_resolves_one_user_dest_under_the_given_base() {
+        let home = temp_home();
+        for harness in registry::all() {
+            let dests = rule_dests(&harness.id, "typescript", home.path(), None)
+                .unwrap_or_else(|e| panic!("{} must resolve: {e:?}", harness.id));
+            assert_eq!(dests.len(), 1, "{}", harness.id);
+            assert!(
+                dests[0].starts_with(home.path()),
+                "{} escaped home: {}",
+                harness.id,
+                dests[0].display()
+            );
+            let rendered = dests[0].to_string_lossy().to_string();
+            assert!(
+                !rendered.contains("{{"),
+                "{} left a placeholder behind: {rendered}",
+                harness.id
+            );
+            assert!(
+                dests[0]
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .is_some_and(|name| name == "typescript.md" || name == "RULES.md"),
+                "{} resolved an unexpected filename: {rendered}",
+                harness.id
+            );
+        }
+    }
+
+    #[test]
+    fn every_harness_resolves_one_project_dest_under_the_project_root() {
+        let home = temp_home();
+        let project = temp_home();
+        for harness in registry::all() {
+            let dests = rule_dests(&harness.id, "python", home.path(), Some(project.path()))
+                .unwrap_or_else(|e| panic!("{} must resolve: {e:?}", harness.id));
+            assert_eq!(dests.len(), 1, "{}", harness.id);
+            assert!(
+                dests[0].starts_with(project.path()),
+                "{} must root at the project, not home: {}",
+                harness.id,
+                dests[0].display()
+            );
+            assert!(
+                !dests[0].starts_with(home.path()),
+                "{} must not write into home for project scope",
+                harness.id
+            );
+            assert!(
+                !dests[0].to_string_lossy().contains("{{"),
+                "{} left a placeholder behind: {}",
+                harness.id,
+                dests[0].display()
+            );
+        }
+    }
+
+    #[test]
+    fn pi_agent_nests_one_directory_and_the_others_do_not() {
+        let home = temp_home();
+        let pi = rule_dests("pi-agent", "typescript", home.path(), None).expect("pi-agent");
+        assert_eq!(
+            pi[0],
+            home.path().join(".pi/agent/rules/typescript/RULES.md")
+        );
+        let pi_relative = pi[0]
+            .strip_prefix(home.path())
+            .expect("dest under home")
+            .components()
+            .count();
+        for harness in ["antigravity", "oh-my-pi", "opencode"] {
+            let dests = rule_dests(harness, "typescript", home.path(), None).expect("resolves");
+            let relative = dests[0]
+                .strip_prefix(home.path())
+                .expect("dest under home")
+                .components()
+                .count();
+            assert_eq!(
+                relative + 1,
+                pi_relative,
+                "{harness} must not add a directory level: {}",
+                dests[0].display()
+            );
+        }
+    }
+
+    /// The exact templates from the contract, spelled out so a contract edit
+    /// that silently moves a rule is caught here as well as in the fixtures.
+    #[test]
+    fn shipped_destinations_expand_exactly() {
+        let home = Path::new("/home/tester");
+        let project = Path::new("/work/project");
+        let cases = [
+            (
+                "antigravity",
+                "/home/tester/.gemini/config/rules/typescript.md",
+                "/work/project/.agents/rules/typescript.md",
+            ),
+            (
+                "pi-agent",
+                "/home/tester/.pi/agent/rules/typescript/RULES.md",
+                "/work/project/.pi/rules/typescript/RULES.md",
+            ),
+            (
+                "oh-my-pi",
+                "/home/tester/.omp/agent/rules/typescript.md",
+                "/work/project/.omp/rules/typescript.md",
+            ),
+            (
+                "opencode",
+                "/home/tester/.config/opencode/rules/typescript.md",
+                "/work/project/.opencode/rules/typescript.md",
+            ),
+        ];
+        for (harness, user, project_dest) in cases {
+            let resolved = rule_dests(harness, "typescript", home, None).expect("user dest");
+            assert_eq!(resolved[0], PathBuf::from(user), "{harness} user");
+            let resolved =
+                rule_dests(harness, "typescript", home, Some(project)).expect("project dest");
+            assert_eq!(
+                resolved[0],
+                PathBuf::from(project_dest),
+                "{harness} project"
+            );
+        }
+    }
+
+    /// A hostile slug is rejected BEFORE any join, and touches nothing.
+    #[test]
+    fn hostile_slugs_are_rejected_with_zero_filesystem_contact() {
+        let home = temp_home();
+        for slug in ["../../etc/passwd", "a/b", "A-B", ""] {
+            for harness in ["antigravity", "pi-agent", "oh-my-pi", "opencode"] {
+                assert!(
+                    rule_dests(harness, slug, home.path(), None).is_err(),
+                    "{harness} accepted {slug:?}"
+                );
+            }
+        }
+        assert!(
+            std::fs::read_dir(home.path())
+                .expect("home readable")
+                .next()
+                .is_none(),
+            "the resolver must not create anything"
+        );
+    }
+
+    #[test]
+    fn rule_dests_rejects_an_unknown_harness_without_a_default_path() {
+        let home = temp_home();
+        let error =
+            rule_dests("not-a-harness", "typescript", home.path(), None).expect_err("must refuse");
+        assert!(
+            matches!(&error, AppError::InvalidArgument { message } if message == "unknown rule harness: not-a-harness"),
+            "{error:?}"
+        );
+    }
+
+    /// A project-only harness asked for user scope gets the agent path's
+    /// wording — not a silent `~` write.
+    #[test]
+    fn project_only_harness_without_a_root_needs_a_project_path() {
+        let home = temp_home();
+        let meta = harness_meta("project-only", None, Some(".only/rules/{{slug}}.md"));
+        let error =
+            rule_dests_with(&meta, "typescript", home.path(), None).expect_err("must refuse");
+        assert!(
+            matches!(
+                &error,
+                AppError::InvalidArgument { message }
+                    if message == "rule harness 'project-only' is project-scoped; a project path is required"
+            ),
+            "{error:?}"
+        );
+        assert!(
+            std::fs::read_dir(home.path())
+                .expect("home readable")
+                .next()
+                .is_none(),
+            "refusal must not touch the filesystem"
+        );
+    }
+
+    /// The mirror branch: a user-only harness refuses project scope rather than
+    /// writing `./.user/rules/…` into an arbitrary directory.
+    #[test]
+    fn user_only_harness_refuses_project_scope() {
+        let home = temp_home();
+        let project = temp_home();
+        let meta = harness_meta("user-only", Some("~/.only/rules/{{slug}}.md"), None);
+        let error = rule_dests_with(&meta, "typescript", home.path(), Some(project.path()))
+            .expect_err("must refuse");
+        assert!(
+            matches!(
+                &error,
+                AppError::InvalidArgument { message }
+                    if message == "rule harness 'user-only' is user-scoped; a project path is not supported"
+            ),
+            "{error:?}"
+        );
+    }
+
+    /// The agent placeholder must not be silently accepted: it would create a
+    /// literal `{slug}` directory on disk.
+    #[test]
+    fn single_brace_templates_are_rejected() {
+        let home = temp_home();
+        let mut meta = harness_meta("agent-style", Some("~/.agent/rules/{slug}.md"), None);
+        meta.integration_path = "{slug}.md".to_string();
+        let error = rule_dests_with(&meta, "typescript", home.path(), None)
+            .expect_err("must refuse the agent placeholder");
+        assert!(
+            matches!(&error, AppError::InvalidArgument { message } if message.contains("double-braced")),
+            "{error:?}"
+        );
+        assert!(
+            std::fs::read_dir(home.path())
+                .expect("home readable")
+                .next()
+                .is_none(),
+            "refusal must not touch the filesystem"
+        );
+    }
+
+    #[test]
+    fn absolute_destination_templates_are_rejected() {
+        let home = temp_home();
+        let meta = harness_meta("absolute", Some("/etc/rules/{{slug}}.md"), None);
+        assert!(rule_dests_with(&meta, "typescript", home.path(), None).is_err());
+    }
+
+    /// A template cannot climb out of its root either — belt and braces behind
+    /// the slug gate, since a future contract edit could introduce one.
+    #[test]
+    fn dot_segments_in_a_template_are_rejected() {
+        let home = temp_home();
+        for template in ["a/../{{slug}}.md", "./{{slug}}.md"] {
+            let meta = harness_meta("dotty", Some(template), None);
+            let error = rule_dests_with(&meta, "typescript", home.path(), None)
+                .expect_err("must refuse a dot segment");
+            assert!(
+                matches!(&error, AppError::InvalidArgument { message } if message.contains("escapes its root")),
+                "{error:?}"
+            );
+        }
+    }
+
+    // ── harness base resolver (ruling A7, fallback C9) ─────────────────────
+
+    #[test]
+    fn harness_base_is_the_os_home_when_no_override_is_set() {
+        let home = Path::new("/home/tester");
+        let tool_paths = HashMap::new();
+        for harness in registry::all() {
+            assert_eq!(
+                harness_base(&tool_paths, &harness.id, home),
+                home,
+                "{} must resolve to the OS home with no override",
+                harness.id
+            );
+        }
+    }
+
+    #[test]
+    fn harness_base_honours_the_configured_tool_path() {
+        let home = Path::new("/home/tester");
+        let tool_paths = HashMap::from([
+            ("piAgent".to_string(), "/wsl/home/me".to_string()),
+            ("opencode".to_string(), "/opt/opencode-home".to_string()),
+        ]);
+        assert_eq!(
+            harness_base(&tool_paths, "pi-agent", home),
+            PathBuf::from("/wsl/home/me")
+        );
+        assert_eq!(
+            harness_base(&tool_paths, "opencode", home),
+            PathBuf::from("/opt/opencode-home")
+        );
+        // Untouched harness keeps the OS home.
+        assert_eq!(harness_base(&tool_paths, "antigravity", home), home);
+        // An empty override is "not set" (the `resolve_tool_base` contract).
+        let empty = HashMap::from([("ohMyPi".to_string(), String::new())]);
+        assert_eq!(harness_base(&empty, "oh-my-pi", home), home);
+    }
+
+    /// C9: the "no registry match → OS home" branch is unreachable with the
+    /// shipped contract, so exercise it synthetically or it is untested code.
+    #[test]
+    fn harness_base_falls_back_to_the_os_home_for_an_unknown_harness() {
+        let home = Path::new("/home/tester");
+        let tool_paths = HashMap::from([("piAgent".to_string(), "/wsl/home/me".to_string())]);
+        assert_eq!(harness_base(&tool_paths, "not-a-harness", home), home);
+    }
+
+    /// A7 must not move an agent path: `render::dests` (agent installs) reads
+    /// `registry::Dest`, never `tool_paths`, so an override only affects rules.
+    #[test]
+    fn a_tool_path_override_does_not_change_an_agent_destination() {
+        let home = Path::new("/home/tester");
+        let tool_paths = HashMap::from([("opencode".to_string(), "/wsl/home/me".to_string())]);
+        let agent = crate::render::dests("opencode", "frontend-developer", home, None)
+            .expect("opencode resolves a user dest");
+        let rule_base = harness_base(&tool_paths, "opencode", home);
+        assert_ne!(rule_base, home, "the override must apply to rules");
+        assert!(
+            agent.iter().all(|path| path.starts_with(home)),
+            "agent dests must stay rooted at home: {agent:?}"
         );
     }
 }

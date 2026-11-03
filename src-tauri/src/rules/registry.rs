@@ -94,6 +94,21 @@ pub fn plugin_entry(id: &str) -> Option<&'static str> {
     get(id)?.plugin.as_ref().map(|plugin| plugin.entry.as_str())
 }
 
+/// The agent-registry entry a rule harness maps onto, resolved through the
+/// existing `tools.json` `kebab` field (ruling A7).
+///
+/// Ruling A7 asks the dest resolver to honour `settings.tool_paths`; the
+/// harness ids already equal the `kebab` values in `data/tools.json`
+/// (`pi-agent` → `piAgent`, `oh-my-pi` → `ohMyPi`), so the link is a lookup
+/// rather than a second mapping table. Total: `None` for a harness with no
+/// registry match (a future harness, or a typo) — callers fall back to the OS
+/// home.
+pub fn tool_for_harness(harness: &str) -> Option<&'static crate::registry::ToolMeta> {
+    crate::registry::all()
+        .iter()
+        .find(|tool| tool.kebab == harness)
+}
+
 // =========================================================
 // Tests
 // =========================================================
@@ -207,6 +222,25 @@ mod tests {
     fn unknown_harness_is_rejected() {
         assert!(get("not-a-harness").is_none());
         assert!(plugin_entry("not-a-harness").is_none());
+        assert!(tool_for_harness("not-a-harness").is_none());
+    }
+
+    /// Ruling A7: every shipped harness resolves to an agent-registry tool via
+    /// the `kebab` field, so `settings.tool_paths` can be honoured without a
+    /// second mapping table. The expected ids are the camelCase wire ids.
+    #[test]
+    fn every_harness_maps_to_a_registry_tool_by_kebab() {
+        let cases = [
+            ("antigravity", "antigravity"),
+            ("pi-agent", "piAgent"),
+            ("oh-my-pi", "ohMyPi"),
+            ("opencode", "opencode"),
+        ];
+        for (harness, tool_id) in cases {
+            let tool = tool_for_harness(harness)
+                .unwrap_or_else(|| panic!("{harness} must map onto tools.json"));
+            assert_eq!(tool.id, tool_id, "{harness} maps onto {tool_id}");
+        }
     }
 
     #[test]
