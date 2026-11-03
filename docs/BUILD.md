@@ -101,7 +101,15 @@ or an env file. The non-secret `APPLE_ID` / `APPLE_TEAM_ID` are hardcoded in the
    command line:
 
    ```sh
-   xcrun notarytool store-credentials agency-agents --apple-id "<apple-id>" --team-id 7JQGQ7CRH8
+   xcrun notarytool store-credentials agency-agents --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID"
+   ```
+
+   `release.sh` reads `APPLE_ID` and `APPLE_TEAM_ID` from the environment (it does not hardcode an
+   identity). Export them before running it, and use the same Apple ID for the Keychain entry above:
+
+   ```sh
+   export APPLE_ID="you@example.com"
+   export APPLE_TEAM_ID="ABCDE12345"   # Developer ID Application: Your Name (ABCDE12345)
    ```
 
    `release.sh` checks the profile before building, which also surfaces an expired Apple developer
