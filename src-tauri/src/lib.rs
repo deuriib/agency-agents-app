@@ -205,6 +205,11 @@ pub fn run() {
             install::projects_list,
             install::loadout_export,
             install::loadout_import,
+            // Issue #29 — rules corpus (TASK 12). Status is the only source of
+            // the "not synced" vs "no rules shipped" distinction; refresh is the
+            // CTA that repairs "not synced".
+            rules::commands::rules_status,
+            rules::commands::rules_refresh,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

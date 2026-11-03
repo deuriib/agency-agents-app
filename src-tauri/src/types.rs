@@ -470,6 +470,36 @@ impl RuleValidation {
     }
 }
 
+/// `rules_status` — the only source of the "not synced" vs "no rules shipped"
+/// distinction (spec §8, ruling A5/C8).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleStatus {
+    /// A rules corpus root exists and carries a `rules/` tree.
+    pub configured: bool,
+    /// Rules in the index (invalid ones included — they are listed, not
+    /// installed).
+    pub count: u32,
+    /// The refreshed commit SHA, or `"baseline"` before the first refresh.
+    pub version: String,
+    /// `null` when there are rules to show.
+    pub empty_reason: Option<RuleEmptyReason>,
+}
+
+/// Why the rules list is empty. The two arms have different copy and different
+/// CTAs in the UI (spec §8): "not synced" offers a sync, "no rules" is reported
+/// honestly.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum RuleEmptyReason {
+    /// No corpus root at all — first launch before seeding finished, or a
+    /// failed seed. CTA: refresh.
+    NotSynced,
+    /// A corpus root is present, `rules/` was scanned, and it holds zero
+    /// parsable rules. CTA: refresh, and say so honestly.
+    NoRules,
+}
+
 // ---------- Rule harness contract (data/rules-tools.json) ----------
 
 /// One harness, as authored in `data/rules-tools.json` — a verbatim copy of

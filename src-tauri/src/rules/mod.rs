@@ -3,25 +3,16 @@
 //!
 //! The neutral rule format is the only authored format: one file per rule under
 //! `rules/<category>/<name>.md`, compiled to four harness variants. This module
-//! owns the declarative contract, the parser, the schema gate, and (in later
-//! workstreams) the renderers, the managed corpus, the OpenCode plugin merge and
-//! the command surface.
+//! owns the declarative contract, the parser, the schema gate, the renderers, the
+//! managed corpus, and the command surface.
 //!
 //! Module layout ruling **A1**: `rules/<name>.rs` behind this file, matching the
 //! `corpus/` precedent (commands live in their domain module, not
-//! `src-tauri/src/commands/`). `render`, `corpus`, `opencode` and `commands`
-//! declare themselves here as their tasks land.
+//! `src-tauri/src/commands/`). `opencode` declares itself here when W5 lands.
 
-// W1 (tasks 1-4) lands the contract, parser and schema gate ahead of the
-// renderers, corpus and commands that consume them (W2-W6 in the same
-// milestone), so a production build cannot reach this surface yet. The allow is
-// scoped to the module declarations and goes away when `commands.rs` is
-// registered in `lib.rs`'s `invoke_handler`.
-#[allow(dead_code)]
+pub mod commands;
+pub mod corpus;
 pub mod parse;
-#[allow(dead_code)]
 pub mod registry;
-#[allow(dead_code)]
 pub mod render;
-#[allow(dead_code)]
 pub mod validate;
