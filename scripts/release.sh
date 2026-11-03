@@ -24,17 +24,21 @@
 #
 # 1. App-specific password (NOT your iCloud password): create one at
 #    https://appleid.apple.com → Sign-In and Security → App-Specific Passwords.
-#    Then store it in the Keychain:
+#    Then export your Apple identity and store the password in the Keychain.
+#    The account here is YOUR Apple ID — export it rather than editing this file:
+#
+#       export APPLE_ID="you@example.com"
+#       export APPLE_TEAM_ID="ABCDE12345"   # Developer ID Application: … (ABCDE12345)
 #
 #       security add-generic-password \
-#         -a "msitarzewski@mac.com" -s "agency-agents-notary" -U -w
+#         -a "$APPLE_ID" -s "agency-agents-notary" -U -w
 #       # (paste the app-specific password when prompted)
 #
 #    Then save the same password as a notarytool profile (it prompts for the
 #    password, so it never lands on a command line or in shell history). The
 #    script uses this profile to notarize + staple each .dmg after Tauri builds it:
 #       xcrun notarytool store-credentials "agency-agents" \
-#         --apple-id "msitarzewski@mac.com" --team-id "7JQGQ7CRH8"
+#         --apple-id "$APPLE_ID" --team-id "$APPLE_TEAM_ID"
 #
 # 2. Tauri updater signing key (minisign — signs the auto-update artifacts so
 #    the app trusts its own updates; separate from Apple signing). Store the
@@ -47,9 +51,26 @@
 # ────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-# Non-secret identifiers (safe to keep in the script).
-export APPLE_ID="msitarzewski@mac.com"
-export APPLE_TEAM_ID="7JQGQ7CRH8"   # from "Developer ID Application: … (7JQGQ7CRH8)"
+# Non-secret identifiers. The Apple ones are environment-driven on purpose: they
+# identify YOUR Apple Developer account, and you cannot store someone else's
+# password under their keychain account anyway. Export them before running:
+#
+#   APPLE_ID=you@example.com APPLE_TEAM_ID=ABCDE12345 ./scripts/release.sh
+#
+# `APPLE_TEAM_ID` is the 10-character suffix of
+# "Developer ID Application: Your Name (ABCDE12345)".
+export APPLE_ID="${APPLE_ID:-}"
+export APPLE_TEAM_ID="${APPLE_TEAM_ID:-}"
+
+if [[ -z "$APPLE_ID" || -z "$APPLE_TEAM_ID" ]]; then
+  echo "✗ Missing Apple Developer identity. This script notarizes with YOUR" >&2
+  echo "  account — nothing is hardcoded here." >&2
+  [[ -z "$APPLE_ID" ]] && echo "    APPLE_ID is unset (the Apple ID used for notarization)." >&2
+  [[ -z "$APPLE_TEAM_ID" ]] && echo "    APPLE_TEAM_ID is unset (from 'Developer ID Application: Your Name (TEAMID)')." >&2
+  echo "  Run:  APPLE_ID=you@example.com APPLE_TEAM_ID=ABCDE12345 ./scripts/release.sh" >&2
+  echo "  Then complete the ONE-TIME SETUP at the top of this file." >&2
+  exit 1
+fi
 
 # Release target: the draft release-please created for this version, on the repo
 # the app's updater endpoint points at.
