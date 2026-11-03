@@ -210,6 +210,15 @@ pub fn run() {
             // CTA that repairs "not synced".
             rules::commands::rules_status,
             rules::commands::rules_refresh,
+            // Issue #29 — rules command surface (TASK 14–17). List/get read the
+            // managed corpus; preview compiles without writing; install/uninstall
+            // own the rule ledger rows; `rules_installs` is the restart truth.
+            rules::commands::rules_list,
+            rules::commands::rules_get,
+            rules::commands::rules_preview,
+            rules::commands::rules_install,
+            rules::commands::rules_uninstall,
+            rules::commands::rules_installs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,7 +8,9 @@
 //!
 //! Module layout ruling **A1**: `rules/<name>.rs` behind this file, matching the
 //! `corpus/` precedent (commands live in their domain module, not
-//! `src-tauri/src/commands/`). `opencode` declares itself here when W5 lands.
+//! `src-tauri/src/commands/`). `opencode.rs` owns the `opencode.json` plugin
+//! merge (ruling A6) and is the only code allowed to touch that file; the
+//! renderers stay pure.
 
 pub mod commands;
 pub mod corpus;

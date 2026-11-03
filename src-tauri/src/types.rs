@@ -394,10 +394,14 @@ pub struct ProjectInfo {
 // `src/lib/types.ts`. Shape contract: `docs/rules-integration-architecture.md`
 // §3.
 //
-// W1 (tasks 1-4) lands these ahead of the renderers, corpus and commands that
-// consume them (W2-W6 in the same milestone), so production builds cannot reach
-// them yet. `#[allow(dead_code)]` is scoped to these W1 items and goes away as
-// each consumer lands — same arrangement as `registry::ToolMeta`.
+// W1 (tasks 1-4) landed these ahead of the renderers, corpus and commands that
+// consume them; W6 now reaches every DTO below, so the only `#[allow(dead_code)]`
+// left are genuinely test-only helpers (`RuleValidation::passed`, the derived
+// scope capabilities) and the `RuleHarness` alias, which is the documented name
+// for the harness id and is used as documentation in signatures.
+//
+// `RuleHarness` is a plain alias rather than a newtype for the same reason
+// `Tool` is a `String`.
 
 /// A rule harness id, e.g. `"oh-my-pi"`. A plain string (not an enum) for the
 /// same reason [`Tool`] is a string: the set lives in embedded JSON
@@ -410,7 +414,6 @@ pub type RuleHarness = String;
 /// Authored `globs` in the neutral format accepts BOTH shapes (`rules/_schema.json`
 /// uses `oneOf`). Untagged preserves which form was authored: oh-my-pi and
 /// OpenCode re-emit the authored shape, while Antigravity always joins with `,`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum RuleGlobs {
@@ -424,7 +427,6 @@ pub enum RuleGlobs {
 /// (`rules/base/commit-convention.md` declares `name: commit-conventions`).
 /// `relative_path` is required for the same reason: `rules_get` cannot locate a
 /// slug's file without it.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rule {
@@ -468,7 +470,6 @@ pub struct Rule {
 
 /// One row of `<app_data>/state/rules-index.json`. Carries everything the list
 /// view and every renderer need, so a list render is zero filesystem reads.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleEntry {
@@ -514,6 +515,67 @@ impl RuleValidation {
     }
 }
 
+/// `rules_list` row: a [`Rule`] minus `body`, mirroring `corpus_list`'s contract
+/// (the payload stays small; the body is fetched on selection). Carries the
+/// fields the client filters and badges on, so a list render needs no N+1 calls.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuleSummary {
+    pub slug: String,
+    pub name: String,
+    pub description: String,
+    pub category: String,
+    /// Corpus-relative source path — needed by the UI to disambiguate two rules
+    /// whose display names collide (slug ≠ filename, ruling C6).
+    pub relative_path: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub globs: Option<RuleGlobs>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub always_apply: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trigger: Option<String>,
+    #[serde(default, rename = "match", skip_serializing_if = "Option::is_none")]
+    pub match_: Option<String>,
+    pub tags: Vec<String>,
+    pub tools: Vec<String>,
+    /// Invalid rules are listed with their errors; install/preview refuse them
+    /// (spec §10.4 — a visible error, not an invisible rule).
+    pub validation: RuleValidation,
+}
+
+/// `rules_preview` response. One entry per **installable** harness (spec §8:
+/// "Unknown harness → never offered"), each carrying the exact bytes
+/// `rules_install` would write. Nothing is created on disk: `dest` is computed,
+/// never written.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulePreview {
+    pub slug: String,
+    /// The scope that was actually resolved, so the UI cannot show a user path
+    /// while the user has a project selected (ruling A9).
+    pub scope: Scope,
+    pub project_path: Option<String>,
+    pub harnesses: Vec<RulePreviewEntry>,
+}
+
+/// One harness's compiled output in a preview.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulePreviewEntry {
+    /// The harness id from the contract — a String, not the agent `Tool`.
+    pub harness: String,
+    pub label: String,
+    /// The exact bytes an install would write (proven equal by test).
+    pub bytes: String,
+    /// Absolute destination path. Computed and never created.
+    pub dest: String,
+    /// SHA-256 of `bytes` — the value the ledger row records.
+    pub rendered_hash: String,
+    /// Always true in M1 (derived from `rule-formats.json`); kept so the UI has
+    /// a field to branch on if a format ships later.
+    pub installable: bool,
+}
+
 /// `rules_status` — the only source of the "not synced" vs "no rules shipped"
 /// distinction (spec §8, ruling A5/C8).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -550,7 +612,6 @@ pub enum RuleEmptyReason {
 /// `agency-rules/tools.json`. Mirrors the `registry::ToolMeta` + derived
 /// capabilities pattern: the JSON stores what upstream declares; this app
 /// derives what it can install.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuleHarnessMeta {
@@ -579,7 +640,6 @@ pub struct RuleHarnessMeta {
 
 /// NOTE the shape difference from `registry::Dest`: rule destinations are a
 /// SINGLE optional template per scope, not a `Vec`.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize, Default)]
 pub struct RuleHarnessDest {
     #[serde(default)]
@@ -590,21 +650,26 @@ pub struct RuleHarnessDest {
 
 /// The `opencode.plugin` block. `entry` is the string written into
 /// `opencode.json`; `package` is the npm package it refers to.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Deserialize)]
 pub struct RulePlugin {
     pub package: String,
     pub entry: String,
 }
 
-#[allow(dead_code)]
 impl RuleHarnessMeta {
     /// Derived, never stored.
+    ///
+    /// Test-only in production: the shipped contract supports both scopes for
+    /// every harness, so no runtime branch consults this yet. Kept because it is
+    /// the derived capability the registry contract promises (spec §5.3) and the
+    /// registry tests assert it.
+    #[allow(dead_code)]
     pub fn supports_user(&self) -> bool {
         self.dest.user.is_some()
     }
 
-    /// Derived, never stored.
+    /// Derived, never stored. Test-only — see [`Self::supports_user`].
+    #[allow(dead_code)]
     pub fn supports_project(&self) -> bool {
         self.dest.project.is_some()
     }

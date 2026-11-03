@@ -86,9 +86,9 @@ async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), A
 // stores a HARNESS id in `tool`, and `antigravity`/`opencode` are byte-equal
 // between the two id schemes, so an unfiltered consumer double-counts silently.
 //
-// The writers below are the write path `rules::commands` (W6) uses; they are
-// `#[allow(dead_code)]` until that workstream registers its commands, matching
-// the W1 arrangement for the rules DTOs in `types.rs`.
+// The writers below are the write path `rules::commands` (W6) uses. The
+// read/pure helpers (`agent_rows`, `rule_rows`, `upsert_rule_row`,
+// `remove_rule_row`) are the single implementation those commands are built on.
 
 /// The rows an agent-facing surface may see. Iterates by reference so the
 /// reconcile loop does not clone a 100-row ledger.
@@ -145,7 +145,10 @@ pub(crate) fn remove_rule_row(
 
 /// Persist a rule install row (append or replace). The ONE write path for rule
 /// rows, so the C2 invariant is enforced in a single place.
-#[allow(dead_code)] // consumed by W6 (`rules::commands::rules_install`)
+///
+/// Called by `rules::commands::rules_install` **after** the rule file is on disk:
+/// a failed write never reaches here, so a ledger row cannot claim a file that
+/// is not there.
 pub(crate) async fn append_rule_install(
     app: &AppHandle,
     record: InstallRecord,
@@ -175,7 +178,6 @@ fn check_tracked_destinations(record: &InstallRecord) -> Result<(), AppError> {
 
 /// Remove one rule install row. Returns whether a row was removed; nothing is
 /// written when it was not.
-#[allow(dead_code)] // consumed by W6 (`rules::commands::rules_uninstall`)
 pub(crate) async fn remove_rule_install(
     app: &AppHandle,
     slug: &str,
@@ -192,7 +194,6 @@ pub(crate) async fn remove_rule_install(
 
 /// Every rule row — the source of truth `rules_installs` serves, so install
 /// state survives a restart (spec §10.6).
-#[allow(dead_code)] // consumed by W6 (`rules::commands::rules_installs`)
 pub(crate) async fn list_rule_installs(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
     Ok(rule_rows(&load_ledger(app).await?))
 }
@@ -323,7 +324,12 @@ fn record_for(
 /// litter). Backup name keeps the original filename + a timestamp so it's
 /// human-recoverable. Best-effort within a still-fallible signature: a failed
 /// backup aborts the write (we never overwrite what we couldn't preserve).
-async fn backup_if_differs(
+///
+/// `pub(crate)` because the rule install path (`rules::commands`) reuses it: a
+/// rule file overwritten at a user's destination must be recoverable for the
+/// same reason an agent file must be, and copying the helper would let the two
+/// backup layouts drift.
+pub(crate) async fn backup_if_differs(
     dest: &Path,
     new_bytes: &[u8],
     backup_dir: &Path,

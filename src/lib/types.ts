@@ -531,6 +531,12 @@ export interface InstallRecord {
   projectPath: string | null;
   /** Absolute path written. */
   dest: string;
+  /** Every absolute path written for this install (multi-file tools). */
+  dests?: string[];
+  /** Per-file SHA-256 for multi-file installs (relative path -> hash). */
+  fileHashes?: Record<string, string>;
+  /** Roster/aggregate tools: the slugs combined into one file. */
+  aggregateSlugs?: string[];
   sourceHash: string;
   /** SHA-256 of the agent body at install time (cosmetic vs substantive updates). */
   bodyHash: string;
@@ -550,6 +556,110 @@ export interface InstallRecord {
 
 /** Which domain a ledger row belongs to. Absent means `"agent"`. */
 export type InstallDomain = "agent" | "rule";
+
+/**
+ * A ledger row the app wrote for a rule. One wire type, narrowed — the backend
+ * returns the same `InstallRecord` shape and always sets `domain: "rule"` for
+ * rule rows (ruling C3).
+ */
+export type RuleInstall = InstallRecord & { domain: "rule" };
+
+/**
+ * A rule harness id, e.g. `"oh-my-pi"`. A plain string for the same reason
+ * `Tool` is: the set lives in `src-tauri/data/rules-tools.json`, and
+ * `src/lib/data/ruleRegistry.ts` is the typed reader for it.
+ */
+export type RuleHarness = string;
+
+/**
+ * Authored `globs` accepts BOTH shapes (`agency-rules/rules/_schema.json` uses
+ * `oneOf`). The backend preserves which form was authored so oh-my-pi and
+ * OpenCode re-emit it; Antigravity always joins with commas.
+ */
+export type RuleGlobs = string | string[];
+
+/** Result of the schema gate. `errors` are the validator's own messages. */
+export interface RuleValidation {
+  valid: boolean;
+  errors: string[];
+}
+
+/**
+ * The neutral rule, parsed from `rules/<category>/<file>.md`.
+ *
+ * `slug` is the frontmatter `name`, **never** the filename
+ * (`rules/base/commit-convention.md` declares `name: commit-conventions`), and
+ * `relativePath` is the corpus-relative source, which is why `ruleGet` can find
+ * a rule whose filename differs from its slug.
+ */
+export interface Rule {
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  relativePath: string;
+  globs?: RuleGlobs;
+  /** Optional on purpose: `false` and absent are different states. */
+  alwaysApply?: boolean;
+  trigger?: string;
+  match?: string;
+  tags: string[];
+  tools: string[];
+  /** Markdown body, as the renderers consume it (trimmed). */
+  body: string;
+  sourceHash: string;
+  bodyHash: string;
+  validation: RuleValidation;
+}
+
+/** `rules_list` row: a `Rule` minus the body (the payload stays small). */
+export interface RuleSummary {
+  slug: string;
+  name: string;
+  description: string;
+  category: string;
+  relativePath: string;
+  globs?: RuleGlobs;
+  alwaysApply?: boolean;
+  trigger?: string;
+  match?: string;
+  tags: string[];
+  tools: string[];
+  validation: RuleValidation;
+}
+
+/** Why the rules list is empty. The two arms get different copy and CTAs. */
+export type RuleEmptyReason = "notSynced" | "noRules";
+
+/** `rules_status` — the "not synced" vs "no rules shipped" distinction. */
+export interface RuleStatus {
+  configured: boolean;
+  count: number;
+  /** Refreshed commit SHA, or `"baseline"` before the first refresh. */
+  version: string;
+  /** `null` when there are rules to show. */
+  emptyReason: RuleEmptyReason | null;
+}
+
+/** One harness's compiled output. `dest` is computed, never created. */
+export interface RulePreviewEntry {
+  harness: RuleHarness;
+  label: string;
+  /** The exact bytes an install would write. */
+  bytes: string;
+  dest: string;
+  renderedHash: string;
+  installable: boolean;
+}
+
+/** `rules_preview` response — nothing is written to disk. */
+export interface RulePreview {
+  slug: string;
+  /** The scope actually resolved, so a user path is never shown for a project. */
+  scope: Scope;
+  projectPath: string | null;
+  harnesses: RulePreviewEntry[];
+}
 
 /**
  * The five reconciliation states (like a package manager's installed /
