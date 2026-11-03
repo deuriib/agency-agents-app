@@ -774,6 +774,7 @@ export type SidebarSection =
   | "teams"
   | "projects"
   | "runbooks"
+  | "rules"
   | "activity";
 
 export type ThemePreference = "light" | "dark" | "system";

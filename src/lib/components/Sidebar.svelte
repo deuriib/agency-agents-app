@@ -5,6 +5,9 @@
   import Users from "@lucide/svelte/icons/users";
   import FolderGit2 from "@lucide/svelte/icons/folder-git-2";
   import Rocket from "@lucide/svelte/icons/rocket";
+  // Rules uses ScrollText, deliberately NOT `Bot` (the Agents mark) — the two
+  // catalogs must be distinguishable at a glance (spec §7).
+  import ScrollText from "@lucide/svelte/icons/scroll-text";
   import Activity from "@lucide/svelte/icons/activity";
 
   import { ui } from "$lib/stores/ui.svelte";
@@ -31,6 +34,7 @@
     { id: "teams",     shortcut: shortcut("3"), icon: Users },
     { id: "projects",  shortcut: shortcut("4"), icon: FolderGit2 },
     { id: "runbooks",  shortcut: shortcut("5"), icon: Rocket },
+    { id: "rules",     shortcut: shortcut("7"), icon: ScrollText },
     { id: "activity",  shortcut: shortcut("6"), icon: Activity },
   ];
 
@@ -41,6 +45,7 @@
     if (id === "teams") return i18n.t("nav.teams");
     if (id === "projects") return i18n.t("nav.projects");
     if (id === "runbooks") return i18n.t("nav.runbooks");
+    if (id === "rules") return i18n.t("nav.rules");
     return i18n.t("nav.activity");
   }
 
