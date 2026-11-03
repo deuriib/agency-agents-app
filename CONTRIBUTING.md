@@ -125,6 +125,15 @@ Renderer *capability* deliberately does not live there. `src-tauri/data/render-f
 is app state, owned by this repo, read by `registry.rs` and `toolRegistry.ts` alike — the
 catalog carries no app-release state, and `scripts/check-tools.sh` upstream would reject it.
 
+Rule harnesses use the same split. `src-tauri/data/rules-tools.json` is a **verbatim
+copy** of the `harnesses` object owned by
+[`agency-rules`](https://github.com/deuriib/agency-rules) (`tools.json`) — the copy the
+Rust `rules/registry.rs` and the frontend `ruleRegistry.ts` both read — and
+`src-tauri/data/rule-formats.json` is app state listing the rule formats implemented in
+`src-tauri/src/rules/render.rs`, exactly as `render-formats.json` does for agents. A
+harness is installable iff its format appears in that file, so a changed rule
+destination or a new harness is an upstream `agency-rules` change first, then a sync.
+
 So **changing how an existing tool installs — its `format`, destination paths, slug
 prefix, emitted frontmatter, or scope — is an upstream change first.** Land it in the
 catalog repo's `tools.json` + `scripts/convert.sh`, then sync the copies here. Editing
@@ -173,6 +182,11 @@ A translation PR should:
 - **Preserve every placeholder.** `{tool}`, `{count}`, `{wsl}`, etc. must survive
   untranslated and unaltered, or interpolation breaks.
 - **Pass `npm run check`** — the `Partial<Messages>` type catches typo'd keys.
+- **Pass the parity guard.** `scripts/check-i18n.mjs` (run by `npm run test:scripts`)
+  fails when a `rules.*` / `nav.rules` / `palette.openRules` key, or one of its
+  placeholders, is missing from any locale. The guard is scoped to those namespaces
+  because older locale files still carry pre-existing gaps; widen it only after those
+  are closed.
 
 ### Every translation gets a content scan before merge
 

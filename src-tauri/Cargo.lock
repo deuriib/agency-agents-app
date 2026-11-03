@@ -21,7 +21,7 @@ dependencies = [
 
 [[package]]
 name = "agency-agents-app"
-version = "0.7.1"
+version = "0.8.4"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -3902,6 +3902,7 @@ version = "1.0.150"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e8014e44b4736ed0538adeecded0fce2a272f22dc9578a7eb6b2d9993c74cfb9"
 dependencies = [
+ "indexmap 2.14.0",
  "itoa",
  "memchr",
  "serde",

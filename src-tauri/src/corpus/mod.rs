@@ -125,8 +125,9 @@ const SCAN_ROOTS: [&str; 7] = [
     "src",
 ];
 
-/// User-Agent for the refresh fetch. Mirrors the catalog refresh style.
-const USER_AGENT: &str = "agency-agents/0.1 (+https://github.com/deuriib/agency-agents)";
+/// User-Agent for the refresh fetch. Mirrors the catalog refresh style. Shared
+/// by both managed corpora.
+pub(crate) const USER_AGENT: &str = "agency-agents/0.1 (+https://github.com/deuriib/agency-agents)";
 
 /// Whole-request timeout for the tarball fetch. The repo is small (a few
 /// hundred small markdown files) so 60s is generous.
@@ -136,13 +137,15 @@ const REFRESH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 /// The real tarball is well under 5 MiB; 32 MiB is large headroom.
 const MAX_TARBALL_BYTES: u64 = 32 * 1024 * 1024;
 
-/// Cap on a single decompressed agent `.md`. Personas run a few KiB;
-/// 1 MiB is absurdly generous and still bounds memory.
-const MAX_AGENT_BYTES: u64 = 1024 * 1024;
+/// Cap on a single decompressed corpus source file (an agent persona, or a
+/// rule under `rules/`). Personas and rules run a few KiB; 1 MiB is absurdly
+/// generous and still bounds memory.
+pub(crate) const MAX_AGENT_BYTES: u64 = 1024 * 1024;
 
-/// Version string recorded for the bundled baseline before any refresh
-/// has resolved a commit SHA.
-const BASELINE_VERSION: &str = "baseline";
+/// Version string recorded for a bundled baseline before any refresh has
+/// resolved a commit SHA. Shared with the rules corpus so the two cannot spell
+/// "baseline" differently.
+pub(crate) const BASELINE_VERSION: &str = "baseline";
 
 // ---------- On-disk meta ----------
 
@@ -676,7 +679,7 @@ fn empty_corpus(version: &str, categories: &[String]) -> Corpus {
 // ---------- Seeding ----------
 
 /// True if `dir` does not exist or contains no entries.
-fn is_empty_dir(dir: &Path) -> bool {
+pub(crate) fn is_empty_dir(dir: &Path) -> bool {
     match std::fs::read_dir(dir) {
         Ok(mut it) => it.next().is_none(),
         Err(_) => true,
@@ -740,7 +743,7 @@ async fn seed_from_baseline(
     // carries it (manifest + NEXUS playbooks) unlocks Runbooks offline.
     let mut meta = 0u32;
     for rel in [DIVISIONS_FILENAME, "strategy"] {
-        meta += copy_repo_meta(&baseline.join(rel), &dest.join(rel), 0);
+        meta += copy_tree(&baseline.join(rel), &dest.join(rel), 0);
     }
 
     tracing::info!("corpus: seeded {seeded} agents + {meta} repo-level files from baseline");
@@ -750,7 +753,11 @@ async fn seed_from_baseline(
 /// Recursively copy `src` into `dst`, regular files only, capped at
 /// [`MAX_AGENT_BYTES`] and a bounded depth. Cold path (first-run seeding of a
 /// small, trusted baseline) — synchronous so the recursion stays simple.
-fn copy_repo_meta(src: &Path, dst: &Path, depth: u8) -> u32 {
+///
+/// Shared with the rules corpus seed: the rules baseline is a `rules/` tree and
+/// needs exactly this walk (files only, never follow a symlink out of the
+/// bundled resources).
+pub(crate) fn copy_tree(src: &Path, dst: &Path, depth: u8) -> u32 {
     const MAX_DEPTH: u8 = 8;
     if depth > MAX_DEPTH {
         return 0;
@@ -784,7 +791,7 @@ fn copy_repo_meta(src: &Path, dst: &Path, depth: u8) -> u32 {
         return 0;
     };
     rd.filter_map(|e| e.ok())
-        .map(|e| copy_repo_meta(&e.path(), &dst.join(e.file_name()), depth + 1))
+        .map(|e| copy_tree(&e.path(), &dst.join(e.file_name()), depth + 1))
         .sum()
 }
 
@@ -909,30 +916,39 @@ async fn refresh(app_data_dir: &Path) -> Result<CorpusMeta, AppError> {
 /// Fetch the GitHub `codeload` tarball for the corpus (capped, timed out).
 /// Shared by [`refresh`] and managed-catalog provisioning (the git-absent path).
 async fn download_corpus_tarball() -> Result<Vec<u8>, AppError> {
+    download_tarball(CORPUS_TARBALL_URL).await
+}
+
+/// Fetch a GitHub `codeload` tarball (capped, timed out, no git binary).
+///
+/// Shared by the agent corpus and the rules corpus (TASK 12): one downloader,
+/// one timeout, one size cap, one `User-Agent` — a second copy would be the
+/// first thing to drift (ENG-07, ENG-13).
+pub(crate) async fn download_tarball(url: &str) -> Result<Vec<u8>, AppError> {
     let client = reqwest::Client::builder()
         .timeout(REFRESH_TIMEOUT)
         .user_agent(USER_AGENT)
         .build()
         .map_err(|e| AppError::Network {
-            url: CORPUS_TARBALL_URL.to_string(),
+            url: url.to_string(),
             message: format!("client build: {e}"),
         })?;
     let resp = client
-        .get(CORPUS_TARBALL_URL)
+        .get(url)
         .send()
         .await
         .map_err(|e| AppError::Network {
-            url: CORPUS_TARBALL_URL.to_string(),
+            url: url.to_string(),
             message: e.to_string(),
         })?;
     if !resp.status().is_success() {
         return Err(AppError::HttpStatus {
-            url: CORPUS_TARBALL_URL.to_string(),
+            url: url.to_string(),
             status: resp.status().as_u16(),
         });
     }
     let bytes = resp.bytes().await.map_err(|e| AppError::Network {
-        url: CORPUS_TARBALL_URL.to_string(),
+        url: url.to_string(),
         message: format!("read body: {e}"),
     })?;
     if bytes.len() as u64 > MAX_TARBALL_BYTES {
@@ -948,8 +964,8 @@ async fn download_corpus_tarball() -> Result<Vec<u8>, AppError> {
 }
 
 /// Gunzip the tarball and decode it to raw `tar` bytes, capped against a gzip
-/// bomb. Shared by [`extract_catalog`] and [`categories_from_tarball`].
-fn gunzip_capped(tar_gz: &[u8]) -> Result<Vec<u8>, AppError> {
+/// bomb. Shared by [`extract_archive`] and [`categories_from_tarball`].
+pub(crate) fn gunzip_capped(tar_gz: &[u8]) -> Result<Vec<u8>, AppError> {
     use std::io::Read;
     let gz = flate2::read::GzDecoder::new(tar_gz);
     let mut capped = gz.take(MAX_TARBALL_BYTES * 8);
@@ -1016,10 +1032,10 @@ fn categories_from_tarball(tar_gz: &[u8]) -> Option<Vec<String>> {
 }
 
 /// The archive-relative path components of a tarball entry, with the single
-/// top-level `agency-agents-main/` wrapper stripped. Returns `None` for
-/// anything that cannot be safely rebuilt as a path under the destination:
-/// absolute paths, `..`, `.`, Windows prefixes, or empty results.
-fn archive_rel_components(path: &Path) -> Option<Vec<String>> {
+/// top-level `agency-agents-main/` (or `agency-rules-main/`) wrapper stripped.
+/// Returns `None` for anything that cannot be safely rebuilt as a path under the
+/// destination: absolute paths, `..`, `.`, Windows prefixes, or empty results.
+pub(crate) fn archive_rel_components(path: &Path) -> Option<Vec<String>> {
     let mut comps: Vec<String> = Vec::new();
     for c in path.components() {
         match c {
@@ -1041,23 +1057,45 @@ fn archive_rel_components(path: &Path) -> Option<Vec<String>> {
     Some(comps)
 }
 
-/// Gunzip + untar `tar_gz` into `dest`, preserving the catalog's repo-level
-/// content that the app reads but never indexes as agents:
-///
-/// - `<category>/**.md` for every division in `categories` (agent personas,
-///   nested paths preserved so `game-development/godot/<slug>.md` keeps working),
-/// - `divisions.json` (the division manifest `discover_categories` reads),
-/// - `strategy/**` (NEXUS playbooks + the `runbooks.json` scenario manifest),
-/// - `scripts/**` (repo tooling, so the working copy stays self-describing).
-///
-/// Everything else in the archive is ignored. The codeload tarball nests
-/// everything under a single `agency-agents-main/` top-level dir, which we
-/// strip. Returns the count of agent persona files written.
+/// What [`extract_archive`] should do with one archive entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ArchiveKeep {
+    /// Not this corpus's content — skip it.
+    Skip,
+    /// Write it, but it is not a countable corpus artifact (repo metadata,
+    /// tooling).
+    Write,
+    /// Write it and count it as a primary artifact (an agent persona, a rule).
+    Primary,
+}
+
+/// The outcome of one [`extract_archive`] run.
+pub(crate) struct ExtractedArchive {
+    /// Every file written, as an archive-relative path with `/` separators.
+    pub written: Vec<String>,
+    /// How many entries the predicate classified as [`ArchiveKeep::Primary`].
+    pub primary: u32,
+}
+
+/// Gunzip + untar `tar_gz` into `dest`, keeping only the entries `keep` accepts.
 ///
 /// Path-traversal safe: destinations are rebuilt only from validated path
 /// components ([`archive_rel_components`]); the raw archive path is never used
-/// to build a write target.
-fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<u32, AppError> {
+/// to build a write target. A crafted entry that would escape `dest` (absolute
+/// path, `..`, Windows prefix) is rejected there and silently skipped — it is
+/// never joined and never written.
+///
+/// This is the ONE extractor for both managed corpora: the agent corpus filters
+/// by division, the rules corpus by its `rules/` subtree. A second copy of this
+/// loop is how the traversal guard and the byte cap drift apart (ENG-07).
+pub(crate) fn extract_archive<F>(
+    tar_gz: &[u8],
+    dest: &Path,
+    keep: F,
+) -> Result<ExtractedArchive, AppError>
+where
+    F: Fn(&[String]) -> ArchiveKeep,
+{
     use std::io::Read;
 
     let tar_bytes = gunzip_capped(tar_gz)?;
@@ -1066,8 +1104,10 @@ fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<
         message: format!("read tar entries: {e}"),
     })?;
 
-    let is_category = |c: &str| categories.iter().any(|cat| cat == c);
-    let mut written = 0u32;
+    let mut out = ExtractedArchive {
+        written: Vec::new(),
+        primary: 0,
+    };
     for entry in entries {
         let mut entry = entry.map_err(|e| AppError::Io {
             message: format!("tar entry: {e}"),
@@ -1081,18 +1121,8 @@ fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<
         let Some(comps) = archive_rel_components(&path) else {
             continue;
         };
-
-        // Repo-level content the app reads directly: keep it verbatim so the
-        // catalog matches the repo instead of an allow-list of divisions.
-        let top = comps[0].as_str();
-        let is_agent = comps.len() >= 2
-            && is_category(top)
-            && comps.last().map(|f| f.ends_with(".md")).unwrap_or(false)
-            && comps.last().map(|f| f.as_str()) != Some("README.md");
-        let is_repo_meta = (comps.len() == 1 && top == DIVISIONS_FILENAME)
-            || top == "strategy"
-            || top == "scripts";
-        if !is_agent && !is_repo_meta {
+        let decision = keep(&comps);
+        if decision == ArchiveKeep::Skip {
             continue;
         }
 
@@ -1114,11 +1144,49 @@ fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<
         std::fs::write(&target, &buf).map_err(|e| AppError::Io {
             message: format!("write {}: {e}", target.display()),
         })?;
-        if is_agent {
-            written += 1;
+        out.written.push(comps.join("/"));
+        if decision == ArchiveKeep::Primary {
+            out.primary += 1;
         }
     }
-    Ok(written)
+    Ok(out)
+}
+
+/// Gunzip + untar `tar_gz` into `dest`, preserving the catalog's repo-level
+/// content that the app reads but never indexes as agents:
+///
+/// - `<category>/**.md` for every division in `categories` (agent personas,
+///   nested paths preserved so `game-development/godot/<slug>.md` keeps working),
+/// - `divisions.json` (the division manifest `discover_categories` reads),
+/// - `strategy/**` (NEXUS playbooks + the `runbooks.json` scenario manifest),
+/// - `scripts/**` (repo tooling, so the working copy stays self-describing).
+///
+/// Everything else in the archive is ignored. The codeload tarball nests
+/// everything under a single `agency-agents-main/` top-level dir, which we
+/// strip. Returns the count of agent persona files written.
+fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<u32, AppError> {
+    let is_category = |c: &str| categories.iter().any(|cat| cat == c);
+    let extracted = extract_archive(tar_gz, dest, |comps| {
+        let top = comps[0].as_str();
+        let is_agent = comps.len() >= 2
+            && is_category(top)
+            && comps.last().map(|f| f.ends_with(".md")).unwrap_or(false)
+            && comps.last().map(|f| f.as_str()) != Some("README.md");
+        if is_agent {
+            return ArchiveKeep::Primary;
+        }
+        // Repo-level content the app reads directly: keep it verbatim so the
+        // catalog matches the repo instead of an allow-list of divisions.
+        let is_repo_meta = (comps.len() == 1 && top == DIVISIONS_FILENAME)
+            || top == "strategy"
+            || top == "scripts";
+        if is_repo_meta {
+            ArchiveKeep::Write
+        } else {
+            ArchiveKeep::Skip
+        }
+    })?;
+    Ok(extracted.primary)
 }
 
 // ---------- Small fs helper ----------
@@ -1395,14 +1463,19 @@ async fn pull_active(app_data_dir: &Path) -> Result<(), AppError> {
 use crate::state::AppState;
 use tauri::{AppHandle, Manager, State};
 
-/// Resolve the bundled baseline dir from the Tauri resource dir. In dev
-/// the resources live under the crate; in a bundled app they're inside
-/// the `.app`. Tauri's `resource_dir()` resolves both.
-fn baseline_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
-    let res = app.path().resource_dir().map_err(|e| AppError::Internal {
+/// Resolve the Tauri resource dir. In dev the resources live under the crate;
+/// in a bundled app they're inside the `.app`. Tauri's `resource_dir()`
+/// resolves both. Shared by every bundled baseline (agents, rules).
+pub(crate) fn resource_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    app.path().resource_dir().map_err(|e| AppError::Internal {
         message: format!("resolve resource_dir: {e}"),
-    })?;
-    Ok(res.join("resources").join("corpus-baseline"))
+    })
+}
+
+/// Resolve the bundled agent-corpus baseline dir
+/// (`<resources>/resources/corpus-baseline`).
+fn baseline_dir(app: &AppHandle) -> Result<PathBuf, AppError> {
+    Ok(resource_dir(app)?.join("resources").join("corpus-baseline"))
 }
 
 /// Resolve the per-app data dir via Tauri's path resolver (honors the

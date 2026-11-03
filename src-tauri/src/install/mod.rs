@@ -22,8 +22,8 @@ use crate::registry;
 use crate::render;
 use crate::state::AppState;
 use crate::types::{
-    AgentDiff, InstallRecord, InstallState, InstalledAgent, ProjectInfo, Tool, ToolInfo,
-    ToolVersion, UpdateKind,
+    is_agent_domain, AgentDiff, InstallDomain, InstallRecord, InstallState, InstalledAgent,
+    ProjectInfo, Tool, ToolInfo, ToolVersion, UpdateKind,
 };
 use crate::util::fs::{atomic_write, read_capped};
 use crate::util::process::headless_tokio_command;
@@ -39,23 +39,109 @@ fn ledger_path(app: &AppHandle) -> Result<PathBuf, AppError> {
 }
 
 async fn load_ledger(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
-    let path = ledger_path(app)?;
-    match tokio::fs::read(&path).await {
-        Ok(bytes) => {
-            let mut recs: Vec<InstallRecord> =
-                serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
-                    message: format!("parse installs.json: {e}"),
-                })?;
-            // Backfill dests for older ledgers written before multi-file support.
-            for r in &mut recs {
-                if r.dests.is_empty() {
-                    r.dests = vec![r.dest.clone()];
-                }
-            }
-            Ok(recs)
-        }
-        Err(_) => Ok(Vec::new()), // no ledger yet — nothing installed
+    read_ledger_at(&ledger_path(app)?).await
+}
+
+/// Read a ledger file, treating ONLY "absent" as "nothing installed".
+///
+/// This used to map every error to an empty ledger. A permission or I/O error
+/// therefore read as "you have nothing installed", and the next save replaced
+/// the file with just the new row — silently erasing every agent AND rule row.
+/// A corrupt ledger must fail loudly; the user can repair or delete the file.
+async fn read_ledger_at(path: &Path) -> Result<Vec<InstallRecord>, AppError> {
+    match tokio::fs::read(path).await {
+        Ok(bytes) => parse_ledger(&bytes),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
+        Err(e) => Err(AppError::Io {
+            message: format!("read {}: {e}", path.display()),
+        }),
     }
+}
+
+/// Prove a ledger write can succeed BEFORE the first byte of an install is
+/// written.
+///
+/// Reading catches a corrupt or unreadable ledger; the probe write catches a
+/// read-only or full state directory. Without this, a failed ledger save left a
+/// file on disk with no row — untracked and not removable through the UI.
+pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppError> {
+    ensure_ledger_writable_at(&ledger_path(app)?).await
+}
+
+/// Size of the payload the ledger preflight writes.
+///
+/// Must stay well above zero: a zero-byte write allocates nothing, succeeds on
+/// a full or quota-limited filesystem, and would report a directory as writable
+/// when the ledger cannot be saved. A real ledger write is at least a few
+/// hundred bytes per row, so this is a realistic lower bound.
+const PROBE_PAYLOAD_BYTES: usize = 4096;
+
+/// The payload the preflight actually writes.
+///
+/// A function, not an inline `vec!`, so a test can assert on the buffer that
+/// reaches the filesystem rather than on the constant — a call site that
+/// silently wrote an empty buffer would otherwise keep its test green.
+fn probe_payload() -> Vec<u8> {
+    vec![b' '; PROBE_PAYLOAD_BYTES]
+}
+
+/// Path-based core of [`ensure_ledger_writable`], so the preflight is testable
+/// without an `AppHandle`.
+///
+/// The probe writes a real payload, not an empty buffer: a zero-byte write
+/// allocates nothing, so it succeeds on a full or quota-limited filesystem and
+/// would report "writable" for a directory that cannot take the ledger.
+pub(crate) async fn ensure_ledger_writable_at(path: &Path) -> Result<(), AppError> {
+    let parent = path.parent().ok_or_else(|| AppError::Internal {
+        message: format!("ledger path has no parent: {}", path.display()),
+    })?;
+    tokio::fs::create_dir_all(parent)
+        .await
+        .map_err(|e| AppError::Io {
+            message: format!("create state dir {}: {e}", parent.display()),
+        })?;
+    let _ = read_ledger_at(path).await?;
+    // Unique per call: a fixed name made two concurrent installs remove each
+    // other's probe and report a bogus "cannot write ledger" failure.
+    static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let probe = parent.join(format!(".installs-probe-{}-{seq}.tmp", std::process::id()));
+    let payload = probe_payload();
+    let written = async {
+        tokio::fs::write(&probe, &payload)
+            .await
+            .map_err(|e| AppError::Io {
+                message: format!("write {}: {e}", probe.display()),
+            })?;
+        tokio::fs::remove_file(&probe)
+            .await
+            .map_err(|e| AppError::Io {
+                message: format!("remove {}: {e}", probe.display()),
+            })
+    }
+    .await;
+    if written.is_err() {
+        let _ = tokio::fs::remove_file(&probe).await;
+    }
+    written
+}
+
+/// Parse an `installs.json` document and backfill `dests` for rows written
+/// before multi-file support.
+///
+/// Split out of [`load_ledger`] so the v0.8.x round-trip test drives the REAL
+/// load path instead of a copy of it: a backfill bug would otherwise hide behind
+/// a test that re-implemented the same loop.
+fn parse_ledger(bytes: &[u8]) -> Result<Vec<InstallRecord>, AppError> {
+    let mut recs: Vec<InstallRecord> = serde_json::from_slice(bytes).map_err(|e| AppError::Io {
+        message: format!("parse installs.json: {e}"),
+    })?;
+    for r in &mut recs {
+        if r.dests.is_empty() {
+            r.dests = vec![r.dest.clone()];
+        }
+    }
+    Ok(recs)
 }
 
 async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), AppError> {
@@ -71,6 +157,145 @@ async fn save_ledger(app: &AppHandle, records: &[InstallRecord]) -> Result<(), A
         message: format!("serialize installs.json: {e}"),
     })?;
     atomic_write(&path, &bytes).await
+}
+
+// ---------- Rule ledger rows (issue #29) ----------
+//
+// Rules share `installs.json` (spec §5.4) and are told apart by `domain`
+// (spec §5.4, ruling C4). Every AGENT-facing reader filters on it: a rule row
+// stores a HARNESS id in `tool`, and `antigravity`/`opencode` are byte-equal
+// between the two id schemes, so an unfiltered consumer double-counts silently.
+//
+// The writers below are the write path `rules::commands` (W6) uses. The
+// read/pure helpers (`agent_rows`, `rule_rows`, `upsert_rule_row`,
+// `remove_rule_row`) are the single implementation those commands are built on.
+
+/// The rows an agent-facing surface may see. Iterates by reference so the
+/// reconcile loop does not clone a 100-row ledger.
+pub(crate) fn agent_rows(records: &[InstallRecord]) -> impl Iterator<Item = &InstallRecord> {
+    records.iter().filter(|r| r.domain == InstallDomain::Agent)
+}
+
+/// The rule rows, in ledger order.
+pub(crate) fn rule_rows(records: &[InstallRecord]) -> Vec<InstallRecord> {
+    records
+        .iter()
+        .filter(|r| r.domain == InstallDomain::Rule)
+        .cloned()
+        .collect()
+}
+
+/// Identity of a ledger row for a rule install: one row per
+/// `(domain, slug, harness, project root)`. `tool` holds the harness id.
+fn same_rule_install(a: &InstallRecord, b: &InstallRecord) -> bool {
+    a.domain == b.domain && a.slug == b.slug && a.tool == b.tool && a.project_path == b.project_path
+}
+
+/// Replace-or-append a rule row — the same retain-then-push `do_install` uses,
+/// so re-installing the same `(slug, harness, project)` cannot append a
+/// duplicate. Pure so the invariant is testable without an `AppHandle`.
+///
+/// The domain is forced here, not trusted from the caller: a row reaching the
+/// rule writer can never persist as an agent row (which would make the Tools
+/// panel count a rule as an agent install).
+pub(crate) fn upsert_rule_row(records: &mut Vec<InstallRecord>, record: InstallRecord) {
+    let mut record = record;
+    record.domain = InstallDomain::Rule;
+    records.retain(|r| !same_rule_install(r, &record));
+    records.push(record);
+}
+
+/// Drop one rule row. Returns whether a row matched. Agent rows can never match
+/// (`domain` is part of the key), so this cannot delete an agent install.
+pub(crate) fn remove_rule_row(
+    records: &mut Vec<InstallRecord>,
+    slug: &str,
+    harness: &str,
+    project_path: Option<&str>,
+) -> bool {
+    let before = records.len();
+    records.retain(|r| {
+        !(r.domain == InstallDomain::Rule
+            && r.slug == slug
+            && r.tool == harness
+            && r.project_path.as_deref() == project_path)
+    });
+    records.len() != before
+}
+
+/// Persist a rule install row (append or replace). The ONE write path for rule
+/// rows, so the C2 invariant is enforced in a single place.
+///
+/// Called by `rules::commands::rules_install` **after** the rule file is on disk:
+/// a failed write never reaches here, so a ledger row cannot claim a file that
+/// is not there.
+pub(crate) async fn append_rule_install(
+    app: &AppHandle,
+    record: InstallRecord,
+) -> Result<(), AppError> {
+    check_tracked_destinations(&record)?;
+    let mut ledger = load_ledger(app).await?;
+    upsert_rule_row(&mut ledger, record);
+    save_ledger(app, &ledger).await
+}
+
+/// Ruling C2: `opencode.json` is a side-effect write, never a tracked
+/// destination. `rules_uninstall` deletes every path in `dests`, so a row
+/// carrying the plugin config would delete a user's OpenCode config — fail
+/// closed instead of persisting a row that makes that possible.
+fn check_tracked_destinations(record: &InstallRecord) -> Result<(), AppError> {
+    for path in std::iter::once(&record.dest).chain(record.dests.iter()) {
+        if crate::rules::opencode::is_plugin_config(Path::new(path)) {
+            return Err(AppError::InvalidArgument {
+                message: format!(
+                    "{path} is an OpenCode config file and is never a tracked install destination"
+                ),
+            });
+        }
+    }
+    Ok(())
+}
+
+/// Remove one rule install row. Returns whether a row was removed; nothing is
+/// written when it was not.
+pub(crate) async fn remove_rule_install(
+    app: &AppHandle,
+    slug: &str,
+    harness: &str,
+    project_path: Option<&str>,
+) -> Result<bool, AppError> {
+    let mut ledger = load_ledger(app).await?;
+    let removed = remove_rule_row(&mut ledger, slug, harness, project_path);
+    if removed {
+        save_ledger(app, &ledger).await?;
+    }
+    Ok(removed)
+}
+
+/// Every rule row — the source of truth `rules_installs` serves, so install
+/// state survives a restart (spec §10.6).
+pub(crate) async fn list_rule_installs(app: &AppHandle) -> Result<Vec<InstallRecord>, AppError> {
+    Ok(rule_rows(&load_ledger(app).await?))
+}
+
+/// `tools_list`'s `installed_count` for one tool. Rule rows are excluded: the
+/// `antigravity` and `opencode` harness ids are byte-equal to those agent tool
+/// ids, so counting them would inflate the Tools panel (ruling C4).
+pub(crate) fn tool_installed_count(records: &[InstallRecord], tool: &str) -> u32 {
+    agent_rows(records).filter(|r| r.tool == tool).count() as u32
+}
+
+/// `projects_list`'s per-project install counts, agent rows only. A rule
+/// installed into a project must not appear as an agent install there (ruling
+/// C4, spec §10.8).
+pub(crate) fn project_install_counts(records: &[InstallRecord]) -> BTreeMap<String, u32> {
+    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
+    for record in agent_rows(records) {
+        if let Some(project) = &record.project_path {
+            *counts.entry(project.clone()).or_default() += 1;
+        }
+    }
+    counts
 }
 
 fn home() -> Result<PathBuf, AppError> {
@@ -99,7 +324,11 @@ async fn tool_home(state: &AppState, tool: &str) -> Result<PathBuf, AppError> {
 /// Pure per-tool base resolution: a configured, non-empty custom path wins;
 /// otherwise the OS home. Split out from [`tool_home`] so it's unit-testable
 /// without standing up an `AppState`.
-fn resolve_tool_base(
+///
+/// `pub(crate)` because the rule dest resolver (`rules::render::harness_base`,
+/// ruling A7) reuses this ONE implementation — copying it would let the agent
+/// and rule paths drift.
+pub(crate) fn resolve_tool_base(
     tool_paths: &std::collections::HashMap<String, String>,
     tool: &str,
     os_home: &Path,
@@ -165,6 +394,8 @@ fn record_for(
         rendered_hash,
         installed_at: installed_at.to_string(),
         corpus_version: corpus_version.to_string(),
+        domain: InstallDomain::Agent,
+        plugin_registered: None,
     }
 }
 
@@ -173,7 +404,12 @@ fn record_for(
 /// litter). Backup name keeps the original filename + a timestamp so it's
 /// human-recoverable. Best-effort within a still-fallible signature: a failed
 /// backup aborts the write (we never overwrite what we couldn't preserve).
-async fn backup_if_differs(
+///
+/// `pub(crate)` because the rule install path (`rules::commands`) reuses it: a
+/// rule file overwritten at a user's destination must be recoverable for the
+/// same reason an agent file must be, and copying the helper would let the two
+/// backup layouts drift.
+pub(crate) async fn backup_if_differs(
     dest: &Path,
     new_bytes: &[u8],
     backup_dir: &Path,
@@ -206,6 +442,23 @@ async fn backup_if_differs(
 
 // ---------- Install / update (shared core) ----------
 
+/// Identity of an AGENT ledger row: one row per `(slug, tool, project root)`.
+///
+/// `domain` is part of the key on purpose (ruling C4): a rule row whose `tool`
+/// is a harness id can be byte-equal to an agent `tool` (`antigravity`,
+/// `opencode`), so an agent install/uninstall must never rewrite or delete it.
+fn matches_agent_install(
+    record: &InstallRecord,
+    slug: &str,
+    tool: &str,
+    project_path: Option<&str>,
+) -> bool {
+    record.domain == InstallDomain::Agent
+        && record.slug == slug
+        && record.tool == tool
+        && record.project_path.as_deref() == project_path
+}
+
 async fn do_install(
     app: &AppHandle,
     state: &AppState,
@@ -228,7 +481,7 @@ async fn do_install(
     let mut ledger = load_ledger(app).await?;
     let existing_dest = ledger
         .iter()
-        .find(|r| r.slug == slug && r.tool == tool && r.project_path == project_path)
+        .find(|r| matches_agent_install(r, &slug, &tool, project_path.as_deref()))
         .map(|r| PathBuf::from(&r.dest));
     let record = write_agent_files_to(
         &agent,
@@ -245,7 +498,7 @@ async fn do_install(
     )
     .await?;
 
-    ledger.retain(|r| !(r.slug == slug && r.tool == tool && r.project_path == project_path));
+    ledger.retain(|r| !matches_agent_install(r, &slug, &tool, project_path.as_deref()));
     ledger.push(record.clone());
     save_ledger(app, &ledger).await?;
     Ok(record)
@@ -289,7 +542,7 @@ async fn do_track(
     )?;
 
     let mut ledger = load_ledger(app).await?;
-    ledger.retain(|r| !(r.slug == slug && r.tool == tool && r.project_path == project_path));
+    ledger.retain(|r| !matches_agent_install(r, &slug, &tool, project_path.as_deref()));
     ledger.push(record.clone());
     save_ledger(app, &ledger).await?;
     Ok(record)
@@ -750,7 +1003,7 @@ pub async fn agent_diff(
     let ledger = load_ledger(&app).await?;
     let ledger_dest = ledger
         .iter()
-        .find(|r| r.slug == slug && r.tool == tool && r.project_path == project_path)
+        .find(|r| matches_agent_install(r, &slug, &tool, project_path.as_deref()))
         .map(|r| PathBuf::from(&r.dest));
     let candidates = candidate_dests(&agent, &raw, &tool, &home, proot.as_deref())?;
     let dest = ledger_dest
@@ -792,7 +1045,7 @@ pub async fn uninstall_agent(
     let mut ledger = load_ledger(&app).await?;
     let ledger_dest = ledger
         .iter()
-        .find(|r| r.slug == slug && r.tool == tool && r.project_path == project_path)
+        .find(|r| matches_agent_install(r, &slug, &tool, project_path.as_deref()))
         .map(|r| PathBuf::from(&r.dest));
     remove_agent_files(
         &agent,
@@ -805,7 +1058,7 @@ pub async fn uninstall_agent(
         &now_iso(),
     )
     .await?;
-    ledger.retain(|r| !(r.slug == slug && r.tool == tool && r.project_path == project_path));
+    ledger.retain(|r| !matches_agent_install(r, &slug, &tool, project_path.as_deref()));
     save_ledger(&app, &ledger).await?;
     Ok(())
 }
@@ -828,7 +1081,13 @@ pub async fn project_forget(app: AppHandle, project_path: String) -> Result<(), 
 /// (other projects AND user-global rows). Pure so it's unit-testable without an
 /// AppHandle; the command just wraps it with load/save.
 fn prune_project_rows(records: &mut Vec<InstallRecord>, project_path: &str) {
-    records.retain(|r| r.project_path.as_deref() != Some(project_path));
+    // Agent rows only (ruling C4). Forgetting a project is an agent action; it
+    // must not silently drop the ledger row of a rule installed into that
+    // project (rule reconciliation is M2, and losing the row would lose the
+    // only record of a file the app wrote).
+    records.retain(|r| {
+        !(r.domain == InstallDomain::Agent && r.project_path.as_deref() == Some(project_path))
+    });
 }
 
 /// The reconciled Library view — every ledger row resolved against disk +
@@ -840,9 +1099,15 @@ pub async fn installs_reconcile(
     project_roots: Vec<String>,
 ) -> Result<Vec<InstalledAgent>, AppError> {
     let corpus = corpus::ensure_corpus(&app, &state).await?;
+    // Ruling C4: rule rows never reach the agent Library. A rule row's `tool` is
+    // a harness id, so the classifier would otherwise treat it as an agent
+    // install (`antigravity`/`opencode` are byte-equal between the two id
+    // schemes). `ledger` keeps every row because the adoption write below must
+    // persist the whole file — filtering it would delete the rule rows on disk.
     let mut ledger = load_ledger(&app).await?;
-    let mut out = Vec::with_capacity(ledger.len());
-    for r in &ledger {
+    let agent_ledger: Vec<InstallRecord> = agent_rows(&ledger).cloned().collect();
+    let mut out = Vec::with_capacity(agent_ledger.len());
+    for r in &agent_ledger {
         let dest = PathBuf::from(&r.dest);
         let disk_hash = if dest.exists() {
             read_capped(&dest, MAX_INSTALLED_BYTES)
@@ -916,7 +1181,7 @@ pub async fn installs_reconcile(
     // decide). Only a recognized-but-DIFFERENT file (older version, or
     // hand-edited) stays `Foreign` and asks for a look. Scans each supported
     // tool's dir(s) — user dirs + every project dir in the ledger.
-    let ledger_keys: std::collections::HashSet<(String, Tool, Option<String>)> = ledger
+    let ledger_keys: std::collections::HashSet<(String, Tool, Option<String>)> = agent_ledger
         .iter()
         .map(|r| (r.slug.clone(), r.tool.clone(), r.project_path.clone()))
         .collect();
@@ -924,7 +1189,7 @@ pub async fn installs_reconcile(
     // project roots. The latter is why a just-added folder (or one whose rows were
     // dropped by "Remove from app only") re-surfaces its on-disk agents instead of
     // staying invisible until something new is installed into it.
-    let project_dirs: Vec<PathBuf> = ledger
+    let project_dirs: Vec<PathBuf> = agent_ledger
         .iter()
         .filter_map(|r| r.project_path.clone())
         .chain(project_roots)
@@ -1104,13 +1369,25 @@ fn agent_units(tool: &str, home: &Path, project_root: Option<&Path>) -> Vec<(Pat
 }
 
 /// All install records that match a given agent (for the persona detail panel).
+///
+/// Agent rows only (ruling C4): a rule row can share the slug, and rules are not
+/// agents — the persona panel must not claim one as an install of the agent.
 #[tauri::command]
 pub async fn installs_for_agent(
     app: AppHandle,
     slug: String,
 ) -> Result<Vec<InstallRecord>, AppError> {
     let ledger = load_ledger(&app).await?;
-    Ok(ledger.into_iter().filter(|r| r.slug == slug).collect())
+    Ok(agent_installs_for(&ledger, &slug))
+}
+
+/// The rows a persona's detail panel may show. Pure so the C4 filter is tested
+/// without an `AppHandle`.
+fn agent_installs_for(records: &[InstallRecord], slug: &str) -> Vec<InstallRecord> {
+    agent_rows(records)
+        .filter(|r| r.slug == slug)
+        .cloned()
+        .collect()
 }
 
 /// Detected AI tools + their deployment surface and installed counts.
@@ -1124,7 +1401,7 @@ pub async fn tools_list(
     let supported = supported();
     let mut out = Vec::with_capacity(supported.len());
     for tool in supported {
-        let installed_count = ledger.iter().filter(|r| r.tool == tool).count() as u32;
+        let installed_count = tool_installed_count(&ledger, tool);
         // Resolve against the per-tool base so detection + user_dest reflect a
         // custom path (e.g. a WSL home). custom_path exposes the override to the
         // UI (None when it equals the OS home).
@@ -1230,15 +1507,13 @@ pub async fn tool_versions() -> Result<Vec<ToolVersion>, AppError> {
 }
 
 /// Project directories we've installed project-scoped agents into.
+///
+/// Agent rows only (ruling C4): a rule installed into a project must not read as
+/// an agent install there, which is exactly what spec §10.8 forbids.
 #[tauri::command]
 pub async fn projects_list(app: AppHandle) -> Result<Vec<ProjectInfo>, AppError> {
     let ledger = load_ledger(&app).await?;
-    let mut counts: BTreeMap<String, u32> = BTreeMap::new();
-    for r in &ledger {
-        if let Some(p) = &r.project_path {
-            *counts.entry(p.clone()).or_default() += 1;
-        }
-    }
+    let counts = project_install_counts(&ledger);
     Ok(counts
         .into_iter()
         .map(|(path, installed_count)| {
@@ -1274,25 +1549,41 @@ struct LoadoutEntry {
     tool: Tool,
     #[serde(default)]
     project_path: Option<String>,
+    /// Domain discriminator, mirroring the ledger row (ruling C4). Skipped for
+    /// agent entries, so an Agentfile exported by this build is byte-identical
+    /// to v0.8.x output. A `rule` entry is never imported as an agent: its
+    /// `tool` is a harness id, so `do_install` would fail and the entry would
+    /// silently restore nothing.
+    #[serde(default, skip_serializing_if = "is_agent_domain")]
+    domain: InstallDomain,
+}
+
+impl From<&InstallRecord> for LoadoutEntry {
+    fn from(record: &InstallRecord) -> Self {
+        Self {
+            slug: record.slug.clone(),
+            tool: record.tool.clone(),
+            project_path: record.project_path.clone(),
+            domain: record.domain,
+        }
+    }
+}
+
+/// The Agentfile for a ledger — agent rows only (ruling C4). Pure so the
+/// export surface is testable without an `AppHandle` or a filesystem.
+fn agentfile_from(records: &[InstallRecord]) -> Agentfile {
+    Agentfile {
+        agentfile: 1,
+        installs: agent_rows(records).map(LoadoutEntry::from).collect(),
+    }
 }
 
 /// Export the current ledger as an Agentfile written to `path`. Returns count.
 #[tauri::command]
 pub async fn loadout_export(app: AppHandle, path: String) -> Result<u32, AppError> {
     let ledger = load_ledger(&app).await?;
-    let installs: Vec<LoadoutEntry> = ledger
-        .iter()
-        .map(|r| LoadoutEntry {
-            slug: r.slug.clone(),
-            tool: r.tool.clone(),
-            project_path: r.project_path.clone(),
-        })
-        .collect();
-    let n = installs.len() as u32;
-    let af = Agentfile {
-        agentfile: 1,
-        installs,
-    };
+    let af = agentfile_from(&ledger);
+    let n = af.installs.len() as u32;
     let bytes = serde_json::to_vec_pretty(&af).map_err(|e| AppError::Io {
         message: format!("serialize Agentfile: {e}"),
     })?;
@@ -1313,8 +1604,9 @@ pub async fn loadout_import(
     let af: Agentfile = serde_json::from_slice(&bytes).map_err(|e| AppError::Io {
         message: format!("parse Agentfile: {e}"),
     })?;
-    let mut out = Vec::with_capacity(af.installs.len());
-    for e in af.installs {
+    let entries = agent_loadout_entries(af);
+    let mut out = Vec::with_capacity(entries.len());
+    for e in entries {
         if let Ok(rec) = do_install(&app, &state, e.slug, e.tool, e.project_path).await {
             out.push(rec);
         }
@@ -1322,9 +1614,104 @@ pub async fn loadout_import(
     Ok(out)
 }
 
+/// The Agentfile entries an import may restore.
+///
+/// Agent entries only (ruling C4): a rule entry carries a harness id in `tool`,
+/// which is not an agent tool — importing it would fail inside `do_install` and
+/// be skipped anyway, but skipping it here keeps the loader's contract explicit
+/// instead of relying on a swallowed error. Pure so the surface is testable
+/// without an `AppHandle`.
+fn agent_loadout_entries(af: Agentfile) -> Vec<LoadoutEntry> {
+    af.installs
+        .into_iter()
+        .filter(|e| e.domain == InstallDomain::Agent)
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_ledger_read_error_is_not_an_empty_ledger() {
+        // A directory at the ledger path makes `read` fail with something other
+        // than NotFound. That MUST propagate: reading it as "nothing installed"
+        // let the next save erase every agent and rule row.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("installs.json");
+        std::fs::create_dir_all(&path).expect("occupy the ledger path");
+
+        let error = read_ledger_at(&path)
+            .await
+            .expect_err("a read error must not become an empty ledger");
+        assert!(
+            error.to_string().contains("read "),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_missing_ledger_is_an_empty_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let records = read_ledger_at(&dir.path().join("installs.json"))
+            .await
+            .expect("a missing ledger is normal");
+        assert!(records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_preflight_does_not_create_the_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state").join("installs.json");
+        ensure_ledger_writable_at(&path)
+            .await
+            .expect("a fresh install must pass the preflight");
+        assert!(!path.exists(), "the preflight must not create the ledger");
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path().join("state"))
+            .expect("list state dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".installs-probe"))
+            .collect();
+        assert!(
+            leftovers.is_empty(),
+            "the probe file must be removed; found {leftovers:?}"
+        );
+    }
+
+    #[test]
+    fn the_preflight_payload_is_not_empty() {
+        // Pins the fix for F3: an empty probe passes on a full filesystem.
+        // `black_box` keeps this a runtime assertion instead of a constant one
+        // (clippy denies those, and rightly so).
+        let payload = std::hint::black_box(probe_payload());
+        assert!(
+            payload.len() >= 4096,
+            "the preflight must write a realistic payload, not an empty buffer"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_preflight_rejects_an_unreadable_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("installs.json");
+        std::fs::create_dir_all(&path).expect("occupy the ledger path");
+        ensure_ledger_writable_at(&path)
+            .await
+            .expect_err("an unreadable ledger must fail before any write");
+    }
+
+    #[tokio::test]
+    async fn the_preflight_rejects_an_unwritable_state_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A regular file where the state directory should be: `create_dir_all`
+        // cannot succeed, so the preflight fails before any rule is written.
+        let state = dir.path().join("state");
+        std::fs::write(&state, b"not a directory").expect("occupy the state dir");
+        ensure_ledger_writable_at(&state.join("installs.json"))
+            .await
+            .expect_err("an unwritable state dir must fail before any write");
+    }
 
     #[test]
     fn agentfile_roundtrips() {
@@ -1335,17 +1722,23 @@ mod tests {
                     slug: "a".into(),
                     tool: "claudeCode".to_string(),
                     project_path: None,
+                    domain: InstallDomain::Agent,
                 },
                 LoadoutEntry {
                     slug: "b".into(),
                     tool: "cursor".to_string(),
                     project_path: Some("/proj".into()),
+                    domain: InstallDomain::Agent,
                 },
             ],
         };
         let bytes = serde_json::to_vec(&af).unwrap();
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("\"claudeCode\"") && s.contains("\"projectPath\":\"/proj\""));
+        assert!(
+            !s.contains("\"domain\""),
+            "an agent entry carries no domain key: {s}"
+        );
         let back: Agentfile = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.installs.len(), 2);
         assert_eq!(back.installs[1].tool, "cursor");
@@ -1367,6 +1760,8 @@ mod tests {
             rendered_hash: String::new(),
             installed_at: String::new(),
             corpus_version: String::new(),
+            domain: InstallDomain::Agent,
+            plugin_registered: None,
         }
     }
 
@@ -2064,6 +2459,8 @@ mod tests {
             rendered_hash: "rh".into(),
             installed_at: "2026-06-05T00:00:00Z".into(),
             corpus_version: "v".into(),
+            domain: InstallDomain::Agent,
+            plugin_registered: None,
         }];
         let bytes = serde_json::to_vec(&recs).unwrap();
         // tool serializes camelCase per the wire contract.
@@ -2071,6 +2468,317 @@ mod tests {
         let back: Vec<InstallRecord> = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(back.len(), 1);
         assert_eq!(back[0].tool, "cursor");
+    }
+
+    // ---------- TASK 13: the ledger domain discriminator ----------
+
+    /// A rule ledger row. `tool` holds the HARNESS id, `slug` the rule slug —
+    /// no parallel field pairs (spec §5.4).
+    fn rule_row(slug: &str, harness: &str, project: Option<&str>) -> InstallRecord {
+        let mut record = row(slug, harness, project);
+        record.dest = format!("/dest/{slug}.md");
+        record.dests = vec![record.dest.clone()];
+        record.domain = InstallDomain::Rule;
+        record
+    }
+
+    /// A ledger with both domains, including the collision case ruling C4 warns
+    /// about: a rule row whose harness id is byte-equal to an agent tool id.
+    fn mixed_ledger() -> Vec<InstallRecord> {
+        vec![
+            row("shared-slug", "claudeCode", None),
+            row("antigravity-agent", "antigravity", None),
+            row("opencode-agent", "opencode", None),
+            row("project-agent", "cursor", Some("/p")),
+            rule_row("shared-slug", "antigravity", None),
+            rule_row("typescript", "opencode", None),
+            rule_row("python", "oh-my-pi", Some("/p")),
+        ]
+    }
+
+    /// The regression gate from spec §5.4 / TASK 13: a v0.8.x ledger parses and
+    /// re-serializes BYTE-IDENTICALLY. Drives `parse_ledger`, the real load
+    /// path, so the `dests` backfill cannot drift away from this assertion.
+    ///
+    /// The fixture's first two rows are verbatim rows from a real app-data
+    /// `installs.json` (written by v0.8.x, home path rewritten to
+    /// `/Users/example`); the last three are real-shaped additions for the
+    /// shapes that ledger could not supply (a multi-file `dests` +
+    /// `fileHashes` row, an `aggregateSlugs` roster row, and a project-scoped
+    /// row), because those are exactly the fields the discriminator must not
+    /// disturb.
+    #[test]
+    fn v0_8_x_ledger_round_trips_byte_identically() {
+        const FIXTURE: &[u8] = include_bytes!("../../tests/fixtures/installs-v0.8.x.json");
+        let records = parse_ledger(FIXTURE).expect("a v0.8.x ledger must still parse");
+
+        assert_eq!(records.len(), 5, "every fixture row parses");
+        assert!(
+            records.iter().all(|r| r.domain == InstallDomain::Agent),
+            "a row without a `domain` key is an agent row"
+        );
+        assert!(
+            records.iter().all(|r| r.plugin_registered.is_none()),
+            "the plugin flag is absent on every old row"
+        );
+
+        let out = serde_json::to_vec_pretty(&records).expect("serialize");
+        assert_eq!(
+            out, FIXTURE,
+            "agent rows must serialize byte-identically (no `domain` key, no reordering)"
+        );
+    }
+
+    /// A row written before multi-file support has no `dests` and no `domain`:
+    /// both defaults must land without a migration step.
+    #[test]
+    fn parse_ledger_backfills_dests_and_defaults_the_domain() {
+        let raw = br#"[{"slug":"a","tool":"cursor","scope":"user","projectPath":null,
+            "dest":"/p/a.mdc","sourceHash":"s","bodyHash":"b","renderedHash":"r",
+            "installedAt":"t","corpusVersion":"v"}]"#;
+        let records = parse_ledger(raw).expect("an old row parses");
+        assert_eq!(records[0].dests, vec!["/p/a.mdc".to_string()]);
+        assert_eq!(records[0].domain, InstallDomain::Agent);
+        assert!(records[0].plugin_registered.is_none());
+    }
+
+    #[test]
+    fn parse_ledger_reads_the_domain_discriminator() {
+        let mut rule = rule_row("typescript", "opencode", None);
+        rule.plugin_registered = Some(true);
+        let raw = serde_json::to_vec_pretty(&vec![rule]).expect("serialize");
+        let records = parse_ledger(&raw).expect("parses");
+        assert_eq!(records[0].domain, InstallDomain::Rule);
+        assert_eq!(records[0].plugin_registered, Some(true));
+        assert_eq!(records[0].tool, "opencode", "the harness id survives");
+    }
+
+    #[test]
+    fn a_rule_row_serializes_its_domain_and_an_agent_row_does_not() {
+        let agent = serde_json::to_string(&row("a", "claudeCode", None)).expect("serialize");
+        assert!(!agent.contains("domain"), "agent row: {agent}");
+        assert!(!agent.contains("pluginRegistered"), "agent row: {agent}");
+
+        let rule =
+            serde_json::to_string(&rule_row("typescript", "opencode", None)).expect("serialize");
+        assert!(rule.contains("\"domain\":\"rule\""), "rule row: {rule}");
+
+        // The OpenCode registration flag is a separate boolean, never a path
+        // (ruling C2), and only appears when a caller sets it.
+        let mut registered = rule_row("typescript", "opencode", None);
+        registered.plugin_registered = Some(true);
+        let json = serde_json::to_string(&registered).expect("serialize");
+        assert!(json.contains("\"pluginRegistered\":true"), "{json}");
+        assert!(!json.contains("opencode.json"), "{json}");
+    }
+
+    #[test]
+    fn rule_rows_append_replace_remove_and_list() {
+        let mut ledger = vec![row("agent-a", "claudeCode", None)];
+        upsert_rule_row(&mut ledger, rule_row("typescript", "opencode", None));
+        upsert_rule_row(&mut ledger, rule_row("python", "antigravity", None));
+        assert_eq!(rule_rows(&ledger).len(), 2);
+        assert_eq!(agent_rows(&ledger).count(), 1);
+
+        // Re-installing the same (slug, harness, project) replaces the row.
+        // A caller that forgets the domain cannot smuggle in an agent row.
+        let mut second = rule_row("typescript", "opencode", None);
+        second.domain = InstallDomain::Agent;
+        second.rendered_hash = "second".into();
+        upsert_rule_row(&mut ledger, second);
+        assert_eq!(rule_rows(&ledger).len(), 2, "replace, never append");
+        let replaced = rule_rows(&ledger)
+            .into_iter()
+            .find(|r| r.slug == "typescript")
+            .expect("typescript row");
+        assert_eq!(replaced.rendered_hash, "second");
+        assert_eq!(replaced.domain, InstallDomain::Rule);
+
+        // A different scope is a different install.
+        upsert_rule_row(&mut ledger, rule_row("typescript", "opencode", Some("/p")));
+        assert_eq!(rule_rows(&ledger).len(), 3);
+
+        assert!(remove_rule_row(&mut ledger, "typescript", "opencode", None));
+        assert!(
+            !remove_rule_row(&mut ledger, "typescript", "opencode", None),
+            "removing a missing row reports false"
+        );
+        assert_eq!(rule_rows(&ledger).len(), 2);
+        assert_eq!(agent_rows(&ledger).count(), 1, "agent rows untouched");
+    }
+
+    /// Ruling C4, surface 1/6: `installs_reconcile` iterates `agent_rows`, so a
+    /// rule row can never become an `InstalledAgent` (and the Foreign sweep
+    /// never sees a rule project root).
+    #[test]
+    fn installs_reconcile_ignores_rule_rows() {
+        let ledger = mixed_ledger();
+        let rows: Vec<&InstallRecord> = agent_rows(&ledger).collect();
+        assert_eq!(rows.len(), 4, "only the four agent rows");
+        assert!(rows.iter().all(|r| r.domain == InstallDomain::Agent));
+        assert!(
+            !rows.iter().any(|r| r.slug == "typescript"),
+            "a rule row must not surface as an installed agent"
+        );
+        assert_eq!(
+            rows.iter().filter(|r| r.tool == "antigravity").count(),
+            1,
+            "the rule row's `antigravity` harness id must not double the count"
+        );
+    }
+
+    /// Ruling C4, surface 2/6: the persona detail panel shows agent rows only,
+    /// even when a rule row shares the slug.
+    #[test]
+    fn installs_for_agent_ignores_rule_rows() {
+        let ledger = mixed_ledger();
+        let installs = agent_installs_for(&ledger, "shared-slug");
+        assert_eq!(installs.len(), 1, "the agent row only: {installs:?}");
+        assert_eq!(installs[0].tool, "claudeCode");
+        assert!(agent_installs_for(&ledger, "typescript").is_empty());
+    }
+
+    /// Ruling C4, surface 3/6: `tools_list` counts. The rule row whose `tool` is
+    /// the harness id `antigravity`/`opencode` is byte-equal to the agent tool
+    /// id — this is the silent double-count the ruling exists for.
+    #[test]
+    fn tools_list_does_not_double_count_rule_rows() {
+        let ledger = mixed_ledger();
+        assert_eq!(tool_installed_count(&ledger, "antigravity"), 1);
+        assert_eq!(tool_installed_count(&ledger, "opencode"), 1);
+        assert_eq!(tool_installed_count(&ledger, "claudeCode"), 1);
+        // A harness with no agent row at all stays at zero.
+        assert_eq!(tool_installed_count(&ledger, "oh-my-pi"), 0);
+    }
+
+    /// Ruling C4, surface 4/6: `projects_list` must not report a rule install as
+    /// an agent install in that project (spec §10.8).
+    #[test]
+    fn projects_list_ignores_rule_rows() {
+        let ledger = mixed_ledger();
+        let counts = project_install_counts(&ledger);
+        assert_eq!(
+            counts.get("/p").copied(),
+            Some(1),
+            "one agent row in /p; the rule row in /p is not an agent install: {counts:?}"
+        );
+        assert_eq!(counts.len(), 1);
+    }
+
+    /// Ruling C4, surface 5/6: the Agentfile carries agent entries only, and an
+    /// agent entry gains no `domain` key (a v0.8.x Agentfile stays byte-stable).
+    #[test]
+    fn loadout_export_never_writes_rule_entries() {
+        let ledger = mixed_ledger();
+        let af = agentfile_from(&ledger);
+        assert_eq!(af.installs.len(), 4);
+        assert!(af.installs.iter().all(|e| e.domain == InstallDomain::Agent));
+
+        let bytes = serde_json::to_string_pretty(&af).expect("serialize");
+        assert!(!bytes.contains("oh-my-pi"), "no harness id leaks: {bytes}");
+        assert!(!bytes.contains("typescript"), "{bytes}");
+        assert!(!bytes.contains("domain"), "{bytes}");
+    }
+
+    /// Ruling C4, surface 6/6: import restores agent entries only. A rule entry
+    /// would reach `do_install` with a harness id as `tool` and vanish.
+    #[test]
+    fn loadout_import_skips_rule_entries() {
+        let af = Agentfile {
+            agentfile: 1,
+            installs: vec![
+                LoadoutEntry {
+                    slug: "agent-a".into(),
+                    tool: "claudeCode".to_string(),
+                    project_path: None,
+                    domain: InstallDomain::Agent,
+                },
+                LoadoutEntry {
+                    slug: "typescript".into(),
+                    tool: "opencode".to_string(),
+                    project_path: None,
+                    domain: InstallDomain::Rule,
+                },
+            ],
+        };
+        // The wire form carries the discriminator, and only for a rule entry.
+        let bytes = serde_json::to_vec(&af).expect("serialize");
+        let text = String::from_utf8_lossy(&bytes);
+        assert!(text.contains("\"domain\":\"rule\""), "{text}");
+        assert_eq!(text.matches("\"domain\"").count(), 1, "{text}");
+
+        let entries = agent_loadout_entries(serde_json::from_slice(&bytes).expect("parse"));
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].slug, "agent-a");
+
+        // An Agentfile written before M1 (no `domain` key) imports as agents.
+        let legacy: Agentfile =
+            serde_json::from_str(r#"{"agentfile":1,"installs":[{"slug":"a","tool":"cursor"}]}"#)
+                .expect("legacy Agentfile parses");
+        assert_eq!(agent_loadout_entries(legacy).len(), 1);
+    }
+
+    /// Ruling C4 extended to the MUTATING agent paths, which the ruling's table
+    /// does not list: install, track, update, diff and uninstall all key on
+    /// `(slug, tool, project)` and would otherwise rewrite or delete a rule row
+    /// whose harness id is byte-equal to an agent tool id. `project_forget` is
+    /// the same hazard for a rule installed into a project.
+    #[test]
+    fn agent_mutations_never_touch_rule_rows() {
+        let ledger = mixed_ledger();
+        assert!(
+            !ledger
+                .iter()
+                .any(|r| matches_agent_install(r, "shared-slug", "antigravity", None)),
+            "an agent install must not adopt the rule row with the same slug + harness id"
+        );
+        assert!(ledger
+            .iter()
+            .any(|r| matches_agent_install(r, "shared-slug", "claudeCode", None)));
+
+        let mut rows = mixed_ledger();
+        prune_project_rows(&mut rows, "/p");
+        assert!(
+            rows.iter()
+                .any(|r| r.domain == InstallDomain::Rule && r.project_path.as_deref() == Some("/p")),
+            "forgetting a project must not drop a rule install row"
+        );
+        assert!(
+            !rows.iter().any(
+                |r| r.domain == InstallDomain::Agent && r.project_path.as_deref() == Some("/p")
+            ),
+            "the project's agent row is gone"
+        );
+    }
+
+    /// Ruling C2: `opencode.json` may never be a tracked destination, because
+    /// `rules_uninstall` deletes every path in `dests`.
+    #[test]
+    fn a_rule_row_may_never_track_the_opencode_config() {
+        let config = "/home/me/.config/opencode/opencode.json";
+        let mut record = rule_row("typescript", "opencode", None);
+        assert!(check_tracked_destinations(&record).is_ok());
+
+        record.dest = config.into();
+        let err = check_tracked_destinations(&record).expect_err("dest is refused");
+        match err {
+            AppError::InvalidArgument { message } => {
+                assert!(message.contains(config), "{message}");
+                assert!(
+                    message.contains("never a tracked install destination"),
+                    "{message}"
+                );
+            }
+            other => panic!("expected InvalidArgument, got {other:?}"),
+        }
+
+        // Same guard for a secondary destination.
+        let mut secondary = rule_row("typescript", "opencode", None);
+        secondary.dests = vec![
+            "/home/me/.config/opencode/rules/typescript.md".into(),
+            config.into(),
+        ];
+        assert!(check_tracked_destinations(&secondary).is_err());
     }
 
     #[test]

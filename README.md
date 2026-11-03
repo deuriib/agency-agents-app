@@ -44,13 +44,38 @@ Agency Agents is organized around four pillars — **Agents** (who), **Tools** (
 - **Install tracking** — records every app-managed install with source hash, rendered hash, tool, destination, scope, and project path where relevant.
 - **Reconciliation** — classifies installed files as current, outdated, modified, removed, or foreign by re-rendering canonical source and comparing bytes. The Dashboard surfaces what "needs attention," and the Agents pane filters to exactly those.
 - **Auto-update** — checks a signed update manifest and installs new versions in place, verified against an embedded key, with one-click install + relaunch. Live for macOS (Apple Silicon + Intel) as of v0.2.0; opt-in and gated by Settings.
-- **Tool registry** — tool knowledge lives in a single upstream-owned `tools.json` shared by the backend and frontend; adding a tool is editing one JSON entry, the entry shape is enforced by `src-tauri/data/_schema.json` (Draft 2020-12, IDE tooltips included), and installability is derived from whether the app ships a renderer for that tool's format.
+- **Tool registry** — tool knowledge lives in a single upstream-owned `tools.json` shared by the backend and frontend; adding a tool is editing one JSON entry, the entry shape is enforced by `src-tauri/data/_schema.json` (Draft 2020-12, IDE tooltips included), and installability is derived from whether the app ships a renderer for that tool's format. Rule harnesses follow the same declarative pattern in `src-tauri/data/rules-tools.json` (a verbatim copy of the upstream `agency-rules` `harnesses` object) plus `src-tauri/data/rule-formats.json` (the rule formats this app renders natively); a harness is installable iff its format appears there.
 - **Dashboard** — install health, a Global-vs-Projects install sunburst, cross-tool coverage merged with the catalog-by-division view (linked hover), and deep links back into the workspace.
 - **GitHub integration** — optional OAuth Device Flow for GitHub-backed app features. Tokens are stored in the platform keychain and are never returned to the frontend.
 - **Offline-first catalog** — ships with a bundled corpus baseline and can use a local or managed clone of `agency-agents`.
 - **Cross-platform shell** — Tauri 2 + Svelte 5 frontend with native macOS chrome and opaque native windows on Windows/Linux.
 
 New to directing agents? See **[docs/USING-AGENTS.md](./docs/USING-AGENTS.md)** — the Playbook: how to get shipped, tested work out of the catalog (also in-app via the title-bar book icon).
+
+### Rules
+
+The **Rules** workspace (sidebar, `Cmd/Ctrl+7`) manages AI rules from the [`deuriib/agency-rules`](https://github.com/deuriib/agency-rules) catalog: each rule is authored once in neutral Markdown and compiled natively for the harness you install it into.
+
+- **Catalog** — every rule in the managed `agency-rules` corpus, searchable and filterable by harness and category. A rule that fails frontmatter validation is still listed, badged, and explains why it cannot be installed instead of silently disappearing.
+- **Compiled preview** — the authored body plus the exact bytes each harness would receive, with the resolved destination path. Nothing is written while previewing.
+- **Native compilation** — the four rule renderers are Rust, not a bundled Node or CLI dependency, and are byte-for-byte identical to the upstream `agency-rules` compiler (golden fixtures), so what the preview shows is what lands on disk.
+- **Install** — per rule, per harness, with user or project scope. Project scope requires a folder you pick; the app never writes to an arbitrary directory and does not create a Projects entry.
+- **Ledger tracking** — rule installs are recorded in the same local ledger as agents, with a domain discriminator. Installed state survives a restart, and agent reconciliation never counts a rule as an agent. A ledger that cannot be read is reported as an error rather than treated as empty, so a permission problem cannot make the app forget what is installed, and an install preflights the ledger so a failure never leaves an untracked file behind.
+- **Uninstall** — removes the file(s) the app wrote and the ledger row. It never deletes a directory (pi-agent keeps its now-empty per-rule folder) and never removes the OpenCode plugin entry. If the project a rule was installed into has since been deleted, or the harness is no longer in the contract, uninstall still clears the ledger row instead of failing forever.
+- **OpenCode plugin registration** — installing an OpenCode rule merges the `opencode-rules` plugin into `opencode.json` (project root or `~/.config/opencode`), preserving unrelated keys. Uninstall deliberately leaves the plugin entry in place.
+
+#### Rule harnesses
+
+Rule harnesses are a separate contract from the agent install targets above — `src-tauri/data/rules-tools.json` is the upstream `agency-rules` `harnesses` object, and `src-tauri/data/rule-formats.json` lists the rule formats this app renders natively. The corpus itself is a second managed catalog: a bundled baseline ships in the app for a first launch offline, and **Sync** / **Refresh** downloads the `agency-rules` tarball, swaps the corpus atomically, and rebuilds the index (Offline Mode gates it; there is no runtime `git` dependency).
+
+| Harness | Output format | User destination | Project destination |
+| --- | --- | --- | --- |
+| Google Antigravity | `md-yaml-trigger` | `~/.gemini/config/rules/*.md` | `.agents/rules/*.md` |
+| Pi Coding Agent | `md-rules-dir` | `~/.pi/agent/rules/*/RULES.md` | `.pi/rules/*/RULES.md` |
+| oh-my-pi (omp) | `md-or-mdc` | `~/.omp/agent/rules/*.md` | `.omp/rules/*.md` |
+| OpenCode (via opencode-rules) | `md-plugin` | `~/.config/opencode/rules/*.md` | `.opencode/rules/*.md` |
+
+**Not part of this milestone**: rule drift detection and the five-state reconciliation, rule auto-update, assigning rules to Projects, rule metrics on the Dashboard, and a user-local custom-rules directory. Rule installs are catalogued, previewed, tracked, and removable — they are not yet reconciled.
 
 ## Supported Install Targets
 
@@ -163,6 +188,8 @@ The catalog comes from `agency-agents`, either as:
 
 A catalog carries two kinds of content: the agent personas the app indexes (`<division>/<slug>.md`) and the repo-level content it reads directly — `divisions.json` (division metadata) and `strategy/runbooks.json` (the NEXUS scenario runbooks that power the Runbooks pillar). Snapshot provisioning extracts both; a clone or snapshot that predates `strategy/` shows Runbooks empty until the catalog is refreshed.
 
+The Rules workspace reads a second managed corpus, `deuriib/agency-rules`, extracted to its own `<app-data>/rules-corpus` with its own bundled baseline, tarball refresh, and `state/rules-index.json`. It deliberately shares neither the agent corpus directory nor its index: the two repositories refresh on independent schedules.
+
 Rendering is native Rust, deterministic, and tested against the upstream `scripts/convert.sh` outputs for the supported transform tools. The app does not shell out to converter scripts at runtime.
 
 Important implementation areas:
@@ -170,7 +197,9 @@ Important implementation areas:
 - [src-tauri/src/corpus/mod.rs](./src-tauri/src/corpus/mod.rs) — catalog source, indexing, refresh, category discovery
 - [src-tauri/src/render/mod.rs](./src-tauri/src/render/mod.rs) — per-tool deterministic rendering and destination paths
 - [src-tauri/src/install/mod.rs](./src-tauri/src/install/mod.rs) — install, uninstall, ledger, detection, reconciliation
+- [src-tauri/src/rules/](./src-tauri/src/rules/) — rule-harness contract, parsing and validation, native rule renderers, rules corpus, commands
 - [src/lib/components/AgentsWorkspace.svelte](./src/lib/components/AgentsWorkspace.svelte) — main browse/install surface
+- [src/lib/components/Rules.svelte](./src/lib/components/Rules.svelte) — Rules workspace: catalog, detail, compiled preview, install controls
 - [src/lib/components/ToolsView.svelte](./src/lib/components/ToolsView.svelte) — tool status and bulk operations
 
 Memory Bank design context lives under [memory-bank/](./memory-bank/). Start with [memory-bank/projectbrief.md](./memory-bank/projectbrief.md), [memory-bank/systemPatterns.md](./memory-bank/systemPatterns.md), and [memory-bank/NEXT-SESSION.md](./memory-bank/NEXT-SESSION.md).

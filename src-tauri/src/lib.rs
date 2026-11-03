@@ -17,6 +17,11 @@ mod github;
 mod install;
 mod registry;
 mod render;
+// `pub` so `tests/rules_conformance.rs` can drive the real parser + renderers
+// against the vendored fixtures instead of reimplementing them (the module map
+// in `docs/rules-integration-architecture.md` §1 keeps commands inside the
+// domain module; exposing the read/render surface is the test seam).
+pub mod rules;
 mod state;
 mod types;
 mod util;
@@ -200,6 +205,20 @@ pub fn run() {
             install::projects_list,
             install::loadout_export,
             install::loadout_import,
+            // Issue #29 — rules corpus (TASK 12). Status is the only source of
+            // the "not synced" vs "no rules shipped" distinction; refresh is the
+            // CTA that repairs "not synced".
+            rules::commands::rules_status,
+            rules::commands::rules_refresh,
+            // Issue #29 — rules command surface (TASK 14–17). List/get read the
+            // managed corpus; preview compiles without writing; install/uninstall
+            // own the rule ledger rows; `rules_installs` is the restart truth.
+            rules::commands::rules_list,
+            rules::commands::rules_get,
+            rules::commands::rules_preview,
+            rules::commands::rules_install,
+            rules::commands::rules_uninstall,
+            rules::commands::rules_installs,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

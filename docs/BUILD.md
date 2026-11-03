@@ -43,6 +43,35 @@ AGENCY_AGENTS_PARITY_ROOT=/Users/michael/Software/AgentLand/agency-agents \
 cargo test --manifest-path src-tauri/Cargo.toml upstream_convert_sh_is_byte_identical_for_transform_tools -- --ignored
 ```
 
+Rules parity against the active `agency-rules` repo:
+
+```sh
+AGENCY_RULES_PARITY_ROOT=/Users/michael/Software/AgentLand/agency-rules \
+cargo test --manifest-path src-tauri/Cargo.toml --test rules_conformance \
+  rules_parity_against_checkout -- --ignored
+```
+
+The rules renderers are also checked byte-for-byte against the committed golden
+fixtures on every `cargo test` (`tests/rules_conformance.rs`, 8 rules × 4
+harnesses). The fixtures are generated output, not hand-written: see
+`src-tauri/tests/fixtures/rules/PROVENANCE.md` for the reference commit and the
+exact regeneration command. The `--ignored` parity run re-renders the live
+checkout's `rules/` and diffs its `integrations/`; a rule that exists upstream
+with no compiled artifact is reported as a finding, not a failure (that tree is
+gitignored upstream and known to be stale — ruling C5).
+
+**Expect failures when the checkout's `integrations/` is stale.** The bundle is
+generated output, so an upstream rule edit that was never recompiled makes the
+parity run report divergences for a *correct* renderer. Regenerate before
+trusting a red run:
+
+```sh
+cd agency-rules && INTEGRATIONS_DIR=/tmp/rules-oracle node bin/agency-rules.mjs convert
+```
+
+Then diff the oracle against `integrations/` to separate "upstream never
+recopied it" from "our renderer is wrong". Only the second is an app bug.
+
 ## Release Build On macOS
 
 The release build produces a signed `.app` and `.dmg`.

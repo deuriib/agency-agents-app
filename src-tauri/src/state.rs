@@ -35,6 +35,11 @@ pub struct AppState {
     /// `catalog_refresh_in_flight`.
     pub corpus_refresh_in_flight: Arc<Mutex<()>>,
 
+    /// Single-flight mutex for `rules_refresh` (TASK 12). A second click while a
+    /// refresh runs fast-fails rather than queueing a duplicate download, the
+    /// same contract as `corpus_refresh_in_flight`.
+    pub rules_refresh_in_flight: Arc<Mutex<()>>,
+
     /// Persisted user settings (Phase 12d). Three-state container that
     /// distinguishes file-absent (defaults apply) from file-corrupt
     /// (fail closed — every outbound call denied until repaired).
@@ -82,6 +87,7 @@ impl AppState {
             app_data_dir,
             corpus_cache: Arc::new(Mutex::new(None)),
             corpus_refresh_in_flight: Arc::new(Mutex::new(())),
+            rules_refresh_in_flight: Arc::new(Mutex::new(())),
             settings: Arc::new(RwLock::new(settings_state)),
             updater_state: crate::commands::updater::empty_state(),
         })

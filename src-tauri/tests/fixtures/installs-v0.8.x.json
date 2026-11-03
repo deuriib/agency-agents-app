@@ -1,0 +1,97 @@
+[
+  {
+    "slug": "engineering-git-workflow-master",
+    "tool": "opencode",
+    "scope": "user",
+    "projectPath": null,
+    "dest": "/Users/example/.config/opencode/agents/engineering-git-workflow-master.md",
+    "dests": [
+      "/Users/example/.config/opencode/agents/engineering-git-workflow-master.md"
+    ],
+    "fileHashes": {
+      "": "8b7d2d6fca73e6ef0769df502647bb3b490212e158175d1f1b9a6ad575e52fa2"
+    },
+    "aggregateSlugs": [],
+    "sourceHash": "d3f7718f852e03d5cd83a97340550a5b82694547c4b9b22c9e77bb40c1467ba3",
+    "bodyHash": "f8bde825bcc8922b70777b10cf1322dec093fe07e2a95996b4f3c843dfb14a3a",
+    "renderedHash": "8b7d2d6fca73e6ef0769df502647bb3b490212e158175d1f1b9a6ad575e52fa2",
+    "installedAt": "2026-10-31T13:32:57.497107645+00:00",
+    "corpusVersion": "baseline"
+  },
+  {
+    "slug": "real-estate-buyer-seller",
+    "tool": "antigravity",
+    "scope": "user",
+    "projectPath": null,
+    "dest": "/Users/example/.gemini/config/agents/real-estate-buyer-seller.md",
+    "dests": [
+      "/Users/example/.gemini/config/agents/real-estate-buyer-seller.md"
+    ],
+    "fileHashes": {},
+    "aggregateSlugs": [],
+    "sourceHash": "00e2f54e76be38c85c4eb406135a0944a3f610d287e6747fbfac37a12c82920a",
+    "bodyHash": "c1f81d498a51ac3e50ccb33b879f0d9eed280971fc52460bdefe0009ae9928b3",
+    "renderedHash": "bb41e10651ebe22b888dfcc0c82eb0e20b499fd5933b53bb3881734b27ab5472",
+    "installedAt": "2026-11-01T20:34:00.084299328+00:00",
+    "corpusVersion": "baseline"
+  },
+  {
+    "slug": "frontend-developer",
+    "tool": "copilot",
+    "scope": "user",
+    "projectPath": null,
+    "dest": "/Users/example/.github/agents/frontend-developer.md",
+    "dests": [
+      "/Users/example/.github/agents/frontend-developer.md",
+      "/Users/example/.copilot/agents/frontend-developer.md"
+    ],
+    "fileHashes": {
+      "agents/frontend-developer.md": "6f0d1a1b0d0c9b7f6f0a1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f607",
+      "copilot/agents/frontend-developer.md": "07f6e5d4c3b2a1f0e9d8c7b6a594837261504f3e2d1c0b9a8776655443322110"
+    },
+    "aggregateSlugs": [],
+    "sourceHash": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f809",
+    "bodyHash": "0a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4e5f60718293a4b5c6d7e8f9",
+    "renderedHash": "6f0d1a1b0d0c9b7f6f0a1c2d3e4f5061728394a5b6c7d8e9f0a1b2c3d4e5f607",
+    "installedAt": "2026-09-14T08:12:44.918273645+00:00",
+    "corpusVersion": "v2026.09.01"
+  },
+  {
+    "slug": "engineering-team",
+    "tool": "aider",
+    "scope": "user",
+    "projectPath": null,
+    "dest": "/Users/example/.aider/CONVENTIONS.md",
+    "dests": [
+      "/Users/example/.aider/CONVENTIONS.md"
+    ],
+    "fileHashes": {},
+    "aggregateSlugs": [
+      "backend-architect",
+      "frontend-developer",
+      "sre"
+    ],
+    "sourceHash": "2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a",
+    "bodyHash": "9f8e7d6c5b4a30219f8e7d6c5b4a30219f8e7d6c5b4a30219f8e7d6c5b4a3021",
+    "renderedHash": "aabbccddeeff00112233445566778899aabbccddeeff00112233445566778899",
+    "installedAt": "2026-09-20T17:03:10.120398457+00:00",
+    "corpusVersion": "v2026.09.01"
+  },
+  {
+    "slug": "code-reviewer",
+    "tool": "cursor",
+    "scope": "project",
+    "projectPath": "/Users/example/projects/acme-api",
+    "dest": "/Users/example/projects/acme-api/.cursor/rules/code-reviewer.mdc",
+    "dests": [
+      "/Users/example/projects/acme-api/.cursor/rules/code-reviewer.mdc"
+    ],
+    "fileHashes": {},
+    "aggregateSlugs": [],
+    "sourceHash": "3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e7f8091a2b",
+    "bodyHash": "8e7d6c5b4a30219f8e7d6c5b4a30219f8e7d6c5b4a30219f8e7d6c5b4a30219f",
+    "renderedHash": "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
+    "installedAt": "2026-10-02T11:45:02.554433221+00:00",
+    "corpusVersion": "baseline"
+  }
+]

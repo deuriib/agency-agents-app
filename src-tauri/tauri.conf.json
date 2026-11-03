@@ -40,6 +40,7 @@
     "targets": "all",
     "resources": [
       "resources/corpus-baseline/**/*",
+      "resources/rules-baseline/**/*",
       "Assets.car"
     ],
     "icon": [

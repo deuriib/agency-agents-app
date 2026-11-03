@@ -47,32 +47,56 @@ pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), AppErro
 
     // Write + fsync the data file. Use `tokio::fs::File` so we can call
     // `sync_all` (the bare `write` helper doesn't fsync).
-    {
+    let staged = {
         use tokio::io::AsyncWriteExt;
         let mut file = tokio::fs::File::create(&tmp_path)
             .await
             .map_err(|e| AppError::Io {
                 message: format!("create {}: {}", tmp_path.display(), e),
             })?;
-        file.write_all(bytes).await.map_err(|e| AppError::Io {
-            message: format!("write {}: {}", tmp_path.display(), e),
-        })?;
-        file.sync_all().await.map_err(|e| AppError::Io {
-            message: format!("fsync {}: {}", tmp_path.display(), e),
-        })?;
+        async {
+            file.write_all(bytes).await.map_err(|e| AppError::Io {
+                message: format!("write {}: {}", tmp_path.display(), e),
+            })?;
+            // `tokio::fs::File` writes optimistically: `write_all` returns the
+            // requested length as soon as the blocking write is queued, and a
+            // later failure is stashed. `sync_all` completes the in-flight
+            // write via `poll_flush`, which re-stashes the error and returns
+            // `Ready(())` — so the error ONLY reaches the caller here. Without
+            // this call, a full or quota-limited filesystem produced `Ok(())`
+            // over a truncated file, and the rename made the truncation
+            // permanent: the ledger could be destroyed while the install
+            // reported success.
+            file.flush().await.map_err(|e| AppError::Io {
+                message: format!("flush {}: {}", tmp_path.display(), e),
+            })?;
+            file.sync_all().await.map_err(|e| AppError::Io {
+                message: format!("fsync {}: {}", tmp_path.display(), e),
+            })?;
+            Ok::<(), AppError>(())
+        }
+        .await
+    };
+    if let Err(error) = staged {
+        // Never leave a partial `<final>.tmp` behind: it is invisible to the
+        // app and accumulates across failures.
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(error);
     }
 
-    // Atomic rename.
-    tokio::fs::rename(&tmp_path, final_path)
-        .await
-        .map_err(|e| AppError::Io {
+    // Atomic rename. On failure, remove the temp file: a leftover `<final>.tmp`
+    // is invisible to the app and accumulates.
+    if let Err(e) = tokio::fs::rename(&tmp_path, final_path).await {
+        let _ = tokio::fs::remove_file(&tmp_path).await;
+        return Err(AppError::Io {
             message: format!(
                 "rename {} -> {}: {}",
                 tmp_path.display(),
                 final_path.display(),
                 e
             ),
-        })?;
+        });
+    }
 
     // fsync the parent directory so the rename itself is durable.
     // Opening a dir + sync_all is the POSIX-portable way; on macOS this
@@ -164,6 +188,23 @@ mod tests {
         let final_path = tmp.path().join("missing").join("out.bin");
         let r = atomic_write(&final_path, b"x").await;
         assert!(r.is_err(), "expected error when parent dir is missing");
+    }
+
+    #[tokio::test]
+    async fn atomic_write_cleans_up_the_temp_file_when_the_rename_fails() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        // A non-empty directory at the final path makes `rename` fail.
+        let final_path = tmp.path().join("out.bin");
+        std::fs::create_dir_all(final_path.join("occupied")).expect("occupy the final path");
+
+        atomic_write(&final_path, b"payload")
+            .await
+            .expect_err("renaming onto a non-empty directory must fail");
+
+        assert!(
+            !tmp.path().join("out.bin.tmp").exists(),
+            "a failed write must not leave its temp file behind"
+        );
     }
 
     #[tokio::test]

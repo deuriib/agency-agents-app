@@ -31,7 +31,14 @@ tauri-plugin-updater = "2"
 # real plugin (which requires a live `App` + HTTP).
 async-trait = "0.1"
 serde = { version = "1", features = ["derive"] }
-serde_json = "1"
+# `preserve_order` is load-bearing for the OpenCode plugin merge: `Value`
+# round-trips must not re-alphabetize a user's `opencode.json` (ruling A6,
+# `docs/rules-integration-architecture.md` §8). Every artifact this app
+# persists is serialized from structs (declaration order), so the feature
+# cannot move a byte of `installs.json`, `corpus-index.json`, the rules index
+# or the Agentfile — `install::tests::v0_8_x_ledger_round_trips_byte_identically`
+# is the guard that proves it.
+serde_json = { version = "1", features = ["preserve_order"] }
 tokio = { version = "1", features = ["process", "io-util", "rt-multi-thread", "macros", "sync", "time"] }
 
 # Error handling
@@ -68,10 +75,19 @@ flate2 = "1"
 
 # Phase 1 (corpus) — frontmatter parsing + tarball extraction.
 # `serde_yaml` tolerantly parses the YAML frontmatter block between the
-# `---` fences of each agent `.md`. `tar` unpacks the GitHub
-# `codeload …/tar.gz` stream (gunzipped via `flate2`) on `corpus_refresh`.
+# `---` fences of each agent `.md` (and each neutral rule under `rules/`).
+# `tar` unpacks the GitHub `codeload …/tar.gz` stream (gunzipped via `flate2`)
+# on `corpus_refresh`.
 serde_yaml = "0.9"
 tar = "0.4"
+
+# Issue #29 (rules) — the neutral rule frontmatter is validated against the
+# shipped JSON Schema before any compile or write (spec §8, "fail closed"), so
+# validation is a runtime concern. Issue #30's `tests/tools_schema.rs` already
+# used this crate as a dev-dependency; promoting it keeps ONE schema library.
+# Default features pull a blocking HTTP client + TLS stack for remote `$ref`
+# resolution; both schemas only use same-document refs, so they are off.
+jsonschema = { version = "0.60", default-features = false }
 
 # Structured logging
 tracing = "0.1"
@@ -115,8 +131,6 @@ keyring = { version = "3", features = ["sync-secret-service", "crypto-rust"] }
 # without bumping deps.
 tempfile = "3"
 # Issue #30 — `tests/tools_schema.rs` validates the embedded `data/tools.json`
-# against `data/_schema.json` (Draft 2020-12). Dev-only: the schema gate never
-# ships in the app binary. Default features pull a blocking HTTP client + TLS
-# stack (`reqwest`, `aws-lc-rs`) for remote `$ref` resolution; the schema only
-# uses same-document `#/$defs` refs, so both are switched off.
-jsonschema = { version = "0.60", default-features = false }
+# against `data/_schema.json` (Draft 2020-12). The crate itself is a runtime
+# dependency since issue #29 (rule frontmatter validation); the test uses the
+# same one.
