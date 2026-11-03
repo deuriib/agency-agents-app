@@ -16,8 +16,9 @@
 //!   copied to `<app_data_dir>/corpus/` so the app works offline.
 //! - **Refresh** ([`corpus_refresh`]): fetch the GitHub tarball
 //!   `https://codeload.github.com/deuriib/agency-agents/tar.gz/refs/heads/main`,
-//!   extract the category dirs over the working copy, and rebuild
-//!   `corpus-index.json`. No runtime git dependency.
+//!   extract the catalog tree over the working copy (divisions, `divisions.json`,
+//!   `strategy/`, `scripts/`), and rebuild `corpus-index.json`. No runtime git
+//!   dependency.
 //!
 //! ## Determinism (contracts.md §E)
 //!
@@ -303,6 +304,15 @@ struct CategoryMetaRow {
 #[derive(Debug, Deserialize)]
 struct DivisionsFile {
     divisions: BTreeMap<String, CategoryMetaRow>,
+}
+
+/// Keys-only view of the catalog's `divisions.json`. Category discovery needs
+/// only the division slugs, so a manifest that omits or reshapes a row's
+/// presentation metadata still yields the right directory set (the full
+/// [`DivisionsFile`] parse is for the metadata overlay, not for discovery).
+#[derive(Debug, Deserialize)]
+struct DivisionsKeys {
+    divisions: BTreeMap<String, serde_json::Value>,
 }
 
 /// Neutral fallback color for a division without one in the metadata.
@@ -674,9 +684,10 @@ fn is_empty_dir(dir: &Path) -> bool {
 }
 
 /// Copy `<baseline>/<category>/*.md` into `<dest>/<category>/` for each
-/// `category`, plus the repo tooling (`scripts/convert.sh`) so the seeded
-/// working copy can discover its own divisions. Anything else in the baseline
-/// is ignored. Idempotent: re-seeding overwrites file-for-file.
+/// `category`, plus the repo-level content the app reads directly:
+/// `divisions.json`, `strategy/` (playbooks + `runbooks.json`) and
+/// `scripts/convert.sh`. Older baselines ship only divisions, so the metadata
+/// copy is a no-op for them. Idempotent: re-seeding overwrites file-for-file.
 async fn seed_from_baseline(
     baseline: &Path,
     dest: &Path,
@@ -725,8 +736,56 @@ async fn seed_from_baseline(
         let _ = atomic_write(&dst_script, &bytes).await;
     }
 
-    tracing::info!("corpus: seeded {seeded} agents from baseline");
+    // Repo-level content the app reads but never indexes. A baseline that
+    // carries it (manifest + NEXUS playbooks) unlocks Runbooks offline.
+    let mut meta = 0u32;
+    for rel in [DIVISIONS_FILENAME, "strategy"] {
+        meta += copy_repo_meta(&baseline.join(rel), &dest.join(rel), 0);
+    }
+
+    tracing::info!("corpus: seeded {seeded} agents + {meta} repo-level files from baseline");
     Ok(())
+}
+
+/// Recursively copy `src` into `dst`, regular files only, capped at
+/// [`MAX_AGENT_BYTES`] and a bounded depth. Cold path (first-run seeding of a
+/// small, trusted baseline) — synchronous so the recursion stays simple.
+fn copy_repo_meta(src: &Path, dst: &Path, depth: u8) -> u32 {
+    const MAX_DEPTH: u8 = 8;
+    if depth > MAX_DEPTH {
+        return 0;
+    }
+    let Ok(meta) = std::fs::symlink_metadata(src) else {
+        return 0;
+    };
+    if meta.file_type().is_symlink() {
+        return 0; // never follow links out of the baseline
+    }
+    if meta.is_file() {
+        let Ok(bytes) = std::fs::read(src) else {
+            return 0;
+        };
+        if bytes.len() as u64 > MAX_AGENT_BYTES {
+            return 0;
+        }
+        if let Some(parent) = dst.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        return match std::fs::write(dst, &bytes) {
+            Ok(()) => 1,
+            Err(_) => 0,
+        };
+    }
+    if !meta.is_dir() {
+        return 0;
+    }
+    let _ = std::fs::create_dir_all(dst);
+    let Ok(rd) = std::fs::read_dir(src) else {
+        return 0;
+    };
+    rd.filter_map(|e| e.ok())
+        .map(|e| copy_repo_meta(&e.path(), &dst.join(e.file_name()), depth + 1))
+        .sum()
 }
 
 // ---------- Persistence ----------
@@ -798,15 +857,16 @@ async fn refresh(app_data_dir: &Path) -> Result<CorpusMeta, AppError> {
 
     let bytes = download_corpus_tarball().await?;
 
-    // Discover the live category set from the tarball's OWN tooling
-    // (`scripts/convert.sh`) so a freshly-added upstream division is picked up
-    // automatically. Falls back to the canonical default if absent.
+    // Discover the live category set from the tarball's OWN manifest
+    // (`divisions.json`, with `scripts/convert.sh` as the legacy fallback) so a
+    // freshly-added upstream division is picked up automatically. Falls back to
+    // the canonical default if neither is present.
     let categories = categories_from_tarball(&bytes).unwrap_or_else(bundled_division_slugs);
 
-    // Extract the category dirs (+ the tooling) into the active catalog root.
-    // The tarball has a single top-level `agency-agents-main/` prefix we strip.
+    // Extract the catalog tree (divisions + repo-level content) into the active
+    // catalog root. The tarball has a single `agency-agents-main/` prefix we strip.
     let dir = catalog_root(app_data_dir, &source);
-    let extracted = extract_categories(&bytes, &dir, &categories)?;
+    let extracted = extract_catalog(&bytes, &dir, &categories)?;
     if extracted == 0 {
         return Err(AppError::Internal {
             message: "corpus tarball contained no agent files under known categories".into(),
@@ -888,7 +948,7 @@ async fn download_corpus_tarball() -> Result<Vec<u8>, AppError> {
 }
 
 /// Gunzip the tarball and decode it to raw `tar` bytes, capped against a gzip
-/// bomb. Shared by [`extract_categories`] and [`categories_from_tarball`].
+/// bomb. Shared by [`extract_catalog`] and [`categories_from_tarball`].
 fn gunzip_capped(tar_gz: &[u8]) -> Result<Vec<u8>, AppError> {
     use std::io::Read;
     let gz = flate2::read::GzDecoder::new(tar_gz);
@@ -902,46 +962,102 @@ fn gunzip_capped(tar_gz: &[u8]) -> Result<Vec<u8>, AppError> {
     Ok(tar_bytes)
 }
 
-/// Read `scripts/convert.sh` out of the tarball and parse its `AGENT_DIRS`
-/// array, so a refresh adopts upstream's current division set. `None` if the
-/// script isn't present or doesn't parse (caller falls back to the default).
+/// Read the tarball's division set. Prefers `divisions.json` (the catalog's
+/// canonical division truth, shared with the CLI and linters); falls back to
+/// `scripts/convert.sh`'s `AGENT_DIRS` for catalogs that predate it. `None`
+/// when neither is present, so the caller falls back to the bundled floor.
+///
+/// Preferring the JSON manifest matters: the catalog dropped `convert.sh` on
+/// 2026-10-26 (`refactor(repo): remove legacy Bash scripts`), and a
+/// script-only lookup silently collapsed discovery to the stale bundled list,
+/// which in turn made the extractor drop `strategy/` and `divisions.json`.
 fn categories_from_tarball(tar_gz: &[u8]) -> Option<Vec<String>> {
     use std::io::Read;
     let tar_bytes = gunzip_capped(tar_gz).ok()?;
     let mut archive = tar::Archive::new(std::io::Cursor::new(tar_bytes));
+    let mut divisions: Option<Vec<String>> = None;
+    let mut legacy_dirs: Option<Vec<String>> = None;
     for entry in archive.entries().ok()? {
         let mut entry = entry.ok()?;
         if !entry.header().entry_type().is_file() {
             continue;
         }
         let path = entry.path().ok()?;
-        let comps: Vec<String> = path
-            .components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => s.to_str().map(|s| s.to_string()),
-                _ => None,
-            })
-            .collect();
-        // top/scripts/convert.sh
-        if comps.len() == 3 && comps[1] == "scripts" && comps[2] == "convert.sh" {
+        let Some(comps) = archive_rel_components(&path) else {
+            continue;
+        };
+        // top/divisions.json — the canonical manifest. Sorted keys, so the
+        // returned order is deterministic.
+        if comps.len() == 1 && comps[0] == DIVISIONS_FILENAME && divisions.is_none() {
             let mut text = String::new();
-            entry.read_to_string(&mut text).ok()?;
-            return parse_agent_dirs(&text).filter(|v| !v.is_empty());
+            if entry.read_to_string(&mut text).is_ok() {
+                if let Ok(file) = serde_json::from_str::<DivisionsKeys>(&text) {
+                    let keys: Vec<String> = file.divisions.into_keys().collect();
+                    if !keys.is_empty() {
+                        divisions = Some(keys);
+                    }
+                }
+            }
+            continue;
+        }
+        // top/scripts/convert.sh — legacy fallback only.
+        if comps.len() == 2
+            && comps[0] == "scripts"
+            && comps[1] == "convert.sh"
+            && legacy_dirs.is_none()
+        {
+            let mut text = String::new();
+            if entry.read_to_string(&mut text).is_ok() {
+                legacy_dirs = parse_agent_dirs(&text).filter(|v| !v.is_empty());
+            }
         }
     }
-    None
+    divisions.or(legacy_dirs)
 }
 
-/// Gunzip + untar `tar_gz`, writing every `<category>/<slug>.md` whose category
-/// is in `categories` into `<dest>/<category>/`, plus `scripts/convert.sh` (so
-/// the working copy stays self-describing). The codeload tarball nests
-/// everything under a single `agency-agents-main/` top-level dir, which we
-/// strip. Returns the count of agent files written.
+/// The archive-relative path components of a tarball entry, with the single
+/// top-level `agency-agents-main/` wrapper stripped. Returns `None` for
+/// anything that cannot be safely rebuilt as a path under the destination:
+/// absolute paths, `..`, `.`, Windows prefixes, or empty results.
+fn archive_rel_components(path: &Path) -> Option<Vec<String>> {
+    let mut comps: Vec<String> = Vec::new();
+    for c in path.components() {
+        match c {
+            std::path::Component::Normal(s) => comps.push(s.to_str()?.to_string()),
+            _ => return None,
+        }
+    }
+    if comps.len() < 2 {
+        return None; // need the top-level wrapper + at least one real component
+    }
+    comps.remove(0); // strip `agency-agents-main/`
+    if comps.is_empty()
+        || comps
+            .iter()
+            .any(|c| c.is_empty() || c.contains('\\') || c.contains('/'))
+    {
+        return None;
+    }
+    Some(comps)
+}
+
+/// Gunzip + untar `tar_gz` into `dest`, preserving the catalog's repo-level
+/// content that the app reads but never indexes as agents:
 ///
-/// Path-traversal safe: we only ever join the *sanitized* `category` +
-/// `file_name` onto `dest`; the raw archive path is never used to build a
-/// write target.
-fn extract_categories(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<u32, AppError> {
+/// - `<category>/**.md` for every division in `categories` (agent personas,
+///   nested paths preserved so `game-development/godot/<slug>.md` keeps working),
+/// - `divisions.json` (the division manifest `discover_categories` reads),
+/// - `strategy/**` (NEXUS playbooks + the `runbooks.json` scenario manifest),
+/// - `scripts/**` (repo tooling, so the working copy stays self-describing).
+///
+/// Everything else in the archive is ignored. The codeload tarball nests
+/// everything under a single `agency-agents-main/` top-level dir, which we
+/// strip. Returns the count of agent persona files written.
+///
+/// Path-traversal safe: destinations are rebuilt only from validated path
+/// components ([`archive_rel_components`]); the raw archive path is never used
+/// to build a write target.
+fn extract_catalog(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Result<u32, AppError> {
     use std::io::Read;
 
     let tar_bytes = gunzip_capped(tar_gz)?;
@@ -962,50 +1078,45 @@ fn extract_categories(tar_gz: &[u8], dest: &Path, categories: &[String]) -> Resu
         let path = entry.path().map_err(|e| AppError::Io {
             message: format!("tar entry path: {e}"),
         })?;
-        // Strip the single top-level `agency-agents-main/` component.
-        let comps: Vec<String> = path
-            .components()
-            .filter_map(|c| match c {
-                std::path::Component::Normal(s) => s.to_str().map(|s| s.to_string()),
-                _ => None,
-            })
-            .collect();
+        let Some(comps) = archive_rel_components(&path) else {
+            continue;
+        };
 
-        // Persist the tooling so subsequent launches re-derive categories.
-        if comps.len() == 3 && comps[1] == "scripts" && comps[2] == "convert.sh" {
-            let scripts_dir = dest.join("scripts");
-            let _ = std::fs::create_dir_all(&scripts_dir);
-            let mut buf = Vec::new();
-            if entry.read_to_end(&mut buf).is_ok() {
-                let _ = std::fs::write(scripts_dir.join("convert.sh"), &buf);
-            }
+        // Repo-level content the app reads directly: keep it verbatim so the
+        // catalog matches the repo instead of an allow-list of divisions.
+        let top = comps[0].as_str();
+        let is_agent = comps.len() >= 2
+            && is_category(top)
+            && comps.last().map(|f| f.ends_with(".md")).unwrap_or(false)
+            && comps.last().map(|f| f.as_str()) != Some("README.md");
+        let is_repo_meta = (comps.len() == 1 && top == DIVISIONS_FILENAME)
+            || top == "strategy"
+            || top == "scripts";
+        if !is_agent && !is_repo_meta {
             continue;
         }
 
-        if comps.len() < 3 {
-            continue; // need top/<category>/<file>
+        let target = comps.iter().fold(dest.to_path_buf(), |p, c| p.join(c));
+        if let Some(parent) = target.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| AppError::Io {
+                message: format!("create {}: {e}", parent.display()),
+            })?;
         }
-        let category = comps[1].as_str();
-        let fname = comps.last().unwrap().as_str();
-        if !is_category(category) {
-            continue;
-        }
-        if !fname.ends_with(".md") || fname == "README.md" {
-            continue;
-        }
-        // Sanitized target — built only from validated components.
-        let cat_dir = dest.join(category);
-        std::fs::create_dir_all(&cat_dir).map_err(|e| AppError::Io {
-            message: format!("create {}: {e}", cat_dir.display()),
-        })?;
         let mut buf = Vec::new();
         entry.read_to_end(&mut buf).map_err(|e| AppError::Io {
-            message: format!("read tar file {}: {e}", fname),
+            message: format!("read tar file {}: {e}", target.display()),
         })?;
-        std::fs::write(cat_dir.join(fname), &buf).map_err(|e| AppError::Io {
-            message: format!("write {}: {e}", cat_dir.join(fname).display()),
+        if buf.len() as u64 > MAX_AGENT_BYTES {
+            return Err(AppError::Io {
+                message: format!("{} exceeds {} byte cap", target.display(), MAX_AGENT_BYTES),
+            });
+        }
+        std::fs::write(&target, &buf).map_err(|e| AppError::Io {
+            message: format!("write {}: {e}", target.display()),
         })?;
-        written += 1;
+        if is_agent {
+            written += 1;
+        }
     }
     Ok(written)
 }
@@ -1171,9 +1282,41 @@ async fn detect_catalogs(scan: bool) -> CatalogDetection {
     }
 }
 
+/// A snapshot-provisioned catalog (no `.git`) is stale when it lacks the
+/// repo-level content the app reads: `divisions.json` (the division truth) or
+/// `strategy/runbooks.json` (the NEXUS runbook manifest). Git checkouts are
+/// never stale by this test — `git pull` is their update path.
+fn snapshot_is_stale(root: &Path) -> bool {
+    !has_git_dir(root)
+        && (!root.join(DIVISIONS_FILENAME).exists()
+            || !root.join("strategy").join("runbooks.json").exists())
+}
+
+/// Fetch the catalog tarball and extract it over `root` in place. Shared by
+/// first-time snapshot provisioning and the repair of a division-only root left
+/// by an older build. Returns the agent file count written.
+async fn reextract_snapshot(root: &Path) -> Result<u32, AppError> {
+    tokio::fs::create_dir_all(root)
+        .await
+        .map_err(|e| AppError::Io {
+            message: format!("create {}: {e}", root.display()),
+        })?;
+    let bytes = download_corpus_tarball().await?;
+    let categories = categories_from_tarball(&bytes).unwrap_or_else(bundled_division_slugs);
+    let written = extract_catalog(&bytes, root, &categories)?;
+    if written == 0 {
+        return Err(AppError::Internal {
+            message: "snapshot tarball contained no agent files".into(),
+        });
+    }
+    Ok(written)
+}
+
 /// Ensure `~/.agency-agents` holds a catalog, cloning (git) or unpacking the
-/// snapshot (no git) as needed. Returns the managed root path. Idempotent: if
-/// it already looks like a catalog, this is a no-op (use pull to update).
+/// snapshot (no git) as needed. Returns the managed root path. Idempotent: a
+/// catalog that already carries the repo-level content is a no-op (use pull to
+/// update); a division-only snapshot from an older provisioning run is repaired
+/// in place instead of being trusted forever.
 async fn provision_managed() -> Result<PathBuf, AppError> {
     let path = home_agency_dir().ok_or_else(|| AppError::Io {
         message: "cannot resolve home directory".into(),
@@ -1194,6 +1337,17 @@ async fn provision_managed() -> Result<PathBuf, AppError> {
                 .await;
             }
         }
+        // A snapshot-provisioned root (no `.git`) can predate the repo-level
+        // content the app reads — `divisions.json` and `strategy/runbooks.json`.
+        // Older builds extracted division dirs only (#58), so trusting
+        // `looks_like_catalog` alone leaves Runbooks permanently empty.
+        if snapshot_is_stale(&path) {
+            tracing::info!(
+                "catalog: repairing stale snapshot at {} (missing divisions.json / strategy)",
+                path.display()
+            );
+            let _ = reextract_snapshot(&path).await?;
+        }
         return Ok(path); // already provisioned
     }
 
@@ -1209,19 +1363,7 @@ async fn provision_managed() -> Result<PathBuf, AppError> {
         run_git(&["clone", CATALOG_GIT_URL, &path.to_string_lossy()], None).await?;
     } else {
         // No git (or a non-empty target): drop the snapshot tarball in place.
-        tokio::fs::create_dir_all(&path)
-            .await
-            .map_err(|e| AppError::Io {
-                message: format!("create {}: {e}", path.display()),
-            })?;
-        let bytes = download_corpus_tarball().await?;
-        let categories = categories_from_tarball(&bytes).unwrap_or_else(bundled_division_slugs);
-        let written = extract_categories(&bytes, &path, &categories)?;
-        if written == 0 {
-            return Err(AppError::Internal {
-                message: "provision: snapshot tarball contained no agent files".into(),
-            });
-        }
+        let _ = reextract_snapshot(&path).await?;
     }
     Ok(path)
 }
@@ -1650,21 +1792,33 @@ pub struct RunbookGroup {
 }
 
 /// `runbooks_list()` — the NEXUS runbook manifest from the active catalog's
-/// `strategy/runbooks.json`. Empty when the catalog is the bundled snapshot or an
-/// unsynced/pre-#664 clone (no `strategy/` on disk) — the UI treats empty as
-/// "sync to unlock", not an error. Local-only (no network).
+/// `strategy/runbooks.json`. Empty when the catalog carries no `strategy/` at
+/// all (the offline bundled baseline) — that is the expected "unsynced" state.
+/// A manifest that exists but cannot be read or parsed is an ERROR, so the UI can
+/// distinguish "no runbooks shipped" from "runbooks broken". Local-only.
 #[tauri::command]
 pub async fn runbooks_list(app: AppHandle) -> Result<Vec<Runbook>, AppError> {
     let adir = app_data_dir(&app)?;
     let source = load_catalog_source(&adir).await;
-    let root = catalog_root(&adir, &source);
+    read_runbooks(&catalog_root(&adir, &source)).await
+}
+
+/// Read + parse `<root>/strategy/runbooks.json`. `Ok(vec![])` only when the
+/// manifest is absent (bundled snapshot / catalog without `strategy/`); every
+/// other failure carries the path and the underlying reason.
+async fn read_runbooks(root: &Path) -> Result<Vec<Runbook>, AppError> {
     let path = root.join("strategy").join("runbooks.json");
     let raw = match tokio::fs::read_to_string(&path).await {
         Ok(r) => r,
-        Err(_) => return Ok(Vec::new()), // no strategy/ (bundled / unsynced) → empty
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => {
+            return Err(AppError::Io {
+                message: format!("read {}: {e}", path.display()),
+            })
+        }
     };
     let file: RunbooksFile = serde_json::from_str(&raw).map_err(|e| AppError::Io {
-        message: format!("parse strategy/runbooks.json: {e}"),
+        message: format!("parse {}: {e}", path.display()),
     })?;
     Ok(file.runbooks)
 }
@@ -2236,5 +2390,200 @@ echo done
         // An absent `runbooks` key (bundled / no strategy/) parses to empty, not an error.
         let empty: RunbooksFile = serde_json::from_str("{}").unwrap();
         assert!(empty.runbooks.is_empty());
+    }
+
+    /// Build a `.tar.gz` with the given `(path, body)` entries, mirroring the
+    /// codeload layout (`<top>/<path>`).
+    fn tarball(entries: &[(&str, &str)]) -> Vec<u8> {
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+        {
+            let mut builder = tar::Builder::new(&mut gz);
+            for (path, body) in entries {
+                let mut header = tar::Header::new_gnu();
+                header.set_size(body.len() as u64);
+                header.set_mode(0o644);
+                header.set_cksum();
+                builder
+                    .append_data(
+                        &mut header,
+                        format!("agency-agents-main/{path}"),
+                        body.as_bytes(),
+                    )
+                    .unwrap();
+            }
+            builder.finish().unwrap();
+        }
+        gz.finish().unwrap()
+    }
+
+    fn divisions_json(slugs: &[&str]) -> String {
+        let rows: Vec<String> = slugs
+            .iter()
+            .map(|s| format!(r##""{s}":{{"label":"{s}","icon":"Code","color":"#3B82F6"}}"##))
+            .collect();
+        format!(r#"{{"divisions":{{{}}}}}"#, rows.join(","))
+    }
+
+    const ONE_RUNBOOK: &str = r#"{"runbooks":[{"slug":"startup-mvp","title":"Startup MVP Build","mode":"NEXUS-Sprint","duration":"4-6 weeks","summary":"Idea to live.","doc":"strategy/runbooks/scenario-startup-mvp.md","roster":[{"group":"Core Team","activation":"always","agents":["agents-orchestrator"]}]}]}"#;
+
+    /// #58: division discovery must read the catalog's `divisions.json`, not the
+    /// `scripts/convert.sh` the catalog removed on 2026-10-26. A script-only
+    /// lookup collapsed discovery to the stale bundled list.
+    #[test]
+    fn categories_from_tarball_reads_divisions_json_without_convert_sh() {
+        let bytes = tarball(&[
+            (
+                "divisions.json",
+                &divisions_json(&["engineering", "healthcare"]),
+            ),
+            ("engineering/alpha.md", "a"),
+        ]);
+        assert_eq!(
+            categories_from_tarball(&bytes),
+            Some(vec!["engineering".to_string(), "healthcare".to_string()])
+        );
+    }
+
+    #[test]
+    fn categories_from_tarball_prefers_divisions_json_over_convert_sh() {
+        let script = "AGENT_DIRS=(\n  design\n  finance\n)\n";
+        let bytes = tarball(&[
+            ("divisions.json", &divisions_json(&["engineering"])),
+            ("scripts/convert.sh", script),
+        ]);
+        assert_eq!(
+            categories_from_tarball(&bytes),
+            Some(vec!["engineering".to_string()])
+        );
+    }
+
+    #[test]
+    fn categories_from_tarball_falls_back_to_convert_sh() {
+        let script = "AGENT_DIRS=(\n  design\n  finance # legacy\n)\n";
+        let bytes = tarball(&[("scripts/convert.sh", script)]);
+        assert_eq!(
+            categories_from_tarball(&bytes),
+            Some(vec!["design".to_string(), "finance".to_string()])
+        );
+    }
+
+    /// #58 core: the snapshot extractor must carry the repo-level content the
+    /// app reads (`strategy/`, `divisions.json`, `scripts/`) instead of keeping
+    /// an allow-list of division dirs.
+    #[test]
+    fn extract_catalog_preserves_strategy_and_repo_metadata() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let nested = "---\nname: Nested\ndescription: d\n---\nn\n";
+        let agent = "---\nname: Alpha\ndescription: d\n---\na\n";
+        let bytes = tarball(&[
+            (
+                "divisions.json",
+                &divisions_json(&["engineering", "game-development"]),
+            ),
+            ("strategy/runbooks.json", ONE_RUNBOOK),
+            (
+                "strategy/runbooks/scenario-startup-mvp.md",
+                "# Startup MVP\n",
+            ),
+            ("scripts/ci/lint.sh", "#!/bin/sh\n"),
+            ("engineering/alpha.md", agent),
+            ("engineering/README.md", "# no frontmatter\n"),
+            ("game-development/godot/nested.md", nested),
+            ("integrations/claude/alpha.md", agent),
+            ("README.md", "# repo\n"),
+        ]);
+
+        let written = extract_catalog(
+            &bytes,
+            dir,
+            &["engineering".to_string(), "game-development".to_string()],
+        )
+        .unwrap();
+
+        assert_eq!(written, 2, "only agent personas count toward the guard");
+        assert!(dir.join("divisions.json").exists());
+        assert!(dir.join("strategy").join("runbooks.json").exists());
+        assert!(dir
+            .join("strategy")
+            .join("runbooks")
+            .join("scenario-startup-mvp.md")
+            .exists());
+        assert!(dir.join("scripts").join("ci").join("lint.sh").exists());
+        assert!(dir.join("engineering").join("alpha.md").exists());
+        assert!(
+            dir.join("game-development")
+                .join("godot")
+                .join("nested.md")
+                .exists(),
+            "nested agent paths stay nested"
+        );
+        assert!(!dir.join("engineering").join("README.md").exists());
+        assert!(
+            !dir.join("integrations").exists(),
+            "non-division dirs are skipped"
+        );
+        assert!(
+            !dir.join("README.md").exists(),
+            "top-level docs are skipped"
+        );
+    }
+
+    /// #58: a division-only root left by an older build must be recognised as a
+    /// stale snapshot so `provision_managed` repairs it instead of trusting it.
+    #[test]
+    fn snapshot_is_stale_detects_division_only_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        write_agent(dir, "engineering", "alpha", "Alpha", "a");
+        assert!(
+            snapshot_is_stale(dir),
+            "no divisions.json / strategy → stale"
+        );
+
+        std::fs::write(
+            dir.join(DIVISIONS_FILENAME),
+            divisions_json(&["engineering"]),
+        )
+        .unwrap();
+        assert!(snapshot_is_stale(dir), "still no strategy/runbooks.json");
+
+        std::fs::create_dir_all(dir.join("strategy")).unwrap();
+        std::fs::write(dir.join("strategy").join("runbooks.json"), ONE_RUNBOOK).unwrap();
+        assert!(!snapshot_is_stale(dir), "complete snapshot → not stale");
+
+        // A git checkout is never "stale" here: pulling is its update path.
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        std::fs::remove_dir_all(dir.join("strategy")).unwrap();
+        assert!(
+            !snapshot_is_stale(dir),
+            "git checkouts are not snapshot-stale"
+        );
+    }
+
+    /// #58: "no manifest shipped" (bundled) is empty; "manifest broken" is an
+    /// error the UI can surface, not a silent empty list.
+    #[tokio::test]
+    async fn read_runbooks_distinguishes_absent_from_broken() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        assert!(
+            read_runbooks(dir).await.unwrap().is_empty(),
+            "absent strategy/ → empty, not an error"
+        );
+
+        std::fs::create_dir_all(dir.join("strategy")).unwrap();
+        std::fs::write(dir.join("strategy").join("runbooks.json"), "{ not json").unwrap();
+        let err = read_runbooks(dir).await.unwrap_err();
+        assert!(
+            err.to_string().contains("runbooks.json"),
+            "error names the manifest: {err}"
+        );
+
+        std::fs::write(dir.join("strategy").join("runbooks.json"), ONE_RUNBOOK).unwrap();
+        let list = read_runbooks(dir).await.unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].slug, "startup-mvp");
+        assert_eq!(list[0].roster[0].agents, vec!["agents-orchestrator"]);
     }
 }

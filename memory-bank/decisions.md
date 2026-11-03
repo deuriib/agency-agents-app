@@ -1,5 +1,39 @@
 # Decisions (ADRs) — Agency Agents
 
+## 2026-11-02 — Snapshot provisioning mirrors the catalog tree, not an allow-list of divisions
+
+**Context.** The Runbooks pillar stayed empty (#58) because the app's snapshot
+provisioning wrote only division directories. Discovery had been keyed on
+`scripts/convert.sh`, which the catalog removed on 2026-10-26; the extractor then
+fell back to the bundled division list and dropped everything else the tarball
+carried — including `strategy/runbooks.json` and `divisions.json`. The result
+passed `looks_like_catalog`, so nothing ever repaired it.
+
+**Decision.** Two rules.
+1. **Discovery reads the catalog's own manifest** (`divisions.json`), never a
+   script's side effects; the old `convert.sh` parse stays only as a legacy
+   fallback.
+2. **Extraction preserves repo-level content verbatim** — `divisions.json`,
+   `strategy/**`, `scripts/**`, plus division personas with their nested paths —
+   instead of an allow-list of directories the app indexes.
+
+`provision_managed` also treats "divisions present, `strategy/` absent, no
+`.git`" as a stale snapshot and re-extracts, so a bad root is repaired rather
+than trusted forever.
+
+**Why not the alternatives.**
+- *Keep the allow-list and add `strategy/`* — rejected: the next repo-level file
+  the app reads hits the same silent drop. The failure mode must not be "a
+  directory nobody remembered to allow".
+- *Vendor the runbook manifest into the bundled baseline* — rejected here:
+  content refresh, not a bug fix. `seed_from_baseline` now carries `strategy/`
+  whenever the baseline has it, so the next re-vendor needs no code change.
+- *Treat a missing manifest as "not synced" forever* — rejected: that is exactly
+  the misleading CTA that hid the defect. Absent is empty; unreadable is an error.
+
+**Consequence.** The on-disk catalog now matches the repo it claims to mirror,
+and "empty Runbooks" means only one thing: this catalog ships no `strategy/`.
+
 ## 2026-09-12 — Strip AppImage bundle paths from every child process, rather than patching git
 
 **Context.** The v0.3.0 AppImage could not clone the catalog on any host that was not the build host. linuxdeploy's
