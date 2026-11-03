@@ -13,6 +13,12 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Unified the Rules workspace with the Agents grammar (issue #66): one `WorkspaceShell`
+  (resizable, persisted detail pane), one `CategoryMenu`, a category landing with an
+  "all" destination, a category overview, and an install-state lens with counts. Categories
+  are dressed by `rules-categories.json` with a neutral fallback, the duplicated `<h1>` and
+  layout CSS are gone, and the suite grew to 58 tests. See
+  [261103_rules-workspace-shell.md](./261103_rules-workspace-shell.md).
 - Added the frontend test runner (issue #62): Vitest + `@testing-library/svelte` on jsdom,
   48 tests in 9.5 s, wired into `mise run ci` and PR Check. The Rules derivation moved to
   `src/lib/rules/derive.ts` so the install-state semantics are testable without a component,

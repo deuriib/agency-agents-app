@@ -47,7 +47,7 @@ beforeEach(() => {
   rules.previewLoading = false;
   rules.previewError = null;
   rules.query = "";
-  rules.harnessFilter = null;
+  rules.lens = "all";
   rules.categoryFilter = null;
   rules.busy = null;
   rules.refreshing = false;
@@ -93,6 +93,7 @@ describe("list states", () => {
   });
 
   it("partial: keeps invalid rules visible and says how many", async () => {
+    rules.categoryFilter = "base";
     answer({
       list: [
         ruleSummary({ slug: "coding-standards" }),
@@ -115,6 +116,77 @@ describe("list states", () => {
     expect(await screen.findByText("Broken Rule")).toBeInTheDocument();
   });
 
+  it("landing: one row per category with its count, plus an all-rules row", async () => {
+    answer({
+      list: [
+        ruleSummary({ slug: "coding-standards", category: "base" }),
+        ruleSummary({ slug: "typescript", category: "stacks", name: "TypeScript" }),
+        ruleSummary({ slug: "commit-conventions", category: "base", name: "Commit Conventions" }),
+      ],
+      status: ruleStatus({ count: 3 }),
+    });
+
+    render(Rules);
+
+    // "All rules" is a destination, not a no-op: it carries the total.
+    expect(await screen.findByRole("button", { name: /All rules/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Base/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Stacks/ })).toBeInTheDocument();
+    // Counts descend, then by label: base (2) before stacks (1).
+    const labels = screen.getAllByRole("button").map((b) => b.textContent ?? "");
+    expect(labels.findIndex((t) => t.includes("Base"))).toBeLessThan(
+      labels.findIndex((t) => t.includes("Stacks")),
+    );
+  });
+
+  it("landing: picking a category drills into its rules", async () => {
+    answer({
+      list: [ruleSummary({ slug: "coding-standards", category: "base" })],
+      status: ruleStatus({ count: 1 }),
+    });
+
+    render(Rules);
+    const base = await screen.findByRole("button", { name: /Base/ });
+    base.click();
+
+    expect(await screen.findByRole("button", { name: /Coding Standards/ })).toBeInTheDocument();
+  });
+
+  it("lens: the install-state tabs count rules and narrow the list", async () => {
+    rules.categoryFilter = "base";
+    answer({
+      list: [
+        ruleSummary({ slug: "coding-standards", name: "Coding Standards" }),
+        ruleSummary({ slug: "commit-conventions", name: "Commit Conventions" }),
+      ],
+      installs: [ruleInstall({ slug: "coding-standards", tool: "piAgent" })],
+      status: ruleStatus({ count: 2 }),
+    });
+
+    render(Rules);
+
+    expect(await screen.findByText("Commit Conventions")).toBeInTheDocument();
+    const installedTab = screen.getByRole("tab", {
+      name: new RegExp(i18n.t("rules.install.installed")),
+    });
+    expect(installedTab).toHaveTextContent("1");
+
+    installedTab.click();
+
+    expect(await screen.findByText("Coding Standards")).toBeInTheDocument();
+    expect(screen.queryByText("Commit Conventions")).not.toBeInTheDocument();
+  });
+
+  it("refresh: the rescan control is always in the search row", async () => {
+    answer({ list: [ruleSummary({ category: "base" })], status: ruleStatus({ count: 1 }) });
+
+    render(Rules);
+
+    expect(
+      await screen.findByRole("button", { name: i18n.t("rules.empty.noRulesCta") }),
+    ).toBeInTheDocument();
+  });
+
   it("filteredToZero: blames the query, not the corpus", async () => {
     rules.query = "zzz-no-match";
     answer({ list: [ruleSummary()], status: ruleStatus({ count: 1 }) });
@@ -128,6 +200,7 @@ describe("list states", () => {
 
 describe("per-rule install state", () => {
   it("installed: the row announces the install and the ledger drives it", async () => {
+    rules.categoryFilter = "base";
     answer({
       list: [ruleSummary()],
       installs: [ruleInstall({ tool: "piAgent", scope: "user", projectPath: null })],
@@ -141,6 +214,7 @@ describe("per-rule install state", () => {
   });
 
   it("not-installed: the same row without the install fragment", async () => {
+    rules.categoryFilter = "base";
     answer({ list: [ruleSummary()], installs: [], status: ruleStatus({ count: 1 }) });
 
     render(Rules);

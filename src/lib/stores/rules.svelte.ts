@@ -47,6 +47,8 @@ import {
   isRuleInstall,
   previewEntry as previewEntryOf,
   ruleCategories,
+  ruleLensCounts,
+  type RuleLens,
 } from "$lib/rules/derive";
 
 /** In-memory preview cache. Never persisted — a stale dest is worse than a refetch. */
@@ -97,10 +99,15 @@ class RulesStore {
   previewLoading: boolean = $state(false);
   previewError: string | null = $state(null);
 
-  /** Search + filters. They compose (AND); `filtersActive()` drives the clear CTA. */
+  /**
+   * Search + filters. They compose (AND); `filtersActive()` drives the clear CTA.
+   * The install-state lens replaces the old "Installed for" harness select: the
+   * neutral rule schema has no per-harness target, so that select could only
+   * answer from the ledger — which is what the lens now does, per rule.
+   */
   query: string = $state("");
-  harnessFilter: string | null = $state(null);
   categoryFilter: string | null = $state(null);
+  lens: RuleLens = $state("all");
 
   /** `${slug}\0${harness}\0${scope}\0${projectPath}` while a mutation is pending. */
   busy: string | null = $state(null);
@@ -361,44 +368,52 @@ class RulesStore {
     this.query = query;
   }
 
-  setHarnessFilter(harness: string | null): void {
-    this.harnessFilter = harness;
-  }
-
   setCategoryFilter(category: string | null): void {
     this.categoryFilter = category;
   }
 
+  setLens(lens: RuleLens): void {
+    this.lens = lens;
+  }
+
   clearFilters(): void {
     this.query = "";
-    this.harnessFilter = null;
     this.categoryFilter = null;
+    this.lens = "all";
   }
 
   /** True when any search/filter narrows the list (drives the "clear" affordance). */
   filtersActive(): boolean {
     return filtersActive({
       query: this.query,
-      harnessFilter: this.harnessFilter,
       categoryFilter: this.categoryFilter,
+      lens: this.lens,
     });
   }
 
+  /** The list after search + category, BEFORE the install-state lens. */
+  filterBase(): RuleSummary[] {
+    return filterRules(this.list, this.installations, {
+      query: this.query,
+      categoryFilter: this.categoryFilter,
+      lens: "all",
+    });
+  }
+
+  /** Rule counts per install-state lens over the current search/category. */
+  lensCounts(): Record<RuleLens, number> {
+    return ruleLensCounts(this.filterBase(), this.installations);
+  }
+
   /**
-   * Search matches `name`, `description`, and `slug` (case-insensitive).
-   *
-   * The harness filter answers "which rules are deployed to this harness?". The
-   * neutral schema carries no per-harness target field — every rule compiles to
-   * every installable harness — so a "targets harness X" filter would either be
-   * a no-op or need an N+1 `rules_preview` per row (TASK 19 forbids that). The
-   * per-rule × per-harness fact the list payload does carry is the ledger, which
-   * is what the harness dots in each row already show.
+   * Search matches `name`, `description`, and `slug` (case-insensitive); the
+   * category filter and the lens compose with it (AND).
    */
   filtered(): RuleSummary[] {
     return filterRules(this.list, this.installations, {
       query: this.query,
-      harnessFilter: this.harnessFilter,
       categoryFilter: this.categoryFilter,
+      lens: this.lens,
     });
   }
 

@@ -16,15 +16,14 @@
   import ChevronDown from "@lucide/svelte/icons/chevron-down";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
   import PlusIcon from "@lucide/svelte/icons/plus";
-  import XIcon from "@lucide/svelte/icons/x";
   import AlertTriangle from "@lucide/svelte/icons/triangle-alert";
-  import LayersIcon from "@lucide/svelte/icons/layers";
 
   import Input from "./Input.svelte";
+  import CategoryMenu from "./CategoryMenu.svelte";
+  import WorkspaceShell from "./WorkspaceShell.svelte";
   import Pill from "./Pill.svelte";
   import EmptyState from "./EmptyState.svelte";
   import LoadingState from "./LoadingState.svelte";
-  import ResizeHandle from "./ResizeHandle.svelte";
   import PersonaBody from "./PersonaBody.svelte";
   import DeploymentMatrix from "./DeploymentMatrix.svelte";
   import DiffModal from "./DiffModal.svelte";
@@ -37,12 +36,7 @@
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install } from "$lib/stores/install.svelte";
   import { toast } from "$lib/stores/toast.svelte";
-  import {
-    ui,
-    DETAIL_PANE_MIN_WIDTH,
-    DETAIL_PANE_DEFAULT_WIDTH,
-    clampDetailPaneWidth,
-  } from "$lib/stores/ui.svelte";
+  import { ui } from "$lib/stores/ui.svelte";
   import { resolveCategoryIcon } from "$lib/util/categoryIcon";
   import { i18n } from "$lib/stores/i18n.svelte";
   import type { MessageKey } from "$lib/i18n/messages";
@@ -50,23 +44,17 @@
 
   onMount(() => corpus.ensureLoaded());
 
-  // ── OS-style dropdown dismissal: click anywhere outside (or Escape) closes the
-  //    open menu. Each trigger button is excluded so clicking it just toggles. ──
-  let catBtn = $state<HTMLElement>();
-  let catMenu = $state<HTMLElement>();
+  // ── Bulk-menu dismissal: click anywhere outside (or Escape) closes it. The
+  //    category dropdown owns its own dismissal inside CategoryMenu. ──
   let bulkBtn = $state<HTMLElement>();
   let bulkMenu = $state<HTMLElement>();
   function onDocClick(e: MouseEvent) {
     const t = e.target as Node | null;
     if (!t) return;
-    if (catMenuOpen && !catBtn?.contains(t) && !catMenu?.contains(t)) catMenuOpen = false;
     if (menuOpen && !bulkBtn?.contains(t) && !bulkMenu?.contains(t)) menuOpen = false;
   }
   function onKey(e: KeyboardEvent) {
-    if (e.key === "Escape") {
-      catMenuOpen = false;
-      menuOpen = false;
-    }
+    if (e.key === "Escape") menuOpen = false;
   }
   onMount(() => {
     document.addEventListener("click", onDocClick);
@@ -92,7 +80,6 @@
   // ── List state ── (category lives in ui so back/forward + division
   // deep-links drive it; search query stays local — not a navigation.)
   let query = $state("");
-  let catMenuOpen = $state(false);
 
   // ── Install-state lens ── (filter the agent list by deployment state, the
   // same dot tones shown per row). Local + localStorage like the Tools lens —
@@ -173,7 +160,6 @@
 
   function pickCategory(slug: string | null) {
     ui.setAgentsCategory(slug);
-    catMenuOpen = false;
   }
   const categoryLabel = $derived(ui.agentsCategory ? corpus.labelOf(ui.agentsCategory) : i18n.t("agents.allDivisions"));
 
@@ -306,205 +292,172 @@
   const scanning = $derived(install.reconciling && !install.reconciled);
 </script>
 
-<section class="ws" class:sel={!!panelAgent}>
-  <!-- ── List pane ── -->
-  <div class="list-pane">
-    <div class="lp-head">
-      <div class="lp-search-row">
-        <div class="cat-wrap">
-          <button class="ghost cat-btn" bind:this={catBtn} onclick={() => (catMenuOpen = !catMenuOpen)}>
-            <span class="truncate">{categoryLabel}</span><ChevronDown size={13} />
-          </button>
-          {#if catMenuOpen}
-            <div class="cat-menu" role="menu" bind:this={catMenu}>
-              <button class="cat-opt" role="menuitem" class:on={!ui.agentsCategory} onclick={() => pickCategory(null)}>
-                <LayersIcon size={14} /><span class="truncate">{i18n.t("agents.allDivisions")}</span><span class="cat-c">{corpus.agents.length}</span>
-              </button>
-              {#each corpus.tiles as c (c.slug)}
-                {@const Icon = resolveCategoryIcon(c.icon)}
-                <button class="cat-opt" role="menuitem" class:on={ui.agentsCategory === c.slug} onclick={() => pickCategory(c.slug)}>
-                  <span class="cat-ic" style="color:{corpus.colorOf(c.slug)}"><Icon size={14} /></span><span class="truncate">{c.label}</span><span class="cat-c">{c.count}</span>
-                </button>
-              {/each}
-            </div>
-          {/if}
-        </div>
-        <Input bind:value={query} variant="search" placeholder={i18n.t("agents.searchPlaceholder")} ariaLabel={i18n.t("agents.searchLabel")} />
-        {#if visible.length > 0 && !showDivisions}
-          {#if selectMode}
-            <button class="ghost" onclick={exitSelect}>{i18n.t("common.done")}</button>
-          {:else}
-            <button class="ghost" onclick={enterSelect}>{i18n.t("common.select")}</button>
-          {/if}
-        {/if}
-        <button class="ghost icon" title={i18n.t("agents.rescanTitle")} aria-label={i18n.t("agents.rescanTitle")} onclick={() => install.reconcile()}>
-          <RefreshIcon size={15} />
-        </button>
-      </div>
-
-      {#if !showDivisions && !selectMode && base.length > 0}
-        <div class="seg" role="tablist" aria-label={i18n.t("agents.filterByInstallState")}>
-          {#each visibleLenses as f (f.id)}
-            <button
-              class="seg-btn"
-              class:on={lens === f.id}
-              role="tab"
-              aria-selected={lens === f.id}
-              onclick={() => setLens(f.id)}
-            >
-              {#if f.tone}<span class="seg-dot" data-tone={f.tone}></span>{/if}
-              {i18n.t(f.key)}
-              <span class="seg-c">{lensCounts[f.id]}</span>
-            </button>
-          {/each}
-        </div>
-      {/if}
-
-      {#if selectMode}
-        <div class="bulk-bar">
-          <input
-            type="checkbox"
-            class="check"
-            checked={allVisibleSelected}
-            indeterminate={someSelected}
-            onchange={toggleAll}
-            aria-label={i18n.t("agents.selectAllVisible")}
-          />
-          <span class="bulk-count">{i18n.t("common.selected", { count: selected.size })}</span>
-          {#if selected.size > 0}
-            <div class="bulk-menu-wrap">
-              <button class="ghost" bind:this={bulkBtn} disabled={bulkBusy} onclick={() => (menuOpen = !menuOpen)}>
-                {bulkBusy ? i18n.t("common.working") : i18n.t("agents.withSelected")}<ChevronDown size={14} />
-              </button>
-              {#if menuOpen}
-                <div class="bulk-menu" role="menu" bind:this={bulkMenu}>
-                  <button class="bulk-opt" role="menuitem" onclick={() => { menuOpen = false; bulkInstallOpen = true; }}>
-                    <DownloadIcon size={14} /><span>{i18n.t("agents.installSelected")}</span>
-                  </button>
-                  <div class="bulk-div"></div>
-                  <button class="bulk-opt" role="menuitem" disabled={!canBulkUpdate} title={canBulkUpdate ? "" : i18n.t("agents.allSelectedInSync")} onclick={() => runBulk("update", "agents.updatedVerb")}>
-                    <RefreshIcon size={14} /><span>{i18n.t("agents.updateSelected")}</span>
-                  </button>
-                  <button class="bulk-opt" role="menuitem" disabled={!canBulkTrack} title={canBulkTrack ? "" : i18n.t("agents.nothingUntrackedSelection")} onclick={() => runBulk("track", "agents.trackedVerb")}>
-                    <PlusIcon size={14} /><span>{i18n.t("agents.trackSelected")}</span>
-                  </button>
-                  <button class="bulk-opt" class:danger={selHasForeign} role="menuitem" onclick={() => { menuOpen = false; confirmDelete = true; }}>
-                    <TrashIcon size={14} /><span>{i18n.t(selHasForeign ? "agents.deleteSelected" : "agents.uninstallSelected")}</span>
-                  </button>
-                </div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/if}
-    </div>
-
-    <div class="lp-list">
-      {#if divisionMeta}
-        {@const Icon = resolveCategoryIcon(divisionMeta.icon)}
-        <div class="dov">
-          <div class="dov-head">
-            <span class="dov-ic" style="color:{divisionMeta.color}"><Icon size={18} /></span>
-            <div class="dov-id">
-              <span class="dov-name">{divisionMeta.label}</span>
-              <span class="dov-sub">{i18n.t("agents.divisionOverview", { count: divisionMeta.slugs.length })}</span>
-            </div>
-            <button class="dov-deploy" onclick={() => (divisionInstallOpen = true)}><DownloadIcon size={14} /> {i18n.t("agents.deployDivision")}</button>
-          </div>
-          <StarterPrompt template={divisionMeta.prompt} />
-        </div>
-      {/if}
-      {#if corpus.loading && corpus.agents.length === 0}
-        <LoadingState rows={6} label={i18n.t("agents.loading")} />
-      {:else if corpus.error && corpus.agents.length === 0}
-        <EmptyState title={i18n.t("agents.corpusUnavailableTitle")} body={i18n.t("agents.corpusUnavailableBody")}>
-          {#snippet icon()}<SearchIcon size={48} />{/snippet}
-        </EmptyState>
-      {:else if showDivisions}
-        <DivisionsLanding />
-      {:else if visible.length === 0}
-        <EmptyState
-          title={lens !== "all"
-            ? i18n.t("agents.emptyStateLens", { state: i18n.t(LENSES.find((l) => l.id === lens)?.key ?? "state.all").toLowerCase() })
-            : query.trim()
-              ? i18n.t("agents.emptySearch", { query: query.trim() })
-              : i18n.t("agents.emptyDivision")}
-          body={lens !== "all" ? i18n.t("agents.emptyFilteredBody") : i18n.t("agents.emptyBody")}
-        >
-          {#snippet icon()}<SearchIcon size={48} />{/snippet}
-        </EmptyState>
-      {:else}
-        <ul class="rows">
-          {#each visible as a (a.slug)}
-            {@const rows = installsBySlug.get(a.slug) ?? []}
-            {@const isSel = panelAgent?.slug === a.slug}
-            <li class="row" class:active={isSel} class:picked={selectMode && selected.has(a.slug)}>
-              {#if selectMode}
-                <input type="checkbox" class="check" checked={selected.has(a.slug)} onchange={() => toggleRow(a.slug)} aria-label={`${i18n.t("common.select")} ${a.name}`} />
-              {/if}
-              <button class="row-main" onclick={() => openAgent(a)} aria-current={isSel ? "true" : undefined}>
-                <span class="row-emoji" aria-hidden="true">{a.emoji ?? "🧩"}</span>
-                <span class="row-text">
-                  <span class="row-name truncate">{a.name}</span>
-                  {#if a.vibe}<span class="row-vibe truncate">{a.vibe}</span>{/if}
-                </span>
-                {#if rows.length > 0}
-                  <span class="row-dots" aria-hidden="true">
-                    {#each rows as r (r.dest)}
-                      <span class="dot" data-tone={dotTone(r.state)} title={`${install.toolLabel(r.tool)} · ${r.state}`}></span>
-                    {/each}
-                  </span>
-                {/if}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </div>
-  </div>
-
-  {#if panelAgent}
-    <!-- ── Resize handle (grows the detail pane when dragged left) ── -->
-    <div class="ws-resize">
-      <ResizeHandle
-        width={ui.detailPaneWidth}
-        min={DETAIL_PANE_MIN_WIDTH}
-        max={900}
-        defaultWidth={DETAIL_PANE_DEFAULT_WIDTH}
-        direction="left"
-        label={i18n.t("common.resizeDetailPane")}
-        onChange={(w) => (ui.detailPaneWidth = clampDetailPaneWidth(w))}
-        onCommit={(w) => ui.setDetailPaneWidth(w)}
+<WorkspaceShell
+  selected={!!panelAgent}
+  detailLabel={i18n.t("agents.agentDetail")}
+  onClose={closeDetail}
+>
+  {#snippet head()}
+    <div class="lp-search-row">
+      <CategoryMenu
+        label={categoryLabel}
+        selected={ui.agentsCategory}
+        allCount={corpus.agents.length}
+        allLabel={i18n.t("agents.allDivisions")}
+        items={corpus.tiles}
+        ariaLabel={i18n.t("agents.allDivisions")}
+        onPick={pickCategory}
       />
+      <Input bind:value={query} variant="search" placeholder={i18n.t("agents.searchPlaceholder")} ariaLabel={i18n.t("agents.searchLabel")} />
+      {#if visible.length > 0 && !showDivisions}
+        {#if selectMode}
+          <button class="ghost" onclick={exitSelect}>{i18n.t("common.done")}</button>
+        {:else}
+          <button class="ghost" onclick={enterSelect}>{i18n.t("common.select")}</button>
+        {/if}
+      {/if}
+      <button class="ghost icon" title={i18n.t("agents.rescanTitle")} aria-label={i18n.t("agents.rescanTitle")} onclick={() => install.reconcile()}>
+        <RefreshIcon size={15} />
+      </button>
     </div>
 
-    <!-- ── Detail pane (only when an agent is selected) ── -->
-    <aside class="detail-pane" style="width: {ui.detailPaneWidth}px" aria-label={i18n.t("agents.agentDetail")}>
-      <div class="dp-bar">
-        <button class="dp-close" onclick={closeDetail} aria-label={i18n.t("agents.closeDetail")} title={i18n.t("agents.closeDetail")}><XIcon size={16} /></button>
+    {#if !showDivisions && !selectMode && base.length > 0}
+      <div class="seg" role="tablist" aria-label={i18n.t("agents.filterByInstallState")}>
+        {#each visibleLenses as f (f.id)}
+          <button
+            class="seg-btn"
+            class:on={lens === f.id}
+            role="tab"
+            aria-selected={lens === f.id}
+            onclick={() => setLens(f.id)}
+          >
+            {#if f.tone}<span class="seg-dot" data-tone={f.tone}></span>{/if}
+            {i18n.t(f.key)}
+            <span class="seg-c">{lensCounts[f.id]}</span>
+          </button>
+        {/each}
       </div>
-      <div class="dp-scroll">
-        <PersonaBody agent={panelAgent} loading={detailLoading} onCategory={(slug) => ui.openDivision(slug)}>
-          {#snippet headerAction()}
-            {#if panelAgent}
-              <button class="dp-install" onclick={() => (installOpen = true)}>
-                <DownloadIcon size={14} /> {i18n.t("agents.installAgent")}
-              </button>
-            {/if}
-          {/snippet}
-          {#snippet deploy()}
-            {#if panelAgent}
-              <DeploymentMatrix agent={panelAgent} onDiff={(t) => (diffTarget = t)} />
-            {/if}
-          {/snippet}
-        </PersonaBody>
-      </div>
-    </aside>
+    {/if}
 
-    <!-- Narrow-window overlay scrim: clicking dismisses the overlaid detail pane. -->
-    <button class="ws-scrim" aria-label={i18n.t("agents.closeDetail")} onclick={closeDetail}></button>
-  {/if}
-</section>
+    {#if selectMode}
+      <div class="bulk-bar">
+        <input
+          type="checkbox"
+          class="check"
+          checked={allVisibleSelected}
+          indeterminate={someSelected}
+          onchange={toggleAll}
+          aria-label={i18n.t("agents.selectAllVisible")}
+        />
+        <span class="bulk-count">{i18n.t("common.selected", { count: selected.size })}</span>
+        {#if selected.size > 0}
+          <div class="bulk-menu-wrap">
+            <button class="ghost" bind:this={bulkBtn} disabled={bulkBusy} onclick={() => (menuOpen = !menuOpen)}>
+              {bulkBusy ? i18n.t("common.working") : i18n.t("agents.withSelected")}<ChevronDown size={14} />
+            </button>
+            {#if menuOpen}
+              <div class="bulk-menu" role="menu" bind:this={bulkMenu}>
+                <button class="bulk-opt" role="menuitem" onclick={() => { menuOpen = false; bulkInstallOpen = true; }}>
+                  <DownloadIcon size={14} /><span>{i18n.t("agents.installSelected")}</span>
+                </button>
+                <div class="bulk-div"></div>
+                <button class="bulk-opt" role="menuitem" disabled={!canBulkUpdate} title={canBulkUpdate ? "" : i18n.t("agents.allSelectedInSync")} onclick={() => runBulk("update", "agents.updatedVerb")}>
+                  <RefreshIcon size={14} /><span>{i18n.t("agents.updateSelected")}</span>
+                </button>
+                <button class="bulk-opt" role="menuitem" disabled={!canBulkTrack} title={canBulkTrack ? "" : i18n.t("agents.nothingUntrackedSelection")} onclick={() => runBulk("track", "agents.trackedVerb")}>
+                  <PlusIcon size={14} /><span>{i18n.t("agents.trackSelected")}</span>
+                </button>
+                <button class="bulk-opt" class:danger={selHasForeign} role="menuitem" onclick={() => { menuOpen = false; confirmDelete = true; }}>
+                  <TrashIcon size={14} /><span>{i18n.t(selHasForeign ? "agents.deleteSelected" : "agents.uninstallSelected")}</span>
+                </button>
+              </div>
+            {/if}
+          </div>
+        {/if}
+      </div>
+    {/if}
+  {/snippet}
+
+  {#snippet list()}
+    {#if divisionMeta}
+      {@const Icon = resolveCategoryIcon(divisionMeta.icon)}
+      <div class="dov">
+        <div class="dov-head">
+          <span class="dov-ic" style="color:{divisionMeta.color}"><Icon size={18} /></span>
+          <div class="dov-id">
+            <span class="dov-name">{divisionMeta.label}</span>
+            <span class="dov-sub">{i18n.t("agents.divisionOverview", { count: divisionMeta.slugs.length })}</span>
+          </div>
+          <button class="dov-deploy" onclick={() => (divisionInstallOpen = true)}><DownloadIcon size={14} /> {i18n.t("agents.deployDivision")}</button>
+        </div>
+        <StarterPrompt template={divisionMeta.prompt} />
+      </div>
+    {/if}
+    {#if corpus.loading && corpus.agents.length === 0}
+      <LoadingState rows={6} label={i18n.t("agents.loading")} />
+    {:else if corpus.error && corpus.agents.length === 0}
+      <EmptyState title={i18n.t("agents.corpusUnavailableTitle")} body={i18n.t("agents.corpusUnavailableBody")}>
+        {#snippet icon()}<SearchIcon size={48} />{/snippet}
+      </EmptyState>
+    {:else if showDivisions}
+      <DivisionsLanding />
+    {:else if visible.length === 0}
+      <EmptyState
+        title={lens !== "all"
+          ? i18n.t("agents.emptyStateLens", { state: i18n.t(LENSES.find((l) => l.id === lens)?.key ?? "state.all").toLowerCase() })
+          : query.trim()
+            ? i18n.t("agents.emptySearch", { query: query.trim() })
+            : i18n.t("agents.emptyDivision")}
+        body={lens !== "all" ? i18n.t("agents.emptyFilteredBody") : i18n.t("agents.emptyBody")}
+      >
+        {#snippet icon()}<SearchIcon size={48} />{/snippet}
+      </EmptyState>
+    {:else}
+      <ul class="rows">
+        {#each visible as a (a.slug)}
+          {@const rows = installsBySlug.get(a.slug) ?? []}
+          {@const isSel = panelAgent?.slug === a.slug}
+          <li class="row" class:active={isSel} class:picked={selectMode && selected.has(a.slug)}>
+            {#if selectMode}
+              <input type="checkbox" class="check" checked={selected.has(a.slug)} onchange={() => toggleRow(a.slug)} aria-label={`${i18n.t("common.select")} ${a.name}`} />
+            {/if}
+            <button class="row-main" onclick={() => openAgent(a)} aria-current={isSel ? "true" : undefined}>
+              <span class="row-emoji" aria-hidden="true">{a.emoji ?? "🧩"}</span>
+              <span class="row-text">
+                <span class="row-name truncate">{a.name}</span>
+                {#if a.vibe}<span class="row-vibe truncate">{a.vibe}</span>{/if}
+              </span>
+              {#if rows.length > 0}
+                <span class="row-dots" aria-hidden="true">
+                  {#each rows as r (r.dest)}
+                    <span class="dot" data-tone={dotTone(r.state)} title={`${install.toolLabel(r.tool)} · ${r.state}`}></span>
+                  {/each}
+                </span>
+              {/if}
+            </button>
+          </li>
+        {/each}
+      </ul>
+    {/if}
+  {/snippet}
+
+  {#snippet detail()}
+    <PersonaBody agent={panelAgent} loading={detailLoading} onCategory={(slug) => ui.openDivision(slug)}>
+      {#snippet headerAction()}
+        {#if panelAgent}
+          <button class="dp-install" onclick={() => (installOpen = true)}>
+            <DownloadIcon size={14} /> {i18n.t("agents.installAgent")}
+          </button>
+        {/if}
+      {/snippet}
+      {#snippet deploy()}
+        {#if panelAgent}
+          <DeploymentMatrix agent={panelAgent} onDiff={(t) => (diffTarget = t)} />
+        {/if}
+      {/snippet}
+    </PersonaBody>
+  {/snippet}
+</WorkspaceShell>
 
 {#if diffTarget}
   <DiffModal
@@ -558,15 +511,8 @@
 {/if}
 
 <style>
-  .ws { display: flex; height: 100%; min-height: 0; }
-
-  /* ── List pane ── */
-  .list-pane { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
-  .lp-head {
-    flex: none; padding: var(--space-3) var(--space-4);
-    border-bottom: 1px solid var(--color-border);
-    display: flex; flex-direction: column; gap: var(--space-3);
-  }
+  /* Pane geometry, the resize handle, the close chrome and the scrim live in
+     WorkspaceShell; this file styles only the agent-specific content. */
   .lp-search-row { display: flex; align-items: center; gap: var(--space-2); }
   .lp-search-row :global(.wrap) { flex: 1; min-width: 0; }
 
@@ -580,30 +526,6 @@
   .ghost:hover:not(:disabled) { color: var(--color-text-primary); background: var(--color-surface-sunken); }
   .ghost:disabled { opacity: 0.6; cursor: default; }
   .ghost.icon { padding: 0; width: 32px; justify-content: center; }
-
-  .cat-wrap { position: relative; }
-  .cat-btn { max-width: 180px; }
-  .cat-menu {
-    position: absolute; top: calc(100% + 4px); left: 0; z-index: 30;
-    min-width: 220px; max-height: 320px; overflow-y: auto; padding: 4px;
-    background: var(--color-surface-raised); border: 1px solid var(--color-border);
-    border-radius: var(--radius-md); box-shadow: var(--shadow-lg);
-    display: flex; flex-direction: column; gap: 1px;
-  }
-  .cat-opt {
-    display: flex; align-items: center; gap: var(--space-2);
-    padding: 6px 8px; border-radius: var(--radius-sm);
-    background: transparent; color: var(--color-text-primary);
-    font-size: var(--text-body-sm); text-align: left; cursor: pointer;
-  }
-  .cat-opt:hover { background: var(--color-surface-sunken); }
-  .cat-opt.on { color: var(--color-brand); }
-  .cat-opt .truncate { flex: 1; min-width: 0; }
-  /* Division icon tinted with the division's brand color; dim to neutral when
-     the row is the active selection so the brand-blue "on" state stays legible. */
-  .cat-ic { display: inline-flex; flex: none; }
-  .cat-opt.on .cat-ic { color: var(--color-brand) !important; }
-  .cat-c { font-size: var(--text-caption); color: var(--color-text-muted); }
 
   .bulk-bar { display: flex; align-items: center; gap: var(--space-2); }
   .bulk-count { font-size: var(--text-body-sm); color: var(--color-brand); font-weight: var(--fw-medium); }
@@ -674,7 +596,6 @@
   .dov-deploy:hover { border-color: var(--color-brand); }
 
   /* ── Rows ── */
-  .lp-list { flex: 1; overflow-y: auto; min-height: 0; padding: var(--space-2) var(--space-3); }
   .rows { display: flex; flex-direction: column; gap: 1px; }
   .row { display: flex; align-items: center; gap: var(--space-2); border-radius: var(--radius-md); padding-left: var(--space-2); }
   .row:hover { background: var(--color-surface-sunken); }
@@ -695,23 +616,7 @@
   .dot[data-tone="info"]   { background: var(--color-brand); }
   .dot[data-tone="danger"] { background: var(--color-danger); }
 
-  /* ── Resize handle wrapper ── */
-  .ws-resize { display: flex; flex: none; }
-
-  /* ── Detail pane ── */
-  .detail-pane {
-    flex: none; max-width: 90vw;
-    display: flex; flex-direction: column; min-height: 0;
-    background: var(--color-surface-raised);
-    border-left: 1px solid var(--color-border);
-  }
-  .dp-bar { flex: none; display: flex; justify-content: flex-end; padding: 6px 8px 0; }
-  .dp-close {
-    display: inline-flex; align-items: center; justify-content: center;
-    width: 28px; height: 28px; border-radius: var(--radius-sm);
-    color: var(--color-text-muted); background: transparent; cursor: pointer;
-  }
-  .dp-close:hover { background: var(--color-surface-sunken); color: var(--color-text-primary); }
+  /* Header install action, rendered into PersonaBody's header slot. */
   .dp-install {
     display: inline-flex; align-items: center; gap: 6px;
     height: 30px; padding: 0 12px; border-radius: var(--radius-md);
@@ -719,23 +624,4 @@
     font-size: var(--text-body-sm); font-weight: var(--fw-medium); cursor: pointer;
   }
   .dp-install:hover { filter: brightness(1.08); }
-  .dp-scroll { flex: 1; overflow-y: auto; min-height: 0; }
-
-  /* Narrow-window overlay scrim — hidden by default, shown only under the
-     breakpoint when a detail is open (see media query). */
-  .ws-scrim { display: none; }
-
-  @media (max-width: 860px) {
-    .ws-resize { display: none; }
-    .detail-pane {
-      position: fixed; top: 36px; right: 0; bottom: 0; z-index: 41;
-      width: min(var(--detail-w, 420px), 92vw) !important;
-      box-shadow: var(--shadow-lg, -8px 0 24px rgba(0,0,0,0.18));
-    }
-    .ws:not(.sel) .detail-pane { display: none; }
-    .ws.sel .ws-scrim {
-      display: block; position: fixed; inset: 36px 0 0 0; z-index: 40;
-      background: rgba(0,0,0,0.28); border: 0; cursor: default;
-    }
-  }
 </style>

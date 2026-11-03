@@ -105,9 +105,10 @@
 </script>
 
 <section class="rbv">
+  <!-- The section title comes from the shell's titlebar (+page.svelte:205); a
+       second <h1> here printed the section name twice (issue #66). -->
   <header class="rbv-head" data-tauri-drag-region>
     <div class="rbv-titles" data-tauri-drag-region="false">
-      <h1 class="rbv-title">{i18n.t("nav.runbooks")}</h1>
       <p class="rbv-sub">{i18n.t("runbooks.subtitle")}</p>
     </div>
   </header>
@@ -200,7 +201,6 @@
 <style>
   .rbv { display: flex; flex-direction: column; height: 100%; min-height: 0; }
   .rbv-head { flex: none; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border); }
-  .rbv-title { font-size: var(--text-h2); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
   .rbv-sub { font-size: var(--text-body-sm); color: var(--color-text-secondary); margin-top: 1px; }
   .rbv-scroll { flex: 1; min-height: 0; overflow-y: auto; padding: var(--space-3); }
   .rbv-status { font-size: var(--text-body-sm); color: var(--color-text-muted); padding: var(--space-3); }

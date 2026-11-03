@@ -1031,6 +1031,19 @@ mod tests {
                 entry.validation.errors
             );
         }
+        // The category counts the Rules workspace renders must come from the
+        // index, not from a restated list (issue #66): the bundled corpus ships
+        // exactly `base` = 6 and `stacks` = 2.
+        let mut by_category: std::collections::BTreeMap<&str, usize> =
+            std::collections::BTreeMap::new();
+        for entry in index.values() {
+            *by_category.entry(entry.category.as_str()).or_default() += 1;
+        }
+        assert_eq!(
+            by_category,
+            std::collections::BTreeMap::from([("base", 6), ("stacks", 2)]),
+            "the bundled rule corpus changed shape; update the landing counts"
+        );
     }
 
     // ── roots ───────────────────────────────────────────────────────────────
