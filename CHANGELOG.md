@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.0](https://github.com/deuriib/agency-agents-app/compare/v0.8.4...v0.9.0) (2026-11-03)
+
+
+### Features
+
+* **rules:** integrate agency-rules with native compilation and ledger tracking ([#61](https://github.com/deuriib/agency-agents-app/issues/61)) ([1ab9453](https://github.com/deuriib/agency-agents-app/commit/1ab9453035d7a333a4eecd99657bc5a68bffc082))
+
 ## [0.8.4](https://github.com/deuriib/agency-agents-app/compare/v0.8.3...v0.8.4) (2026-11-03)
 
 
