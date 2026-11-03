@@ -13,6 +13,10 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Made `src-tauri/Cargo.lock` track the release version (issue #81): a
+  `cargo metadata --locked` gate in PR Check and `mise run check-lock`, plus
+  `release-lock.yml` committing the sync into the release PR so the tagged commit
+  matches its manifest. See [261103_cargo-lock-sync.md](./261103_cargo-lock-sync.md).
 - Unified the Rules workspace with the Agents grammar (issue #66): one `WorkspaceShell`
   (resizable, persisted detail pane), one `CategoryMenu`, a category landing with an
   "all" destination, a category overview, and an install-state lens with counts. Categories

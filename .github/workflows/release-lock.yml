@@ -1,0 +1,74 @@
+# Keep `src-tauri/Cargo.lock` in step with the version release-please writes.
+#
+# release-please bumps the crate version in `src-tauri/Cargo.toml` through an
+# `extra-files` entry, but it cannot touch `Cargo.lock`: that file is TOML whose
+# target is an entry inside an array of tables, which release-please's jsonpath
+# updater cannot address. The lock therefore lagged one release behind, and every
+# contributor's first `cargo build` dirtied the tree with an unrelated one-line
+# change (issue #81).
+#
+# This workflow runs on the release PR's branch — not after the release — so the
+# sync lands INSIDE the tagged commit instead of one commit after it.
+#
+# A push made with `GITHUB_TOKEN` does not trigger new workflow runs, so the
+# release PR's checks will not re-run on this commit. That is acceptable here
+# because the release PR's checks require a maintainer to start them anyway (see
+# the note in `release-please.yml`), which happens after this job lands.
+#
+# The gate that catches a stale lock is the `cargo-lock` job in `pr-check.yml`;
+# this workflow is what keeps it from firing on release PRs.
+
+name: Release lock sync
+
+on:
+  push:
+    branches:
+      - "release-please--**"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-lock-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    name: Sync Cargo.lock with the release version
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The release branch already carries the bumped version; only the lock
+          # has to move, so no submodules and no build are needed.
+          fetch-depth: 1
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master
+        with:
+          toolchain: stable
+
+      - name: Refresh the lockfile entry
+        # Unlocked: `cargo metadata` rewrites the local package's version entry
+        # (and nothing else — the dependency graph is already pinned).
+        run: cargo metadata --manifest-path src-tauri/Cargo.toml --format-version 1 > /dev/null
+
+      - name: Commit when it moved
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- src-tauri/Cargo.lock; then
+            echo "Cargo.lock is already in step — nothing to do."
+            exit 0
+          fi
+          VERSION=$(sed -n 's/^version = "\(.*\)"$/\1/p' src-tauri/Cargo.toml | head -1)
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add src-tauri/Cargo.lock
+          git commit -m "build(cargo): sync Cargo.lock with ${VERSION}"
+          # Explicit ref: the checkout is a local branch for push events, but
+          # naming the destination keeps this correct if that ever changes.
+          git push origin "HEAD:${GITHUB_REF_NAME}"
+          echo "Synced Cargo.lock to ${VERSION} on ${GITHUB_REF_NAME}."

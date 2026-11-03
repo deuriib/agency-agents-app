@@ -16,8 +16,11 @@
 #   - package.json + package-lock.json   (node release strategy)
 #   - src-tauri/tauri.conf.json          (json extra-file)
 #   - src-tauri/Cargo.toml               (toml extra-file)
-# `src-tauri/Cargo.lock` is derived: the local package entry is refreshed by the
-# next cargo command (the CI build does it), so it is not an extra-file.
+# `src-tauri/Cargo.lock` cannot be an extra-file: its target is an entry inside an
+# array of tables, which release-please's jsonpath updater cannot address. It is
+# refreshed by `release-lock.yml` on the release PR's branch, so the sync lands
+# inside the tagged commit; `pr-check.yml`'s `cargo-lock` job fails when the two
+# ever disagree.
 #
 # Required repository setting (Settings → Actions → General → Workflow
 # permissions): "Allow GitHub Actions to create and approve pull requests".

@@ -29,7 +29,7 @@ mise install       # node + rust from mise.lock
 mise run submodules # the pinned catalog + rules checkouts (vendor/)
 mise run setup     # npm ci
 mise run dev       # tauri dev with hot reload
-mise run ci        # vendor check, fmt, clippy, rust + script + UI tests, svelte-check, build
+mise run ci        # vendor + lock checks, fmt, clippy, rust/script/UI tests, svelte-check, build
 ```
 
 The manual loop below works with any toolchain manager.
@@ -257,7 +257,20 @@ npm run build
 
 These are exactly the jobs in `.github/workflows/pr-check.yml`; a red PR
 check should reproduce locally with the same commands. `mise run ci` runs the
-whole set in one go. The Rust jobs install the Tauri Linux prerequisites
+whole set in one go.
+
+**The lockfile is gated.** `mise run check-lock` (CI job `cargo-lock`) runs
+`cargo metadata --locked`, which fails exactly when `src-tauri/Cargo.lock` would
+have to change — the shape a version bump takes when only `Cargo.toml` moved. A
+red gate means one command:
+
+```sh
+mise run sync-lock      # rewrites the agency-agents-app entry; touches nothing else
+```
+
+Release PRs do not need that step by hand: `release-lock.yml` runs on the
+`release-please--**` branch and commits the sync into the release PR, so the
+tagged commit carries a lockfile that matches its manifest. The Rust jobs install the Tauri Linux prerequisites
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
 `librsvg2-dev`, `patchelf`, `libssl-dev`).
 
