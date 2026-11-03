@@ -76,6 +76,15 @@ pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppErr
 /// hundred bytes per row, so this is a realistic lower bound.
 const PROBE_PAYLOAD_BYTES: usize = 4096;
 
+/// The payload the preflight actually writes.
+///
+/// A function, not an inline `vec!`, so a test can assert on the buffer that
+/// reaches the filesystem rather than on the constant — a call site that
+/// silently wrote an empty buffer would otherwise keep its test green.
+fn probe_payload() -> Vec<u8> {
+    vec![b' '; PROBE_PAYLOAD_BYTES]
+}
+
 /// Path-based core of [`ensure_ledger_writable`], so the preflight is testable
 /// without an `AppHandle`.
 ///
@@ -97,7 +106,7 @@ pub(crate) async fn ensure_ledger_writable_at(path: &Path) -> Result<(), AppErro
     static PROBE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let seq = PROBE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let probe = parent.join(format!(".installs-probe-{}-{seq}.tmp", std::process::id()));
-    let payload = vec![b' '; PROBE_PAYLOAD_BYTES];
+    let payload = probe_payload();
     let written = async {
         tokio::fs::write(&probe, &payload)
             .await
@@ -1658,12 +1667,15 @@ mod tests {
             .await
             .expect("a fresh install must pass the preflight");
         assert!(!path.exists(), "the preflight must not create the ledger");
+        let leftovers: Vec<String> = std::fs::read_dir(dir.path().join("state"))
+            .expect("list state dir")
+            .flatten()
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(".installs-probe"))
+            .collect();
         assert!(
-            !dir.path()
-                .join("state")
-                .join(".installs-probe.tmp")
-                .exists(),
-            "the probe file must be removed"
+            leftovers.is_empty(),
+            "the probe file must be removed; found {leftovers:?}"
         );
     }
 
@@ -1672,9 +1684,9 @@ mod tests {
         // Pins the fix for F3: an empty probe passes on a full filesystem.
         // `black_box` keeps this a runtime assertion instead of a constant one
         // (clippy denies those, and rightly so).
-        let payload = std::hint::black_box(PROBE_PAYLOAD_BYTES);
+        let payload = std::hint::black_box(probe_payload());
         assert!(
-            payload >= 4096,
+            payload.len() >= 4096,
             "the preflight must write a realistic payload, not an empty buffer"
         );
     }

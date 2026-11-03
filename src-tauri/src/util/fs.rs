@@ -58,11 +58,15 @@ pub async fn atomic_write(final_path: &Path, bytes: &[u8]) -> Result<(), AppErro
             file.write_all(bytes).await.map_err(|e| AppError::Io {
                 message: format!("write {}: {}", tmp_path.display(), e),
             })?;
-            // `write_all` only hands bytes to the buffered file; on a
-            // filesystem that runs out of space the short write is reported by
-            // the FLUSH, not by `write_all` or `sync_all`. Without this, a full
-            // disk produced `Ok(())` over a truncated file — the ledger could
-            // be silently destroyed while the install reported success.
+            // `tokio::fs::File` writes optimistically: `write_all` returns the
+            // requested length as soon as the blocking write is queued, and a
+            // later failure is stashed. `sync_all` completes the in-flight
+            // write via `poll_flush`, which re-stashes the error and returns
+            // `Ready(())` — so the error ONLY reaches the caller here. Without
+            // this call, a full or quota-limited filesystem produced `Ok(())`
+            // over a truncated file, and the rename made the truncation
+            // permanent: the ledger could be destroyed while the install
+            // reported success.
             file.flush().await.map_err(|e| AppError::Io {
                 message: format!("flush {}: {}", tmp_path.display(), e),
             })?;
