@@ -723,7 +723,22 @@ pub async fn rules_install(
     })
     .await?;
 
-    install::append_rule_install(&app, record.clone()).await?;
+    if let Err(error) = install::append_rule_install(&app, record.clone()).await {
+        // The bytes are already on disk, so a failed ledger save would leave an
+        // install the app cannot see or remove. Roll the files back so the
+        // command's error and the filesystem agree. A pre-existing divergent
+        // file stays recoverable from the backup the install took; the OpenCode
+        // plugin entry is idempotent and harmless to leave registered.
+        for dest in &record.dests {
+            if let Err(remove) = tokio::fs::remove_file(dest).await {
+                tracing::warn!(
+                    "rules_install: rollback could not remove {dest}: {remove}; \
+                     the install is untracked"
+                );
+            }
+        }
+        return Err(error);
+    }
     Ok(record)
 }
 

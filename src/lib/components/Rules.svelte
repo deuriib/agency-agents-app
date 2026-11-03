@@ -112,18 +112,20 @@
       </select>
     </label>
 
-    <label class="sr-only" for="rv-filter-category">{i18n.t("rules.filter.category")}</label>
-    <select
-      id="rv-filter-category"
-      class="rv-filter"
-      value={rules.categoryFilter ?? ""}
-      onchange={(e) => rules.setCategoryFilter(e.currentTarget.value || null)}
-    >
-      <option value="">{i18n.t("rules.filter.categoryAll")}</option>
-      {#each categories as category (category)}
-        <option value={category}>{category}</option>
-      {/each}
-    </select>
+    <label class="rv-filter-field" for="rv-filter-category">
+      <span class="rv-filter-label">{i18n.t("rules.filter.category")}</span>
+      <select
+        id="rv-filter-category"
+        class="rv-filter"
+        value={rules.categoryFilter ?? ""}
+        onchange={(e) => rules.setCategoryFilter(e.currentTarget.value || null)}
+      >
+        <option value="">{i18n.t("rules.filter.categoryAll")}</option>
+        {#each categories as category (category)}
+          <option value={category}>{category}</option>
+        {/each}
+      </select>
+    </label>
 
     {#if rules.filtersActive()}
       <button type="button" class="rv-clear" onclick={() => rules.clearFilters()}>

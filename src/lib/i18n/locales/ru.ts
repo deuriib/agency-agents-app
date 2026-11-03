@@ -637,7 +637,7 @@ const ru = {
   "runbooks.activation.as-needed": "по необходимости",
   "runbooks.activation.post-fix": "после исправления",
   "rules.subtitle": "Переиспользуемые правила ИИ из управляемого каталога agency-rules — просмотрите скомпилированный вывод для каждого целевого инструмента и установите.",
-  "rules.count.one": "Правил: {count}",
+  "rules.count.one": "{count} правило",
   "rules.count": "Правил: {count}",
   "rules.retry": "Повторить",
   "rules.list.regionLabel": "Список правил",

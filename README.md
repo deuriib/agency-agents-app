@@ -60,8 +60,8 @@ The **Rules** workspace (sidebar, `Cmd/Ctrl+7`) manages AI rules from the [`deur
 - **Compiled preview** — the authored body plus the exact bytes each harness would receive, with the resolved destination path. Nothing is written while previewing.
 - **Native compilation** — the four rule renderers are Rust, not a bundled Node or CLI dependency, and are byte-for-byte identical to the upstream `agency-rules` compiler (golden fixtures), so what the preview shows is what lands on disk.
 - **Install** — per rule, per harness, with user or project scope. Project scope requires a folder you pick; the app never writes to an arbitrary directory and does not create a Projects entry.
-- **Ledger tracking** — rule installs are recorded in the same local ledger as agents, with a domain discriminator. Installed state survives a restart, and agent reconciliation never counts a rule as an agent.
-- **Uninstall** — removes the file(s) the app wrote and the ledger row. It never deletes a directory (pi-agent keeps its now-empty per-rule folder) and never removes the OpenCode plugin entry.
+- **Ledger tracking** — rule installs are recorded in the same local ledger as agents, with a domain discriminator. Installed state survives a restart, and agent reconciliation never counts a rule as an agent. A ledger that cannot be read is reported as an error rather than treated as empty, so a permission problem cannot make the app forget what is installed, and an install preflights the ledger so a failure never leaves an untracked file behind.
+- **Uninstall** — removes the file(s) the app wrote and the ledger row. It never deletes a directory (pi-agent keeps its now-empty per-rule folder) and never removes the OpenCode plugin entry. If the project a rule was installed into has since been deleted, or the harness is no longer in the contract, uninstall still clears the ledger row instead of failing forever.
 - **OpenCode plugin registration** — installing an OpenCode rule merges the `opencode-rules` plugin into `opencode.json` (project root or `~/.config/opencode`), preserving unrelated keys. Uninstall deliberately leaves the plugin entry in place.
 
 #### Rule harnesses

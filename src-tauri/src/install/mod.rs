@@ -65,7 +65,16 @@ async fn read_ledger_at(path: &Path) -> Result<Vec<InstallRecord>, AppError> {
 /// read-only or full state directory. Without this, a failed ledger save left a
 /// file on disk with no row — untracked and not removable through the UI.
 pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppError> {
-    let path = ledger_path(app)?;
+    ensure_ledger_writable_at(&ledger_path(app)?).await
+}
+
+/// Path-based core of [`ensure_ledger_writable`], so the preflight is testable
+/// without an `AppHandle`.
+///
+/// The probe writes a real payload, not an empty buffer: a zero-byte write
+/// allocates nothing, so it succeeds on a full or quota-limited filesystem and
+/// would report "writable" for a directory that cannot take the ledger.
+pub(crate) async fn ensure_ledger_writable_at(path: &Path) -> Result<(), AppError> {
     let parent = path.parent().ok_or_else(|| AppError::Internal {
         message: format!("ledger path has no parent: {}", path.display()),
     })?;
@@ -74,15 +83,26 @@ pub(crate) async fn ensure_ledger_writable(app: &AppHandle) -> Result<(), AppErr
         .map_err(|e| AppError::Io {
             message: format!("create state dir {}: {e}", parent.display()),
         })?;
-    let _ = read_ledger_at(&path).await?;
+    let _ = read_ledger_at(path).await?;
     let probe = parent.join(".installs-probe.tmp");
-    tokio::fs::write(&probe, b"")
-        .await
-        .map_err(|e| AppError::Io {
-            message: format!("write {}: {e}", probe.display()),
-        })?;
-    let _ = tokio::fs::remove_file(&probe).await;
-    Ok(())
+    let payload = vec![b' '; 4096];
+    let written = async {
+        tokio::fs::write(&probe, &payload)
+            .await
+            .map_err(|e| AppError::Io {
+                message: format!("write {}: {e}", probe.display()),
+            })?;
+        tokio::fs::remove_file(&probe)
+            .await
+            .map_err(|e| AppError::Io {
+                message: format!("remove {}: {e}", probe.display()),
+            })
+    }
+    .await;
+    if written.is_err() {
+        let _ = tokio::fs::remove_file(&probe).await;
+    }
+    written
 }
 
 /// Parse an `installs.json` document and backfill `dests` for rows written
@@ -1616,6 +1636,45 @@ mod tests {
             .await
             .expect("a missing ledger is normal");
         assert!(records.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_preflight_does_not_create_the_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("state").join("installs.json");
+        ensure_ledger_writable_at(&path)
+            .await
+            .expect("a fresh install must pass the preflight");
+        assert!(!path.exists(), "the preflight must not create the ledger");
+        assert!(
+            !dir.path()
+                .join("state")
+                .join(".installs-probe.tmp")
+                .exists(),
+            "the probe file must be removed"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_preflight_rejects_an_unreadable_ledger() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let path = dir.path().join("installs.json");
+        std::fs::create_dir_all(&path).expect("occupy the ledger path");
+        ensure_ledger_writable_at(&path)
+            .await
+            .expect_err("an unreadable ledger must fail before any write");
+    }
+
+    #[tokio::test]
+    async fn the_preflight_rejects_an_unwritable_state_dir() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        // A regular file where the state directory should be: `create_dir_all`
+        // cannot succeed, so the preflight fails before any rule is written.
+        let state = dir.path().join("state");
+        std::fs::write(&state, b"not a directory").expect("occupy the state dir");
+        ensure_ledger_writable_at(&state.join("installs.json"))
+            .await
+            .expect_err("an unwritable state dir must fail before any write");
     }
 
     #[test]
