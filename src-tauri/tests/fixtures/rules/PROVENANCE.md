@@ -54,6 +54,30 @@ Copying it would fail four of the 32 assertions against a *correct* renderer.
 The upstream `integrations/` directory is generated output and is gitignored
 upstream. It must never be treated as a checked-in oracle.
 
+## `block-scalars.json`
+
+`block-scalars.json` is a second oracle, for the YAML emitter's block-scalar
+branch (issue #63). Each case is `{ name, value, expected }`, where `expected`
+is exactly what the reference produces for that `description`:
+
+```sh
+node --input-type=module -e "
+import YAML from 'yaml';
+process.stdout.write(JSON.stringify(YAML.stringify({ description: VALUE }).trimEnd()));
+"
+```
+
+(`stringify(...).trimEnd()` is what `scripts/lib/renderers/_util.mjs` does, so
+the oracle is the same pipeline the compiler uses, not a re-derivation.)
+
+The matrix covers every chomping indicator, the `2` indent indicator, leading and
+trailing whitespace, blank and more-indented lines, unicode, a carriage return
+and the folded shapes the emitter still refuses. Cases whose `expected` starts
+with `description: >` assert the **blocker**, not bytes: `>` folding is the one
+branch not ported, and the test fails if the guard stops catching it.
+
+Do not hand-edit the file; regenerate it when the matrix changes.
+
 ## Staleness defence
 
 CI cannot run the Node compiler, so this file is the only record of where the

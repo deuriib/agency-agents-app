@@ -1416,7 +1416,7 @@ Ruled 2026-11-03. Source: `docs/rules-integration-architecture.md` and
 | C8 | **A5 is extended: `rules_refresh` is approved.** Without it the `notSynced` empty state has no action. |
 | C9 | **The A7 fallback branch needs a synthetic test.** For the shipped contract every harness resolves, so the branch is otherwise untested. |
 | C10 | **A7 supersedes ambiguity #7.** Harnesses honour `settings.tool_paths`. Record the supersession in the PR body so nobody reverts it. |
-| C11 | **Multi-line values fail closed.** A schema-valid rule can carry a multi-line `description`, and the reference compiler emits a folded block (`>`) plus block-end trailing-space trimming that this emitter does not reproduce. `render::render_blockers` reports those fields, and `rules_preview` / `rules_install` MUST refuse such a rule with the blocker message instead of writing bytes that differ from upstream. Implementing `>` folding is a follow-up; the guard stays until then. |
+| C11 | **Multi-line values fail closed — narrowed by #63.** The literal block, the chomping indicators (`-`/clip/`+`), the `2` indent indicator and the quoted fallbacks are now ported and proven byte-identical against `yaml@2` (`block_scalars_match_the_reference_compiler`). The guard now fires on ONE shape: a value with a line longer than `lineWidth - indent`, which the reference folds into `>` and this emitter refuses. `rules_preview` / `rules_install` MUST refuse that shape with the blocker message rather than write bytes that differ from upstream; porting `>` folding removes the remainder. |
 
 Two implementation notes accepted as constraints:
 

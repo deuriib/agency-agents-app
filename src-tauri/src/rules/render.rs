@@ -75,7 +75,8 @@ pub fn wrap_rule(fields: &[(&str, YamlValue)], body: &str) -> String {
 }
 
 /// Emit an ordered field list as a YAML block: no `---` fences, no trailing
-/// newline (the reference `.trimEnd()`s the serializer output).
+/// whitespace (the reference `.trimEnd()`s the serializer output — load-bearing
+/// for a `|+` block, whose kept trailing newlines the reference then drops).
 pub fn emit_block(fields: &[(&str, YamlValue)]) -> String {
     let mut out = String::new();
     for (index, (key, value)) in fields.iter().enumerate() {
@@ -108,7 +109,7 @@ pub fn emit_block(fields: &[(&str, YamlValue)]) -> String {
             }
         }
     }
-    out
+    out.trim_end().to_string()
 }
 
 // =========================================================
@@ -237,51 +238,54 @@ fn globs_joined(globs: &RuleGlobs) -> String {
 
 /// Fields this emitter cannot yet compile byte-for-byte.
 ///
-/// The reference (`yaml@2`) switches a multi-line value to a folded block (`>`)
-/// and trims trailing whitespace at the end of a block; this emitter always
-/// writes a literal block (`|`) and keeps trailing spaces. Writing those bytes
-/// would make an install disagree with upstream for a reason nobody authored,
-/// which is exactly the class of silent divergence `rendered_hash` exists to
-/// catch. So callers MUST refuse a rule this function reports.
+/// Multi-line values are supported (literal block, chomping, indent indicator,
+/// quoted fallbacks — proven byte-identical against the reference compiler in
+/// `block_scalars_match_the_reference_compiler`). One shape still is not: a
+/// value with a line longer than `lineWidth - indent`, which `yaml@2` folds into
+/// a `>` block. Its folding rules (blank-line doubling, more-indented blocks,
+/// overflow fallback) are not ported, so writing those bytes would make an
+/// install disagree with upstream for a reason nobody authored — exactly what
+/// `rendered_hash` exists to catch. Callers MUST refuse a rule this reports.
 ///
-/// Empty vector ⇒ renderable. Single-line values are unaffected: they go
-/// through the folding/quoting path that is verified byte-identical against the
-/// reference for the whole corpus and the adversarial matrix.
-///
-/// Follow-up: implementing `>` folding and block trailing-space trimming
-/// removes this guard. Until then, refusing is the only honest behaviour.
+/// Empty vector ⇒ renderable. A carriage return is not a blocker: the reference
+/// quotes such a value, and so does [`block_scalar`].
 pub fn render_blockers(rule: &Rule) -> Vec<String> {
     let mut blockers = Vec::new();
-    push_multiline(&mut blockers, "description", &rule.description);
-    push_multiline(&mut blockers, "name", &rule.name);
+    push_unrenderable(&mut blockers, "description", &rule.description);
+    push_unrenderable(&mut blockers, "name", &rule.name);
     if let Some(trigger) = rule.trigger.as_deref() {
-        push_multiline(&mut blockers, "trigger", trigger);
+        push_unrenderable(&mut blockers, "trigger", trigger);
     }
     if let Some(matched) = rule.match_.as_ref() {
-        push_multiline(&mut blockers, "match", matched);
+        push_unrenderable(&mut blockers, "match", matched);
     }
     if let Some(globs) = rule.globs.as_ref() {
         match globs {
-            RuleGlobs::One(one) => push_multiline(&mut blockers, "globs", one),
+            RuleGlobs::One(one) => push_unrenderable(&mut blockers, "globs", one),
             RuleGlobs::Many(many) => {
                 for glob in many {
-                    push_multiline(&mut blockers, "globs", glob);
+                    push_unrenderable(&mut blockers, "globs", glob);
                 }
             }
         }
     }
     for tool in &rule.tools {
-        push_multiline(&mut blockers, "tools", tool);
+        push_unrenderable(&mut blockers, "tools", tool);
     }
     blockers
 }
 
-fn push_multiline(blockers: &mut Vec<String>, field: &str, value: &str) {
-    if value.contains('\n') || value.contains('\r') {
+/// Flag a value the folded branch would have to compile.
+fn push_unrenderable(blockers: &mut Vec<String>, field: &str, value: &str) {
+    if !value.contains('\n') || value.contains('\r') {
+        return;
+    }
+    if line_length_over_limit(value, LINE_WIDTH, width(INDENT)) {
         blockers.push(format!(
-            "`{field}` spans multiple lines; this app cannot yet compile \
-             multi-line values byte-for-byte (upstream folds them), so the rule \
-             is not installable"
+            "`{field}` has a line longer than {} columns; the reference compiler \
+             folds such a value into a `>` block, which this app cannot yet \
+             compile byte-for-byte, so the rule is not installable",
+            LINE_WIDTH - width(INDENT)
         ));
     }
 }
@@ -297,9 +301,12 @@ fn push_multiline(blockers: &mut Vec<String>, field: &str, value: &str) {
 /// item, which starts at a fixed column.
 fn emit_scalar(value: &str, indent: &str, indent_at_start: Option<usize>) -> String {
     // A multi-line value cannot be plain or quoted without changing its bytes,
-    // so the reference falls through to a literal block.
-    if value.contains('\n') {
-        return literal_block(value);
+    // so the reference falls through to its block-scalar path (`blockString`):
+    // literal or folded, with a chomping indicator and, when the value starts
+    // with a space, an explicit indent indicator. One shape still bails out to a
+    // double-quoted string, exactly as the reference does.
+    if value.contains('\n') || value.contains('\r') {
+        return block_scalar(value, indent);
     }
     if needs_quoting(value) {
         // `yaml@2` picks single quotes only when the value contains `"` and no
@@ -464,6 +471,7 @@ fn double_quoted(value: &str) -> String {
             '"' => out.push_str("\\\""),
             '\\' => out.push_str("\\\\"),
             '\t' => out.push_str("\\t"),
+            '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             control if (control as u32) < 0x20 || control as u32 == 0x7f => {
                 out.push_str(&format!("\\x{:02x}", control as u32));
@@ -480,31 +488,179 @@ fn single_quoted(value: &str) -> String {
     format!("'{}'", value.replace('\'', "''"))
 }
 
-/// A multi-line value as a literal block, including the chomping indicator
-/// (`-` strips, the default clips) and the `2` indent indicator for a value
-/// that starts with a space.
+/// `yaml@2`'s `blockString`, literal branch: compute the chomping indicator
+/// from the value's trailing whitespace and add an explicit indent indicator
+/// when the value starts with a space.
 ///
-/// Boundary: the reference switches to a folded block (`>`), and trims trailing
-/// spaces at the end of a block, in shapes this function does not reproduce.
-/// Those shapes ARE reachable from a schema-valid rule (a multi-line
-/// `description` is accepted by `rules-schema.json`), so [`render_blockers`]
-/// refuses them before any caller reaches this function. Do not remove that
-/// guard without implementing the folding.
-fn literal_block(value: &str) -> String {
-    let chomp = if value.ends_with('\n') { "" } else { "-" };
-    let header = if value.starts_with(' ') {
-        format!("2{chomp}")
-    } else {
-        chomp.to_string()
-    };
-    let body = value.strip_suffix('\n').unwrap_or(value);
-    let mut out = format!("|{header}\n");
-    for (index, line) in body.split('\n').enumerate() {
-        if index > 0 {
-            out.push('\n');
+/// Two shapes still go elsewhere, both matching the reference:
+///
+/// - a value whose trailing whitespace sits after a newline cannot be a block at
+///   all, so it becomes a double-quoted string;
+/// - a value carrying a carriage return is quoted too (a block would preserve
+///   the `\r` the reference escapes).
+///
+/// The **folded** branch (`>`) is the one shape this module still refuses: the
+/// reference switches to it when a line exceeds `lineWidth - indent`, and its
+/// folding rules (more-indented blocks, blank-line doubling, overflow fallback)
+/// are not ported. [`render_blockers`] refuses exactly that shape, so this
+/// function never has to write bytes it cannot defend.
+fn block_scalar(value: &str, indent: &str) -> String {
+    // `/\n[\t ]+$/` — a block would lose the trailing spaces.
+    if ends_with_newline_then_whitespace(value) || value.contains('\r') {
+        return fold(&double_quoted(value), indent, None, FoldMode::Quoted);
+    }
+
+    // Chomping: strip when nothing trails, keep when the trailing run is the
+    // whole value or continues past its first newline, clip otherwise.
+    let chars: Vec<char> = value.chars().collect();
+    let mut end_start = chars.len();
+    while end_start > 0 {
+        let ch = chars[end_start - 1];
+        if ch != '\n' && ch != '\t' && ch != ' ' {
+            break;
         }
-        out.push_str(INDENT);
-        out.push_str(line);
+        end_start -= 1;
+    }
+    let mut end: String = chars[end_start..].iter().collect();
+    let chomp = match end.find('\n') {
+        None => "-",
+        Some(pos) if end_start == 0 || pos != end.chars().count() - 1 => "+",
+        Some(_) => "",
+    };
+
+    let mut body: String = chars[..end_start].iter().collect();
+    if !end.is_empty() {
+        if end.ends_with('\n') {
+            end.pop();
+        }
+        end = indent_isolated_newline_runs(&end, indent);
+    }
+
+    // Leading whitespace: an indent indicator, plus the run emitted verbatim.
+    let body_chars: Vec<char> = body.chars().collect();
+    let mut start_with_space = false;
+    let mut start_end = 0usize;
+    let mut start_nl_pos: Option<usize> = None;
+    while start_end < body_chars.len() {
+        match body_chars[start_end] {
+            ' ' => start_with_space = true,
+            '\n' => start_nl_pos = Some(start_end),
+            _ => break,
+        }
+        start_end += 1;
+    }
+    let start_cut = match start_nl_pos {
+        Some(pos) if pos + 1 < start_end => pos + 1,
+        _ => start_end,
+    };
+    let mut start: String = body_chars[..start_cut].iter().collect();
+    if !start.is_empty() {
+        body = body_chars[start_cut..].iter().collect();
+        start = indent_newline_runs(&start, indent);
+    }
+
+    // Root indentation is non-empty here, so the indicator is the indent width.
+    let indent_size = if indent.is_empty() { "1" } else { "2" };
+    let header = format!(
+        "{}{}",
+        if start_with_space { indent_size } else { "" },
+        chomp
+    );
+    let literal_body = indent_newline_runs(&body, indent);
+    format!("|{header}\n{indent}{start}{literal_body}{end}")
+}
+
+/// `/\n[\t ]+$/` — the value ends with a newline followed by blank space.
+fn ends_with_newline_then_whitespace(value: &str) -> bool {
+    let chars: Vec<char> = value.chars().collect();
+    let mut index = chars.len();
+    let mut saw_blank = false;
+    while index > 0 {
+        match chars[index - 1] {
+            ' ' | '\t' => {
+                saw_blank = true;
+                index -= 1;
+            }
+            _ => break,
+        }
+    }
+    saw_blank && index > 0 && chars[index - 1] == '\n'
+}
+
+/// `yaml@2`'s `lineLengthOverLimit`: true when any line exceeds
+/// `line_width - indent_length` columns.
+fn line_length_over_limit(value: &str, line_width: usize, indent_length: usize) -> bool {
+    if line_width == 0 {
+        return false;
+    }
+    let limit = line_width.saturating_sub(indent_length);
+    let chars: Vec<char> = value.chars().collect();
+    if chars.len() <= limit {
+        return false;
+    }
+    let mut start = 0usize;
+    for (index, ch) in chars.iter().enumerate() {
+        if *ch == '\n' {
+            if index - start > limit {
+                return true;
+            }
+            start = index + 1;
+            if chars.len() - start <= limit {
+                return false;
+            }
+        }
+    }
+    true
+}
+
+/// `text.replace(/\n+/g, "$&" + indent)` — one indent after every newline run.
+fn indent_newline_runs(text: &str, indent: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut in_run = false;
+    for ch in text.chars() {
+        if ch == '\n' {
+            in_run = true;
+            out.push(ch);
+        } else if in_run && ch != '\n' {
+            in_run = false;
+            out.push_str(indent);
+            out.push(ch);
+        } else {
+            out.push(ch);
+        }
+    }
+    if in_run {
+        out.push_str(indent);
+    }
+    out
+}
+
+/// `text.replace(blockEndNewlines, "$&" + indent)` — the regex matches a run of
+/// newlines that neither follows nor precedes another newline, i.e. the isolated
+/// breaks inside a trailing-whitespace run.
+fn indent_isolated_newline_runs(text: &str, indent: &str) -> String {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = String::with_capacity(text.len());
+    let mut index = 0usize;
+    while index < chars.len() {
+        if chars[index] != '\n' {
+            out.push(chars[index]);
+            index += 1;
+            continue;
+        }
+        let mut run_end = index;
+        while run_end < chars.len() && chars[run_end] == '\n' {
+            run_end += 1;
+        }
+        let preceded = index == 0 || chars[index - 1] != '\n';
+        let followed = run_end == chars.len() || chars[run_end] == '\n';
+        for ch in &chars[index..run_end] {
+            out.push(*ch);
+        }
+        if preceded && !followed {
+            out.push_str(indent);
+        }
+        index = run_end;
     }
     out
 }
@@ -1629,32 +1785,52 @@ mod tests {
         assert!(render_blockers(&rule).is_empty());
     }
 
+    /// Issue #63: the literal block covers short multi-line values, so the
+    /// blanket multi-line guard is gone.
     #[test]
-    fn render_blockers_refuse_a_multiline_description() {
+    fn render_blockers_accept_a_short_multiline_description() {
         let mut rule = sample();
         rule.description = "first line\nsecond line".to_string();
-        let blockers = render_blockers(&rule);
-        assert_eq!(blockers.len(), 1, "{blockers:?}");
-        assert!(blockers[0].contains("`description`"), "{blockers:?}");
-        assert!(blockers[0].contains("multiple lines"), "{blockers:?}");
+        assert!(render_blockers(&rule).is_empty());
     }
 
+    /// The one shape still refused, on every field the rule can carry.
     #[test]
-    fn render_blockers_refuse_a_multiline_glob_in_either_shape() {
+    fn render_blockers_refuse_a_line_that_the_reference_would_fold() {
+        let long = "alpha ".repeat(20).trim().to_string();
+        let mut description = sample();
+        description.description = format!("short\n{long}");
+        assert_eq!(render_blockers(&description).len(), 1);
+
+        // A long SINGLE-line value is not a block scalar at all: it folds as a
+        // flow scalar, which this emitter already reproduces.
+        let mut single_line = sample();
+        single_line.globs = Some(RuleGlobs::One(long.clone()));
+        assert!(render_blockers(&single_line).is_empty());
+
         let mut one = sample();
-        one.globs = Some(RuleGlobs::One("a\nb".to_string()));
+        one.globs = Some(RuleGlobs::One(format!("a\n{long}")));
         assert_eq!(render_blockers(&one).len(), 1);
 
         let mut many = sample();
-        many.globs = Some(RuleGlobs::Many(vec!["ok".to_string(), "a\nb".to_string()]));
+        many.globs = Some(RuleGlobs::Many(vec![
+            "ok".to_string(),
+            format!("a\n{long}"),
+        ]));
         assert_eq!(render_blockers(&many).len(), 1);
     }
 
+    /// A carriage return is not a blocker: the reference quotes it, and so does
+    /// the block path (proven in the oracle matrix).
     #[test]
-    fn render_blockers_refuse_a_carriage_return() {
+    fn render_blockers_accept_a_carriage_return() {
         let mut rule = sample();
         rule.description = "a\rb".to_string();
-        assert_eq!(render_blockers(&rule).len(), 1);
+        assert!(render_blockers(&rule).is_empty());
+        assert_eq!(
+            emit_block(&[("description", YamlValue::Scalar(rule.description.clone()))]),
+            "description: \"a\\rb\""
+        );
     }
 
     // ── dropped fields: the body cannot satisfy the assertion ──────────────
@@ -1781,12 +1957,29 @@ mod tests {
         }
     }
 
+    /// Issue #63: a short multi-line value is now installable, and the bytes are
+    /// the reference's literal block — not a refusal.
+    #[test]
+    fn a_short_multiline_description_renders_as_a_literal_block() {
+        let mut rule = sample();
+        rule.description = "first line\nsecond line".to_string();
+        for harness in registry::all() {
+            let files = render_rule_files(&rule, &harness.id).expect("renderable");
+            let bytes = files[0].bytes.clone();
+            assert!(
+                bytes.contains("description: |-\n  first line\n  second line"),
+                "{} did not get a literal block: {bytes}",
+                harness.id
+            );
+        }
+    }
+
     /// Ruling C11: the entry point refuses a rule whose frontmatter the emitter
     /// cannot reproduce byte-for-byte, with `render_blockers`' own message.
     #[test]
     fn render_rule_files_refuses_a_blocked_rule_on_every_harness() {
         let mut rule = sample();
-        rule.description = "line one\nline two".to_string();
+        rule.description = format!("short\n{}", "alpha ".repeat(20).trim());
         let blocker = render_blockers(&rule).join("\n");
         for harness in registry::all() {
             let error = render_rule_files(&rule, &harness.id).expect_err("must refuse");
@@ -2071,6 +2264,72 @@ mod tests {
                     if message == "rule harness 'user-only' is user-scoped; a project path is not supported"
             ),
             "{error:?}"
+        );
+    }
+
+    /// The block-scalar branch, byte-compared against the reference compiler.
+    ///
+    /// The fixture is generated, not written: `yaml@2`'s
+    /// `stringify(...).trimEnd()` — exactly what `_util.mjs` does — for a matrix
+    /// of adversarial shapes (chomping, indent indicators, blank lines,
+    /// more-indented lines, folded paragraphs, overflow fallbacks, unicode).
+    #[test]
+    fn block_scalars_match_the_reference_compiler() {
+        #[derive(serde::Deserialize)]
+        struct Case {
+            name: String,
+            value: String,
+            expected: String,
+        }
+        #[derive(serde::Deserialize)]
+        struct Fixture {
+            cases: Vec<Case>,
+        }
+
+        let raw = include_str!("../../tests/fixtures/rules/block-scalars.json");
+        let fixture: Fixture = serde_json::from_str(raw).expect("the fixture parses");
+        assert!(!fixture.cases.is_empty(), "the fixture carries no cases");
+
+        let mut failures = Vec::new();
+        let mut folded = 0usize;
+        for case in &fixture.cases {
+            let expected_folded = case.expected.starts_with("description: >");
+            let mut rule = sample();
+            rule.description = case.value.clone();
+            let blocked = !render_blockers(&rule).is_empty();
+            if expected_folded {
+                // The one shape still refused: folding is not ported, so the
+                // guard must catch it rather than emit different bytes.
+                folded += 1;
+                if !blocked {
+                    failures.push(format!(
+                        "{}\n  expected the folded shape to be refused",
+                        case.name
+                    ));
+                }
+                continue;
+            }
+            if blocked {
+                failures.push(format!(
+                    "{}\n  refused, but the reference renders it as a literal block",
+                    case.name
+                ));
+                continue;
+            }
+            let actual = emit_block(&[("description", YamlValue::Scalar(case.value.clone()))]);
+            if actual != case.expected {
+                failures.push(format!(
+                    "{}\n  expected: {:?}\n  actual:   {:?}",
+                    case.name, case.expected, actual
+                ));
+            }
+        }
+        assert!(folded > 0, "the fixture must keep at least one folded case");
+        assert!(
+            failures.is_empty(),
+            "{} block-scalar case(s) diverge from yaml@2:\n{}",
+            failures.len(),
+            failures.join("\n")
         );
     }
 
