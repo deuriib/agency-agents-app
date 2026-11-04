@@ -1,4 +1,5 @@
-# Continuous integration for every pull request and every push to main.
+# Continuous integration for every pull request, plus a seconds-long post-merge
+# canary on every push to main.
 #
 # Jobs are deliberately split so a fast failure does not wait for a full
 # dependency build:
@@ -13,6 +14,29 @@
 #
 # All jobs run on ubuntu-24.04 to match the Linux release bundle runner (see
 # linux-build.yml).
+#
+# ## Why three jobs are `pull_request`-only (issue #90)
+#
+# This workflow used to run the whole graph on both events, so every merge
+# repeated it on a tree that had just been tested. The three jobs that compile or
+# install — `rust-lint`, `rust-test`, `frontend` — are now `pull_request`-only.
+# The four that only read manifests and pinned artifacts (`rust-fmt`, `cargo-lock`,
+# `scripts`, `vendor`) keep running after a merge, as the canary.
+#
+# That split is only sound while `main` is gated, and it is: the `main: PR gate`
+# ruleset requires all nine checks (these eight plus `gitleaks`) together with
+# `strict_required_status_checks_policy`, so a PR behind `main` cannot merge; the
+# repository is squash-only (`allow_merge_commit` and `allow_rebase_merge` are
+# off). A squash of an up-to-date head is tree-identical to the head CI already
+# tested — same code, new SHA — so re-running the compile jobs on the merge commit
+# cannot produce a different verdict. `CONTRIBUTING.md#main-is-gated` records the
+# rule; read it before adding a trigger back "for safety".
+#
+# The canary is not decoration. It is the only thing watching `main` for a commit
+# that arrived without passing the gate — a ruleset edit, a restored ref — and it
+# fails in seconds rather than at the next release. A job added below without an
+# `if:` just runs on both events, which is the old, safe behaviour, not a broken
+# one.
 
 name: PR Check
 
@@ -49,6 +73,8 @@ jobs:
 
   rust-lint:
     name: Rust clippy (-D warnings)
+    # Compiles the crate, so it is pull-request only. See the header (issue #90).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -101,6 +127,8 @@ jobs:
 
   rust-test:
     name: Rust tests
+    # Compiles and runs the suite, so it is pull-request only (issue #90).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
@@ -136,6 +164,8 @@ jobs:
 
   frontend:
     name: Frontend (svelte-check + build)
+    # Runs `npm ci` and a production build, so it is pull-request only (issue #90).
+    if: github.event_name == 'pull_request'
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout

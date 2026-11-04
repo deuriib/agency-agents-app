@@ -1,14 +1,18 @@
 # Secret scanning with gitleaks, using the repository's .gitleaks.toml
 # (default ruleset + documented allowlists).
 #
-# Runs on every push and pull request, plus a weekly full-history sweep so a
-# secret that landed before this workflow existed is still detected.
+# Runs on every pull request, plus a weekly full-history sweep so a secret that
+# landed before this workflow existed is still detected.
+#
+# `push: [main]` was removed in issue #90: it re-scanned the commits the PR run had
+# just scanned, on the same tree. That is only safe because `gitleaks` is one of the
+# required checks in the `main: PR gate` ruleset — without that, a secret reaching
+# `main` would go unseen until the Monday cron, i.e. after it is in the history.
+# The schedule stays for exactly that reason: it is the sweep, not the gate.
 
 name: Secret Scan
 
 on:
-  push:
-    branches: [main]
   pull_request:
   schedule:
     - cron: "0 6 * * 1" # Mondays 06:00 UTC
