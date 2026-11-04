@@ -143,7 +143,11 @@ pub enum UpdateCheckOutcome {
         /// Currently-installed version, surfaced so the UI can render
         /// "v0.3.0 → v0.3.1" without an extra IPC call.
         current_version: String,
-        /// Release-notes body from the manifest. Optional.
+        /// Release body from the published GitHub Release, already reduced to
+        /// plain text (`github::releases::strip_markdown`) and truncated.
+        /// Optional. **Not** from the manifest: the manifest's `notes` is a
+        /// separate field the plugin reads, and this one is filled from
+        /// `GET /repos/{owner}/{repo}/releases/latest`.
         #[serde(skip_serializing_if = "Option::is_none")]
         notes: Option<String>,
         /// Publish date (RFC 3339), if present in the release.
@@ -2638,8 +2642,7 @@ mod tests {
             current_version: "0.12.0".into(),
             notes: None,
             pub_date: None,
-            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.13.0"
-                .into(),
+            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.13.0".into(),
             installable: true,
             in_app_install: false,
             package_download: Some(asset.clone()),
@@ -2706,7 +2709,9 @@ mod tests {
         PackageAsset {
             format,
             name: name.to_string(),
-            url: format!("https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/{name}"),
+            url: format!(
+                "https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/{name}"
+            ),
         }
     }
 
@@ -2912,7 +2917,10 @@ mod tests {
             auto_install_blocker_for_bundle(&state, "9.9.9", Some(BundleType::AppImage)).await,
             None
         );
-        assert_eq!(auto_install_blocker_for_bundle(&state, "9.9.9", None).await, None);
+        assert_eq!(
+            auto_install_blocker_for_bundle(&state, "9.9.9", None).await,
+            None
+        );
     }
 
     /// A package build is reported as `UnsupportedBundle` even when the version
