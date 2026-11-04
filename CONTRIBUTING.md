@@ -317,6 +317,38 @@ Renderer parity (defaults to the pinned `vendor/agency-agents`; set
 mise run parity
 ```
 
+### Main is gated
+
+`main` cannot move unless a pull request has passed every check. The `main: PR
+gate` ruleset requires the eight jobs in `pr-check.yml` plus `gitleaks`, with
+`strict_required_status_checks_policy` on, so a PR that is behind `main` has to be
+updated before it merges — the **Update branch** button works, because
+`allow_update_branch` is enabled for that reason. The same ruleset blocks
+force-pushes and branch deletion.
+
+It declares no `bypass_actors`, so the default path cannot skip the gate: a red
+`rust-fmt` fails the merge with `the base branch policy prohibits the merge`, and
+a direct push is rejected with `GH013` before it touches the branch. A repository
+admin can still get around it — by editing or deleting the ruleset, or through the
+API's administrator override. That is the point: skipping the gate has to be a
+deliberate act, not a quiet default.
+
+Because of that, the merge commit does not have to re-run the compile-heavy jobs.
+The repository is squash-only, so merging an up-to-date PR produces a tree
+identical to the head CI already tested: same code, new SHA. `pr-check.yml`
+therefore runs `rust-lint`, `rust-test` and `frontend` on `pull_request` only, and
+leaves `rust-fmt`, `cargo-lock`, `scripts` and `vendor` running on `push: main` as
+a canary that finishes in well under a minute. `gitleaks` runs on pull requests
+and on a weekly schedule.
+
+The canary exists to catch a commit on `main` that never went through the gate. If
+it goes red, the fix is a normal pull request: you cannot push the correction
+directly.
+
+**Do not re-add `push: main` to the full graph without reading issue #90.** The
+duplicate looks like safety and is not. It cost roughly four minutes of job time
+per merge and told you nothing the pull-request run had not already told you.
+
 ## Code Style
 
 - Rust: `cargo fmt`.
