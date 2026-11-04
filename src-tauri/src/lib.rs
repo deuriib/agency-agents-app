@@ -312,3 +312,7 @@ fn handle_menu_event<R: tauri::Runtime>(app: &tauri::AppHandle<R>, event: tauri:
         _ => {}
     }
 }
+
+// Deliberate formatting violation to prove the required check blocks a merge
+// (issue #90, acceptance criterion 1). Never merged.
+pub fn probe_intentionally_unformatted( )->u8{1}
