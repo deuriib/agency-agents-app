@@ -324,8 +324,14 @@ gate` ruleset requires the eight jobs in `pr-check.yml` plus `gitleaks`, with
 `strict_required_status_checks_policy` on, so a PR that is behind `main` has to be
 updated before it merges — the **Update branch** button works, because
 `allow_update_branch` is enabled for that reason. The same ruleset blocks
-force-pushes and branch deletion. There is no admin bypass; to change the rule,
-edit the ruleset itself.
+force-pushes and branch deletion.
+
+It declares no `bypass_actors`, so the default path cannot skip the gate: a red
+`rust-fmt` fails the merge with `the base branch policy prohibits the merge`, and
+a direct push is rejected with `GH013` before it touches the branch. A repository
+admin can still get around it — by editing or deleting the ruleset, or through the
+API's administrator override. That is the point: skipping the gate has to be a
+deliberate act, not a quiet default.
 
 Because of that, the merge commit does not have to re-run the compile-heavy jobs.
 The repository is squash-only, so merging an up-to-date PR produces a tree
