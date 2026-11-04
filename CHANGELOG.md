@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.1](https://github.com/deuriib/agency-agents-app/compare/v0.12.0...v0.12.1) (2026-11-04)
+
+
+### Bug Fixes
+
+* **updater:** stop offering impossible installs and render notes as plain text ([#102](https://github.com/deuriib/agency-agents-app/issues/102)) ([3ba967d](https://github.com/deuriib/agency-agents-app/commit/3ba967dbcb6e98a8769847a6bfbd47ed4b23c268))
+
 ## [0.12.0](https://github.com/deuriib/agency-agents-app/compare/v0.11.0...v0.12.0) (2026-11-04)
 
 
