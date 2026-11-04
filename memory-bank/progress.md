@@ -15,9 +15,15 @@
   scalars, which lifts the C11 install guard.
 - [x] **0.10.0** (`4b52142`, PR #86): the Antigravity app is detected via
   `.gemini/antigravity` (#69), so a desktop-app-only user is no longer invisible.
-- [ ] **Publish.** Every release since 0.8.0 is still a draft with Linux assets only:
-  `latest.json`, the Windows payloads and the notarized macOS build are missing. Needs
-  the signing secrets, a local `./scripts/release.sh`, then `mise run verify-updater`.
+- [x] **0.12.1** (`e924e09`, published 2026-11-04): PR #102. The updater stops promising
+  what it cannot deliver — bundle-type gate, honest installer errors, plain-text release
+  notes, retired host removed.
+- [ ] **Publish the macOS payload.** The only remaining release gap: `latest.json` carries
+  `linux-x86_64`, `windows-x86_64` and `windows-aarch64`, but **`darwin-aarch64` /
+  `darwin-x86_64` are missing**, so macOS cannot update and `mise run verify-updater`
+  returns **FAIL**. Needs a local `./scripts/release.sh` (CI cannot notarize), then
+  `mise run verify-updater -- --check-urls`. Releases are otherwise **published**, not
+  drafts — 0.8.1 forward.
 - [ ] Native review of the 12-locale strings: Rules, plus the three `updates.*` keys
   added in #102.
 - [ ] Decide **#56 option B** (per-installer manifests + a signing step for `.deb` /
@@ -45,8 +51,10 @@
   `set-updater-secrets` tasks.
 - [x] 0.8.3/0.8.4: catalog snapshot carries `strategy/` and `divisions.json`;
   `IMPLEMENTED_FORMATS` read from a shared JSON (#54, #59).
-- [ ] Each 0.8.x release still needs the macOS publish step performed locally; the
-  draft left behind by CI only holds the Linux payloads.
+- [ ] **Every release still needs the macOS publish step run locally.** CI publishes the
+  Linux and Windows payloads automatically (0.8.1 → 0.12.1 are all published), so this is
+  not a draft problem — it is the missing `darwin-*` entries that make
+  `mise run verify-updater` fail.
 
 ## Version 0.7.x (Completed)
 - [x] **PR #38 (merged `a453bd2`)**: updater installable end-to-end (`latest.json` +

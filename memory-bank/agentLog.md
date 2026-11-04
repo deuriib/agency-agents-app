@@ -816,8 +816,18 @@ branch, and the Deb/Rpm path is not exercised through `run_install` because the 
 the host's bundle type — the decision is covered by the pure gate instead. The 36 new
 translations are author-written and unreviewed beyond `en`/`es`/`pt-BR`.
 
-**Merge (2026-11-04)**: PR #102 squash-merged as `3ba967d`, closing #56/#57/#47. It landed
-after the v0.12.0 tag (`5234cca`), so it ships in 0.13.0. Linux package installs remain
-download-only until #56 option B (per-installer manifests + a signing step for `.deb`/`.rpm`,
-which carry no `.sig` today); that is now recorded as a constraint in `activeContext.md`, not
-as an open bug — do not re-report it.
+**Merge (2026-11-04)**: PR #102 squash-merged as `3ba967d`, closing #56/#57/#47. It was
+released as **v0.12.1** (`e924e09`, published 2026-11-04 03:36Z). Linux package installs
+remain download-only until #56 option B (per-installer manifests + a signing step for
+`.deb`/`.rpm`, which carry no `.sig` today); that is now recorded as a constraint in
+`activeContext.md`, not as an open bug — do not re-report it.
+
+**Correction (2026-11-04)**: the entry above first read "ships in 0.13.0", and the docs
+said every release since 0.8.0 was a draft. Both were wrong — `release-please` tagged
+0.12.1 immediately and published it, and `gh release list` shows 0.8.1 → 0.12.1 all
+published. Measured with `mise run verify-updater` against v0.12.1: `linux-x86_64`,
+`windows-x86_64` and `windows-aarch64` pass; **`darwin-aarch64` and `darwin-x86_64` are
+missing**, so the check returns **FAIL**. macOS is the only release gap. The same live
+manifest also confirms the #56 premise directly: its `linux-x86_64` entry points at
+`Agency.Agents_0.12.1_amd64.AppImage.tar.gz` while the release attaches a `.deb` and an
+`.rpm` with no `.sig` beside them.
