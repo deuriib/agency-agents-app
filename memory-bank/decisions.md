@@ -574,3 +574,110 @@ first signed, published release.
 `src-tauri/src/commands/updater.rs`, `src-tauri/src/github/releases.rs`,
 `.github/workflows/release-please.yml`, `scripts/release.sh`,
 `docs/updater-release.md`, `tasks/2026-11/261102_updater-pipeline.md`.
+
+### 2026-11-04: A build that cannot self-update must not offer it
+
+**Status**: Approved (merged as `3ba967d`, PR #102, 2026-11-04).
+**Context**: `.deb` and `.rpm` installs failed *every* update with `invalid updater binary
+format`, after the full ~85 MB had downloaded, and the failure was reported as a network
+error. Nothing about it was recoverable: two facts in the toolchain disagree and neither is
+ours to change.
+
+1. `tauri-utils` bakes a bundle-type sentinel into the binary, and `tauri-plugin-updater`
+   picks its installer from it — so a package install always calls `install_deb` /
+   `install_rpm`, which validate the payload and reject anything that is not a real
+   package.
+2. `tauri_plugin_updater::target()` builds its platform key as `{os}-{arch}` with no
+   installer dimension, so `platforms` can carry exactly **one** artifact per platform.
+   Ours is the AppImage tarball, because the AppImage is the artifact that self-updates
+   correctly today.
+
+**Decision**:
+1. **Read the bundle type and refuse where there is no path.**
+   `blocked_package_format(Option<BundleType>)` is a pure gate: `Deb` / `Rpm` blocked,
+   AppImage / `App` / `Dmg` / `Msi` / `Nsis` / `None` (a `tauri dev` binary, which carries
+   no sentinel) unchanged. No runtime, no network, no built artifact needed to test it.
+2. **The capability travels in the payload, not inferred by the UI.**
+   `Available` gained `inAppInstall` (a property of the *build*) alongside the existing
+   `installable` (a property of the *release*). They are never merged: a release can carry
+   a perfectly good manifest that a given build still cannot consume, and collapsing the
+   two is precisely what produced the bug.
+3. **Refuse before the download, on both paths.** `run_install` gates ahead of
+   `download_and_install` via `self_update_gate`, and `auto_install_blocker` returns
+   `UnsupportedBundle` so the scheduler stops emitting a `Started`/`Failed` pair on every
+   wake.
+4. **Typed errors, never `Network`.** `InvalidUpdaterFormat` (the plugin rejected the bytes)
+   and `SelfUpdateUnsupported` (the pre-flight gate) are their own variants. A local,
+   deterministic dead end must not tell the user to check their connection.
+5. **Offer the release's own installer.** `package_download` carries the matching `.deb` /
+   `.rpm` URL; the card deep-links it and says why in one sentence. No asset → degrade to
+   "View release", never to a broken link.
+
+**Alternatives rejected**:
+- **Point `linux-x86_64` at the `.deb`.** Fixes package installs, breaks AppImage
+  self-update — trading the working path for the broken one.
+- **Ship Linux as AppImage only.** Drops `.deb` / `.rpm` from the distribution story and
+  ignores that users already installed them.
+- **A privileged custom updater.** Duplicating `pkexec` / polkit elevation is a bigger,
+  riskier surface than the plugin's own implementation.
+- **Document "Linux auto-update is AppImage-only" and keep the button.** A documented dead
+  end that still pays 85 MB per click is not a fix.
+
+**Consequences**: a `.deb` / `.rpm` build shows "Download .deb" instead of "Install
+update", and its auto-install toggle is disabled once a check proves it cannot work. This
+is a **permanent constraint**, not a bug to re-report: making Linux package installs
+self-updatable needs per-installer manifests (`latest-deb.json`, `latest-rpm.json`) **and**
+a signing step for `.deb` / `.rpm`, which carry no `.sig` today (#56 option B). The app
+already re-resolves its endpoint per install, so the plumbing exists; the signing does not.
+
+**References**: `src-tauri/src/commands/updater.rs` (`blocked_package_format`,
+`package_download_for`, `self_update_gate`, `auto_install_blocker_for_bundle`),
+`src-tauri/src/github/releases.rs` (`PackageFormat`, `PackageAsset`, `package_assets`),
+`src-tauri/src/error.rs`, `docs/updater-release.md#linux-package-installs-are-download-only-56`,
+`tasks/2026-11/261104_updater-package-installs.md`.
+
+### 2026-11-04: Release notes are flattened at the source, before they are truncated
+
+**Status**: Approved (merged as `3ba967d`, PR #102, 2026-11-04).
+**Context**: the Updates card rendered `release-please`'s generated Markdown as literal
+text — `## [0.8.3](https://…)`, list markers, bare URLs. Two comments asserted the
+opposite of the code, which is why it survived review: the renderer was right when `notes`
+was one short sentence, and the field grew into the whole release body without it.
+
+**Decision**:
+1. **Flatten in the backend, at the source.** `github::releases::strip_markdown` reduces
+   headings, bullets, thematic breaks, inline links, `**bold**` / `__bold__` / `*italic*`
+   and code spans to plain text. Every consumer gets clean text; the card keeps
+   interpolating `{notes}` and stays auto-escaped.
+2. **No Markdown renderer, no HTML, no sanitizer.** A dependency plus an XSS surface is not
+   worth it for a card whose full content is one click away, and
+   `dangerouslySetInnerHTML` is barred without DOMPurify. A hand-written scanner emits
+   text, so the escaping story is unchanged.
+3. **Flatten before bounding.** `bounded_notes` strips first, then applies
+   `MAX_NOTES_CHARS`. Truncating first can cut a link or a URL in half; this order makes
+   the whole class unrepresentable rather than something to guard against at the edge.
+4. **Underscores need word boundaries.** Emphasis delimiters follow CommonMark flanking
+   rules: `_` only opens at a word boundary and only closes before one. `IMPLEMENTED_FORMATS`
+   and `snake_case` are the most common identifiers in these notes, and blind stripping
+   mangled them. Whitespace-wrapped markers (`a * b * c`) stay literal for the same reason.
+5. **Tolerate malformed input.** Unbalanced syntax (`[text` with no `]`, an unclosed code
+   span, `[label]` with no target) passes through unchanged. A hostile or truncated body
+   must never swallow the rest of the text.
+
+**Alternatives rejected**:
+- **Render a Markdown subset properly.** Library + sanitizer + an XSS surface for a
+  Settings card.
+- **Shorten at the source instead** (first paragraph only). Cheaper, but discards the
+  per-release bullets that are actually useful in the card.
+- **Strip in the frontend.** The truncation lives in the backend, so a frontend strip
+  cannot repair a link already cut at the bound.
+
+**Consequences**: `notes` is plain text by contract, and `types.ts` says so.
+`MAX_NOTES_CHARS` now bounds *visible* text rather than raw Markdown, so a release body
+shows more of itself than before at the same bound. The stripper is deliberately not a
+Markdown parser: a future construct (tables, images, footnotes) will pass through and need
+a decision, not a bug report.
+
+**References**: `src-tauri/src/github/releases.rs` (`strip_markdown`, `strip_line_prefix`,
+`strip_inline`, `match_link`, `bounded_notes`), `src/lib/types.ts`, `src/lib/components/SettingsSectionUpdates.svelte`,
+`tasks/2026-11/261104_updater-package-installs.md`.

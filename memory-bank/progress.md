@@ -1,6 +1,32 @@
 # Project Progress — Agency Agents
 
-## Version 0.9.x (Current)
+## Version 0.12.x (Current)
+- [x] **PR #102 (merged `3ba967d`)**: the updater stops promising what it cannot deliver.
+  `.deb` / `.rpm` builds are told they cannot self-update (#56) — a pure bundle-type gate
+  refuses before the download, `inAppInstall` + `packageDownload` carry the capability in
+  the payload, and the card offers the release's own installer; `InvalidUpdaterFormat`
+  and `SelfUpdateUnsupported` can no longer surface as "Network error". Release notes are
+  flattened to plain text **before** truncation (#57), so a link or URL cannot be cut in
+  half. The retired `agencyagents.app` host is gone from the CSP, the network panel and
+  all 12 locales (#47). 596 → 626 Rust tests. See
+  [261104_updater-package-installs.md](tasks/2026-11/261104_updater-package-installs.md).
+- [x] **0.12.0** (`5234cca`, PR #95): rules install through the destinations grid (#94).
+- [x] **0.11.0** (`d63c7bb`, PR #88): multi-line rule frontmatter compiles as block
+  scalars, which lifts the C11 install guard.
+- [x] **0.10.0** (`4b52142`, PR #86): the Antigravity app is detected via
+  `.gemini/antigravity` (#69), so a desktop-app-only user is no longer invisible.
+- [ ] **Publish.** Every release since 0.8.0 is still a draft with Linux assets only:
+  `latest.json`, the Windows payloads and the notarized macOS build are missing. Needs
+  the signing secrets, a local `./scripts/release.sh`, then `mise run verify-updater`.
+- [ ] Native review of the 12-locale strings: Rules, plus the three `updates.*` keys
+  added in #102.
+- [ ] Decide **#56 option B** (per-installer manifests + a signing step for `.deb` /
+  `.rpm`) or accept download-only Linux packages permanently. `activeContext.md` records
+  the current answer as a constraint, not a bug.
+- [ ] Remaining #61 follow-ups: #64 (AppHandle harness), #65 (parity guard: stale vs
+  missing), #70, #71, #76, #98. #62, #63, #66, #68, #69 and #72 have shipped.
+
+## Version 0.9.x (Completed)
 - [x] **PR #61 (merged `1ab9453`)**: Rules integration, milestone M1 of issue #29.
   Native Rust compilation of the four `agency-rules` renderers (32/32 byte-identical
   to a fresh upstream compile), a second managed corpus with its own index and
@@ -10,12 +36,8 @@
 - [x] Fixed `atomic_write` (missing `flush()` before `sync_all` silently truncated on
   a full disk) and `load_ledger` (any read error became "nothing installed").
 - [x] **v0.9.0** released by release-please (`00b9576`, PR #67).
-- [ ] **Publish v0.9.0**: it is still a draft with Linux assets only. Missing
-  `latest.json`, Windows artifacts and the notarized macOS payload. Needs the signing
-  secrets and a local `./scripts/release.sh`, then `mise run verify-updater`.
-- [ ] Native review of the 12-locale Rules strings.
-- [ ] Triage the #61 review follow-ups (#62–#72); suggested order: #72 → #68 → #62 →
-  #66, with #63/#65/#69 independent.
+- [x] 0.9.1 → 0.9.3: Apple identity from the environment (#74), `{slug}` + agent tool ids
+  for rule harnesses (#78), Rules rendered through the shared workspace shell (#83).
 
 ## Version 0.8.x (Completed)
 - [x] 0.8.0 → 0.8.4 shipped: updater installable end-to-end (`latest.json` + signing +

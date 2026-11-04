@@ -788,3 +788,36 @@ opened PR #39 (`chore(main): release 0.8.0`). `gh secret list` is still empty, s
 not be merged until `mise run set-updater-secrets` has run on the Mac — the Linux/Windows
 preflight fails without the key. The `v0.7.1` draft remains stranded and should be deleted
 after 0.8.0 is published.
+
+**2026-11-04 — the updater stops promising what it cannot deliver (#56, #57, #47)**: three
+defects in one surface, all reported against v0.8.3. (1) `.deb`/`.rpm` installs failed every
+update with `invalid updater binary format` after the full ~85 MB had downloaded. Root cause
+is structural: `tauri-utils` bakes the bundle type into the binary and
+`tauri-plugin-updater` picks its installer from it, while a manifest carries exactly one
+artifact per OS/arch and ours is the AppImage — so a package install handed an AppImage to
+`install_deb`. Pointing `linux-x86_64` at the `.deb` would only move the breakage to the
+artifact that works. Fixed by telling the truth: a pure `blocked_package_format()` gate,
+`inAppInstall` + `packageDownload` in the payload (the first is a property of the build, the
+second of the release — collapsing them is what produced the bug), refusal before the
+download on both the manual and the scheduled path, and the release's own installer offered
+as a download. (2) `translate_plugin_error` funnelled every non-signature failure into
+`AppError::Network`, sending users to check a working connection; `InvalidUpdaterFormat` and
+`SelfUpdateUnsupported` are now their own variants, and the classifier — previously
+`#[cfg(not(test))]` and untested — is pure and covered. (3) The card rendered
+`release-please` Markdown as literal text; `strip_markdown` flattens it at the source and
+runs **before** `MAX_NOTES_CHARS`, so a link can no longer be cut in half. (4) The retired
+`agencyagents.app` host left the CSP, the network panel and all 12 locales.
+
+Evidence: 596 → 626 Rust tests (+30), 90 frontend tests, svelte-check 0, production build,
+10/10 CI checks green, `mise run ci` 305s. Zero new dependencies. Task doc:
+`tasks/2026-11/261104_updater-package-installs.md`. Not verified: Settings → Network was
+never rendered in a long locale (no screenshot), no frontend unit test for the new card
+branch, and the Deb/Rpm path is not exercised through `run_install` because the gate reads
+the host's bundle type — the decision is covered by the pure gate instead. The 36 new
+translations are author-written and unreviewed beyond `en`/`es`/`pt-BR`.
+
+**Merge (2026-11-04)**: PR #102 squash-merged as `3ba967d`, closing #56/#57/#47. It landed
+after the v0.12.0 tag (`5234cca`), so it ships in 0.13.0. Linux package installs remain
+download-only until #56 option B (per-installer manifests + a signing step for `.deb`/`.rpm`,
+which carry no `.sig` today); that is now recorded as a constraint in `activeContext.md`, not
+as an open bug — do not re-report it.
