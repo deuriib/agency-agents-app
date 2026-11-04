@@ -22,13 +22,24 @@
 # inside the tagged commit; `pr-check.yml`'s `cargo-lock` job fails when the two
 # ever disagree.
 #
-# Required repository setting (Settings → Actions → General → Workflow
-# permissions): "Allow GitHub Actions to create and approve pull requests".
+# That refresh only happens because the release branch is pushed with a GitHub App
+# installation token. A push made with the repository's `GITHUB_TOKEN` starts no
+# workflow run at all — GitHub suppresses them to stop recursion — so
+# `release-lock.yml` never fired and the lock stayed one release behind (issue
+# #91). An App token is not `GITHUB_TOKEN`, so its push is a real event: the lock
+# syncs, and the release PR's checks run on that commit instead of waiting in an
+# "Approve workflows to run" state.
 #
-# Release pull requests are opened with the default GITHUB_TOKEN. GitHub still
-# creates `pull_request` workflow runs for them, but in an approval-required
-# state: a user with write access starts the checks once from the merge box
-# ("Approve workflows to run"). No PAT or app token is needed.
+# Credentials, the App's exact permissions, and key rotation:
+# `docs/BUILD.md#release-automation-token`. There is deliberately no `GITHUB_TOKEN`
+# fallback — a fallback is what let this ship broken in #85, because the job stays
+# green while `release-lock.yml` stays dead. A missing credential fails the job.
+#
+# Repository setting (Settings → Actions → General → Workflow permissions):
+# "Allow GitHub Actions to create and approve pull requests". It governs whether
+# Actions may create pull requests at all; leave it enabled. Whether an App token
+# also needs it is not documented either way — `gh api
+# repos/{owner}/{repo}/actions/permissions/workflow` reports the current value.
 
 name: Release Please
 
@@ -55,15 +66,37 @@ jobs:
       tag_name: ${{ steps.release.outputs.tag_name }}
       version: ${{ steps.release.outputs.version }}
     steps:
+      # First, so a missing or renamed credential fails in seconds instead of after
+      # a recursive submodule checkout. Unconditional on purpose: behind an `if:`
+      # this step would be skipped, and a skipped token step is indistinguishable
+      # from a working one until a release PR never syncs (#91).
+      #
+      # Downscoped to what release-please itself does: push the release branch and
+      # tag it, open and update the release PR, and apply its `autorelease:*`
+      # labels. `permission-*` can only narrow what the installation already
+      # grants; asking for more than the App has fails this step.
+      - name: Mint the release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+          permission-issues: write
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: recursive
 
+      # `token:` must not be `github.token` — a release branch pushed with it starts
+      # no workflow run, which is the entire bug.
       - name: Run release-please
         id: release
         uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
         with:
+          token: ${{ steps.app-token.outputs.token }}
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
 

@@ -352,3 +352,66 @@ The cleaner long-term fix is to cut macOS releases on a stable macOS box or a ma
 ## Secrets
 
 Never commit signing credentials, updater private keys, GitHub tokens, or notary credentials. Use local keychain items or files outside the repo with `0600` permissions.
+
+### Release automation token
+
+`release-please` pushes the release branch and `release-lock.yml` pushes the
+lockfile sync onto it. Both must push with a credential that is **not**
+`GITHUB_TOKEN`: a `GITHUB_TOKEN` push starts no workflow run, so the lock sync
+never fired and the release PR's checks never ran on it (issue #91).
+
+| Name | Kind | Purpose |
+| --- | --- | --- |
+| `RELEASE_APP_CLIENT_ID` | repository **variable** (not a secret) | identifies the release App in `client-id:` |
+| `RELEASE_APP_PRIVATE_KEY` | repository **secret** | the App's private key; mints the installation token |
+
+One-time setup: create an App (suggested name `agency-agents-release`) under
+Settings → Developer settings → GitHub Apps → New, with no webhook and no OAuth
+callback, and install it on this repository only. Grant these installation
+permissions:
+
+| App permission | Why |
+| --- | --- |
+| Contents: read and write | push the `release-please--**` branch, create the `vX.Y.Z` tag and the draft release |
+| Pull requests: read and write | open and update the release PR |
+| Issues: read and write | apply the `autorelease: pending` / `autorelease: tagged` labels |
+
+Each workflow narrows the minted token to what its own job does: `release-please.yml`
+asks for exactly the three above, while `release-lock.yml` asks for `contents: write`
+alone — it only commits one file and pushes it. A `permission-*` entry the
+installation does not grant fails the token step outright, so a permission
+mismatch is a loud failure rather than a degraded run.
+
+Once the App exists, its **Client ID** is on the App's *General* page. The private
+key is under **Credentials → Private keys → Generate a private key**; GitHub
+downloads a `.pem`. Set both once, values never echoed:
+
+```sh
+gh variable set RELEASE_APP_CLIENT_ID -R deuriib/agency-agents-app \
+  --body "<app client id>"   # App settings → Client ID
+gh secret set RELEASE_APP_PRIVATE_KEY -R deuriib/agency-agents-app \
+  < ~/downloads/release-app.private-key.pem
+gh secret list -R deuriib/agency-agents-app   # names only — never prints a value
+```
+
+The key goes in through a redirect; `gh secret set` never receives it on argv, so
+nothing lands in shell history. Delete the downloaded `.pem` after the upload.
+
+Keep the redirect on the same command: a blank line after the `\` ends it, `gh`
+falls back to its interactive prompt, and a multi-line key is stored as its first
+line only. That failure surfaces later as `Invalid keyData` from the mint step.
+
+**Rotation**: App settings → **Credentials** → *Private keys* → *Generate a private key*, then
+`gh secret set RELEASE_APP_PRIVATE_KEY -R deuriib/agency-agents-app < <new>.pem`, then delete the old key in
+the App settings. The secret name never changes, so no workflow edit is needed.
+
+**Failure mode**: there is no fallback credential. If the key is missing,
+misnamed, or revoked, the mint step fails and the job fails — which is the point,
+because a green run on `GITHUB_TOKEN` silently restores the #91 behaviour. If the
+key is valid but the App lost a permission, the same step fails with the API error
+naming that permission. `Invalid keyData` means the secret is not a parseable PEM
+— most often the interactive prompt stored only the first line; re-set it from the
+file with the redirect above.
+
+The token itself is a short-lived installation token (one hour, revoked at the end
+of the job); the private key is the only long-lived material.

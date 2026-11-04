@@ -10,10 +10,17 @@
 # This workflow runs on the release PR's branch — not after the release — so the
 # sync lands INSIDE the tagged commit instead of one commit after it.
 #
-# A push made with `GITHUB_TOKEN` does not trigger new workflow runs, so the
-# release PR's checks will not re-run on this commit. That is acceptable here
-# because the release PR's checks require a maintainer to start them anyway (see
-# the note in `release-please.yml`), which happens after this job lands.
+# That only happens because release-please pushes the branch with a GitHub App
+# installation token. A push made with `GITHUB_TOKEN` starts no workflow run at
+# all — GitHub suppresses them to stop recursion — so this workflow never fired
+# in its whole life (issue #91). This job pushes its own commit with the same App
+# token for the same reason: the push has to be a real event, or `PR Check` never
+# re-runs and the release PR's `cargo-lock` check describes the commit *before*
+# the sync.
+#
+# The run that push triggers is also the loop terminator: the head already
+# matches its manifest, so `git diff --quiet` exits before committing and nothing
+# is pushed. One extra no-op run per sync is the cost.
 #
 # The gate that catches a stale lock is the `cargo-lock` job in `pr-check.yml`;
 # this workflow is what keeps it from firing on release PRs.
@@ -36,15 +43,35 @@ jobs:
   sync:
     name: Sync Cargo.lock with the release version
     runs-on: ubuntu-24.04
+    # Not what authorizes the push any more — the App token is, downscoped to
+    # exactly contents: write. Left unchanged so this job's declared contract does
+    # not move in the same commit that changes how it authenticates.
     permissions:
       contents: write
     steps:
+      # Unconditional, and first: there is no `GITHUB_TOKEN` fallback. A fallback
+      # would reproduce #91 silently — a green job whose push starts no run, and a
+      # release PR whose checks stay pinned to a pre-sync commit.
+      - name: Mint the release App token
+        id: app-token
+        uses: actions/create-github-app-token@64ab729a6294000f5aa4a4bc0b73d1f32bc45510 # v3.3.0
+        with:
+          client-id: ${{ vars.RELEASE_APP_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_APP_PRIVATE_KEY }}
+          permission-contents: write
+
       - name: Checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           # The release branch already carries the bumped version; only the lock
           # has to move, so no submodules and no build are needed.
           fetch-depth: 1
+          # Load-bearing: checkout writes this token into the local git config,
+          # which is how the `git push` below authenticates as the App instead of
+          # as `GITHUB_TOKEN`. `persist-credentials` is true by default; stated
+          # explicitly because a default is a bad place to hide the mechanism.
+          persist-credentials: true
+          token: ${{ steps.app-token.outputs.token }}
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@e2a55d2ffb04f378e9626c28d38b36d230d1e12f # master

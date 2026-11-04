@@ -270,7 +270,10 @@ mise run sync-lock      # rewrites the agency-agents-app entry; touches nothing 
 
 Release PRs do not need that step by hand: `release-lock.yml` runs on the
 `release-please--**` branch and commits the sync into the release PR, so the
-tagged commit carries a lockfile that matches its manifest. The Rust jobs install the Tauri Linux prerequisites
+tagged commit carries a lockfile that matches its manifest. It only fires because
+the release App token pushes that branch — a `GITHUB_TOKEN` push starts no run at
+all — and its own sync commit is pushed the same way, so the `cargo-lock` check
+re-runs on the sync commit before the PR is merged. The Rust jobs install the Tauri Linux prerequisites
 (`libwebkit2gtk-4.1-dev`, `libgtk-3-dev`, `libayatana-appindicator3-dev`,
 `librsvg2-dev`, `patchelf`, `libssl-dev`).
 
@@ -364,8 +367,9 @@ manually.
 2. `release-please` keeps an open `chore: release X.Y.Z` PR that accumulates the
    changelog and bumps `package.json`, `package-lock.json`,
    `src-tauri/tauri.conf.json`, and `src-tauri/Cargo.toml`.
-   `src-tauri/Cargo.lock` is derived — the next cargo command refreshes the
-   local package entry.
+   `src-tauri/Cargo.lock` is not part of that commit: `release-lock.yml` syncs it
+   on the release branch, so the tagged commit carries a lockfile that matches its
+   manifest.
 3. Merge that PR when the release should ship. release-please creates the
    `vX.Y.Z` tag and a **draft** GitHub Release whose body is the generated
    changelog.
@@ -373,6 +377,9 @@ manually.
    (x64 + arm64 NSIS) and attaches them to the draft.
 5. Build and notarize macOS locally with `scripts/release.sh`, attach the DMGs
    and `latest.json`, then publish the draft.
+
+The GitHub App behind steps 2–3 (names, permissions, rotation) is documented in
+`docs/BUILD.md#release-automation-token`.
 
 ### Narrative release notes
 

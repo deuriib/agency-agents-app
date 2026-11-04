@@ -1,3 +1,5 @@
+> Superseded on the token question by [261103_release-please-app-token.md](./261103_release-please-app-token.md): the `GITHUB_TOKEN` trade-off described below is why #91 exists.
+
 # 261103_cargo-lock-sync
 
 ## Objective
