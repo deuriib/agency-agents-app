@@ -10,12 +10,14 @@ on `main` for two consecutive releases (`9084b5e` at 0.10.0, `3472831` at 0.11.0
 
 ## Outcome
 
-- ✅ **AC1 (wiring half)**: both workflows mint a GitHub App installation token
+- ✅ **AC1**: both workflows mint a GitHub App installation token
   (`actions/create-github-app-token`, pinned to `v3.3.0`) as their first,
   unconditional step, and pass it to the action that pushes — `token:` on
   `release-please-action`, `token:` on `actions/checkout` in `release-lock.yml`.
   There is deliberately no `GITHUB_TOKEN` fallback: a fallback keeps the job green
-  while the sync stays dead, which is the bug being fixed.
+  while the sync stays dead, which is the bug being fixed. Runtime verified:
+  `Release Please` run `41743818895` (this branch) ran `Mint the release App token`
+  and `Run release-please` to `success` with the App credential.
 - ✅ **AC6**: the false claims are gone — "No PAT or app token is needed" in
   `release-please.yml`, "the next cargo command refreshes the lock" in
   `CONTRIBUTING.md`, and "those checks require a maintainer to start them anyway"
@@ -110,9 +112,15 @@ Local only — nothing below exercises the credential.
 - `actions/create-github-app-token` at `v3.3.0` re-resolved to
   `64ab729a6294000f5aa4a4bc0b73d1f32bc45510`.
 - No credential-shaped literal anywhere in the diff.
+- Runtime: `Release Please` run `41743818895` on this branch — `Mint the release
+  App token` success, `Run release-please` success. The App is installed and the
+  three requested scopes are granted. A first upload failed with `Invalid keyData`
+  because an interactive `gh secret set` prompt stored only the first PEM line;
+  re-setting it from the file with a redirect fixed it. `docs/BUILD.md` records
+  that gotcha.
 
-Not verifiable locally: the mint step, the App's permissions, the push event, the
-sync commit, and the repair of the 0.11.0/0.10.0 drift.
+Not verifiable yet: the push event, the sync commit, and the repair of the
+0.11.0/0.10.0 drift. Those need a releasable commit on `main` and a release PR.
 
 ## Files
 

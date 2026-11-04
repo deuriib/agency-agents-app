@@ -397,6 +397,10 @@ gh secret list -R deuriib/agency-agents-app   # names only — never prints a va
 The key goes in through a redirect; `gh secret set` never receives it on argv, so
 nothing lands in shell history. Delete the downloaded `.pem` after the upload.
 
+Keep the redirect on the same command: a blank line after the `\` ends it, `gh`
+falls back to its interactive prompt, and a multi-line key is stored as its first
+line only. That failure surfaces later as `Invalid keyData` from the mint step.
+
 **Rotation**: App settings → **Credentials** → *Private keys* → *Generate a private key*, then
 `gh secret set RELEASE_APP_PRIVATE_KEY -R deuriib/agency-agents-app < <new>.pem`, then delete the old key in
 the App settings. The secret name never changes, so no workflow edit is needed.
@@ -405,7 +409,9 @@ the App settings. The secret name never changes, so no workflow edit is needed.
 misnamed, or revoked, the mint step fails and the job fails — which is the point,
 because a green run on `GITHUB_TOKEN` silently restores the #91 behaviour. If the
 key is valid but the App lost a permission, the same step fails with the API error
-naming that permission.
+naming that permission. `Invalid keyData` means the secret is not a parseable PEM
+— most often the interactive prompt stored only the first line; re-set it from the
+file with the redirect above.
 
 The token itself is a short-lived installation token (one hour, revoked at the end
 of the job); the private key is the only long-lived material.
