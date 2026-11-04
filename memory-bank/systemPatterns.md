@@ -122,6 +122,17 @@ macOS local release.sh ──► DMGs + .app.tar.gz + .sig ──► merge darwi
 - **Install**: `tauri-plugin-updater` fetches that cached manifest, verifies the minisign
   signature against the embedded pubkey, and swaps the bundle. The Linux payload is
   regenerated after the Wayland repack and re-signed.
+- **Capability is per build, not per release.** `tauri-utils` bakes the bundle type into
+  the binary and the plugin dispatches its installer from it, but a manifest carries one
+  artifact per OS/arch (`target()` is `{os}-{arch}`, no installer dimension). So a `.deb` /
+  `.rpm` install cannot consume the AppImage payload we serve on `linux-x86_64`. The
+  payload therefore carries two independent flags: `installable` (the release has
+  `latest.json`) and `inAppInstall` (this build can install in place). Neither implies the
+  other, and merging them is a bug, not a simplification. See `decisions.md#2026-11-04`.
+- **Errors are classified by cause, not by convenience.** An installer-format rejection and
+  a bundle-type refusal are local and deterministic; they get their own variants and are
+  never folded into `Network`. The failure lands after the download, so mislabelling it
+  sends the user to check a connection that is working.
 - **Never publish a partial manifest**: CI fails when a platform artifact is missing;
   `release.sh` fails when `latest.json` lacks Linux or Windows unless explicitly allowed.
 - **Verification is a task, not a ritual**: `mise run verify-updater` checks the published

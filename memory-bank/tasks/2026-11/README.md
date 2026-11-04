@@ -1,18 +1,35 @@
 # November 2026 — Antigravity parity + updater pipeline
 
 ## Current State
-**v0.9.0** (`00b9576`) shipped the Rules integration (PR #61, merged `1ab9453`) on top
-of the 0.8.x updater work. `main` is green. The v0.9.0 GitHub release is still a
-**draft** with Linux artifacts only: `latest.json`, the Windows payloads and the
-notarized macOS build are missing, so the updater cannot serve it yet.
+**v0.12.0** (`5234cca`, PR #95) is the latest tag. PR #102 (merged `3ba967d`) landed right
+after it, so the updater fixes it carries ship in **0.13.0**. `main` is green. Every
+release since 0.8.0 is still a **draft with Linux artifacts only**: `latest.json`, the
+Windows payloads and the notarized macOS build are missing, so the updater cannot serve
+them yet.
 
 ## Goals
-- [ ] Publish v0.9.0: signing secrets, local macOS release run, `verify-updater`.
-- [ ] Triage the #61 review follow-ups (#62–#72). Suggested order: #72 (submodules) →
-  #68 (rule vocabulary) → #62 (frontend tests) → #66 (workspace/category parity).
-- [ ] Native review of the 12-locale Rules strings.
+- [ ] Publish: signing secrets, local macOS release run, `verify-updater`.
+- [ ] Native review of the 12-locale strings (Rules, plus the three `updates.*` keys from
+  #102).
+- [ ] Decide #56 option B (per-installer manifests + signing for `.deb` / `.rpm`) or accept
+  download-only Linux packages permanently.
+- [ ] Remaining #61 follow-ups: #64, #65, #70, #71, #76, #98. #62, #63, #66, #68, #69 and
+  #72 have shipped.
 
 ## Recent Achievements
+- Made the updater stop promising what it cannot deliver (#56, #57, #47). A `.deb` / `.rpm`
+  install no longer offers an in-place update that could never succeed — the plugin picks
+  its installer from the bundle type baked into the binary, while a manifest carries one
+  artifact per platform and ours is the AppImage — so the build is told the truth, the
+  release's own installer is offered as a download, and the gate refuses *before* the
+  ~85 MB. `inAppInstall` joined `installable` in the payload because the first is a
+  property of the build and the second of the release; collapsing them is what produced
+  the bug. `InvalidUpdaterFormat` and `SelfUpdateUnsupported` are their own error variants,
+  so a local dead end is never reported as a network failure again. Release notes are now
+  flattened to plain text **before** truncation (#57), which also makes a half-cut URL
+  unrepresentable. The retired `agencyagents.app` host left the CSP, the network panel and
+  all 12 locales (#47). 596 → 626 Rust tests, 10/10 CI checks, zero new dependencies. See
+  [261104_updater-package-installs.md](./261104_updater-package-installs.md).
 - Stopped re-running the whole PR graph on every merge (issue #90), in the order the
   issue demanded: gate first, remove second. `main: PR gate` (`26500514`) requires the
   eight PR Check jobs plus `gitleaks`, each pinned to the GitHub Actions integration so a
