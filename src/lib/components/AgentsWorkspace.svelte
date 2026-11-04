@@ -470,13 +470,13 @@
 {/if}
 
 {#if installOpen && panelAgent}
-  <InstallModal title={i18n.t("agents.installAgentTitle", { name: panelAgent.name })} agentSlugs={[panelAgent.slug]} onClose={() => (installOpen = false)} />
+  <InstallModal title={i18n.t("agents.installAgentTitle", { name: panelAgent.name })} target={{ kind: "agents", agentSlugs: [panelAgent.slug] }} onClose={() => (installOpen = false)} />
 {/if}
 
 {#if bulkInstallOpen && selected.size > 0}
   <InstallModal
     title={i18n.t("agents.installSelectedTitle", { count: selected.size })}
-    agentSlugs={[...selected]}
+    target={{ kind: "agents", agentSlugs: [...selected] }}
     onClose={() => (bulkInstallOpen = false)}
   />
 {/if}
@@ -484,7 +484,7 @@
 {#if divisionInstallOpen && divisionMeta}
   <InstallModal
     title={i18n.t("agents.installDivisionTitle", { division: divisionMeta.label })}
-    agentSlugs={divisionMeta.slugs}
+    target={{ kind: "agents", agentSlugs: divisionMeta.slugs }}
     onClose={() => (divisionInstallOpen = false)}
   />
 {/if}

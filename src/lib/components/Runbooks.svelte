@@ -193,7 +193,7 @@
 {#if deployRb}
   <InstallModal
     title={i18n.t("runbooks.deployTitle", { runbook: runbookTitle(deployRb) })}
-    agentSlugs={resolvedSlugs(deployRb)}
+    target={{ kind: "agents", agentSlugs: resolvedSlugs(deployRb) }}
     onClose={() => (deployRb = null)}
   />
 {/if}

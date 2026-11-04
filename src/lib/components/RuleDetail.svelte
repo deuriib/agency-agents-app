@@ -9,13 +9,19 @@
    * two controls would let a user preview user-scope bytes while installing into
    * a project. Project scope is a directory picker result held in local state —
    * never a Projects-registry entry (TASK 21).
+   *
+   * The header also opens the shared destinations × harnesses grid (issue #92).
+   * That is an ADDITIONAL path: this pane's scope control and
+   * `RuleInstallControls` stay where they are as the precise, per-triple path.
    */
   import { open as openFolderDialog } from "@tauri-apps/plugin-dialog";
   import FolderOpenIcon from "@lucide/svelte/icons/folder-open";
   import TrashIcon from "@lucide/svelte/icons/trash-2";
+  import UploadIcon from "@lucide/svelte/icons/upload";
   import Button from "./Button.svelte";
   import DestructiveConfirm from "./DestructiveConfirm.svelte";
   import EmptyState from "./EmptyState.svelte";
+  import InstallModal from "./InstallModal.svelte";
   import LoadingState from "./LoadingState.svelte";
   import Pill from "./Pill.svelte";
   import RulePreview from "./RulePreview.svelte";
@@ -69,6 +75,22 @@
 
   /** Row awaiting uninstall confirmation. */
   let uninstallRow: RuleInstall | null = $state(null);
+
+  /** The bulk grid (#92) is opened from the header and owned right here. */
+  let installOpen = $state(false);
+
+  /**
+   * Accessible name of the grid entry point: the action plus the rule name.
+   * An invalid rule can never write files, so the disabled control states WHY
+   * (disabled-without-a-reason is a defect) — in `title` and in the name.
+   */
+  const installLabel = $derived(
+    view === null ? "" : i18n.t("rules.install.gridTitle", { rule: view.name }),
+  );
+  const installReason = $derived(isValid ? null : i18n.t("rules.install.reasonInvalid"));
+  const installAria = $derived(
+    installReason === null ? installLabel : `${installLabel} — ${installReason}`,
+  );
 
   /** Only the scopes the active harness actually declares (derived, never literal). */
   const availableScopes = $derived.by((): Scope[] => {
@@ -203,6 +225,18 @@
       <div class="rd-ident">
         <h2 class="rd-title">{view.name}</h2>
         <Pill tone="neutral">{view.category}</Pill>
+        <span class="rd-grid-open">
+          <Button
+            variant="secondary"
+            disabled={!isValid}
+            title={installReason ?? undefined}
+            ariaLabel={installAria}
+            onclick={() => (installOpen = true)}
+          >
+            {#snippet icon()}<UploadIcon size={14} />{/snippet}
+            {i18n.t("rules.install.gridOpen")}
+          </Button>
+        </span>
       </div>
       <p class="rd-desc">{view.description}</p>
     </header>
@@ -403,6 +437,17 @@
       </section>
     {/if}
   </div>
+
+  <!-- Bulk path (#92): the shared destinations × harnesses grid, owned here and
+       mounted only while a rule is selected. The inline panel above stays the
+       precise path; this never replaces it. -->
+  {#if installOpen}
+    <InstallModal
+      title={i18n.t("rules.install.gridTitle", { rule: view.name })}
+      target={{ kind: "rules", ruleSlugs: [view.slug] }}
+      onClose={() => (installOpen = false)}
+    />
+  {/if}
 {/if}
 
 <DestructiveConfirm
@@ -431,6 +476,8 @@
 
   .rd-head { display: flex; flex-direction: column; gap: var(--space-2); }
   .rd-ident { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+  /* The grid entry point sits at the trailing edge of the identity row. */
+  .rd-grid-open { display: inline-flex; margin-inline-start: auto; }
   .rd-title { font-size: var(--text-h1); font-weight: var(--fw-semibold); color: var(--color-text-primary); }
   .rd-desc { font-size: var(--text-body-sm); color: var(--color-text-secondary); line-height: var(--lh-normal); }
 
