@@ -3,10 +3,17 @@
 **State (2026-11-04)**: **PR #102 is merged** (`3ba967d`) — the updater surface no longer
 offers anything it cannot deliver. `.deb` / `.rpm` builds are told they cannot self-update
 (#56), release notes arrive as plain text (#57), and the retired `agencyagents.app` host is
-gone from the CSP, the network panel and the locales (#47). `main` is green: `mise run ci`
-passes locally (305s, 626 Rust tests, 90 frontend tests). `release-please` shipped
-**v0.12.0** (`5234cca`, PR #95) just before it, so PR #102 lands unreleased on `main` and
-will ship in **0.13.0**.
+gone from the CSP, the network panel and the locales (#47). It shipped as **v0.12.1**
+(`e924e09`, published 2026-11-04 03:36Z). `main` is green: `mise run ci` passes locally
+(305s, 626 Rust tests, 90 frontend tests).
+
+> **Correction (2026-11-04).** The first version of this file said PR #102 would ship in
+> `0.13.0` and repeated "every release since 0.8.0 is a draft with Linux assets only".
+> Both were wrong: `gh release list` shows **0.8.1 → 0.12.1 all published**, and `latest.json`
+> is live on `releases/latest/download`. Measured with `mise run verify-updater` on
+> v0.12.1: **3 of 5 platform keys OK** (`linux-x86_64`, `windows-x86_64`, `windows-aarch64`),
+> **`darwin-aarch64` and `darwin-x86_64` missing** → Result: **FAIL**. macOS is the only
+> gap; the publish blocker is much narrower than it had been recorded.
 
 - **Merged in PR #102 (`3ba967d`, 3 commits, 23 files, +1304/−52)**:
   - **Bundle-type capability.** `tauri-utils` bakes the bundle type into the binary and
@@ -32,9 +39,11 @@ will ship in **0.13.0**.
   stale vs missing) — #62, #63, #66, #68, #69 and #72 have shipped.
 
 **Current Focus**:
-1. **Publish.** Every release since 0.8.0 is a **draft with Linux assets only**. The
-   blocker has not moved: signing secrets plus a local macOS run
-   (`./scripts/release.sh`), then `mise run verify-updater -- --check-urls`.
+1. **Publish the macOS payload.** This is the whole remaining release gap. Linux and
+   Windows have been live since 0.8.1; only `darwin-aarch64` / `darwin-x86_64` are absent,
+   which is why `mise run verify-updater` still returns **FAIL**. CI cannot notarize, so it
+   needs a local `./scripts/release.sh` on the Mac, then
+   `mise run verify-updater -- --check-urls`.
 2. **Native review** of the 12-locale strings — Rules, and now the three new
    `updates.*` keys added in #102.
 3. **Decide on #56 option B.** Linux package installs can never self-update while the
@@ -49,9 +58,16 @@ will ship in **0.13.0**.
   is a property of the plugin plus the one-payload-per-platform manifest, not a bug. Do
   not "fix" it by pointing `linux-x86_64` at the `.deb` — that breaks the AppImage, which
   is the artifact that works.
-- `v0.12.0` and everything after 0.8.x is a **draft**; the updater cannot serve a release
-  until `latest.json` exists with all five platform keys.
+- **macOS has no updater payload.** `latest.json` carries three of five platform keys;
+  `darwin-aarch64` / `darwin-x86_64` are missing because notarization is local, so macOS
+  cannot install an update and `mise run verify-updater` fails. **Releases themselves are
+  published** (0.8.1 → 0.12.1), so "the release is a draft" is no longer the explanation for
+  anything — check `gh release list` before claiming it.
 - macOS still needs local notarization; CI cannot produce the DMGs.
+- **A live manifest confirms the #56 premise.** v0.12.1's `linux-x86_64` entry points at
+  `Agency.Agents_0.12.1_amd64.AppImage.tar.gz`, while the same release attaches a `.deb` and
+  an `.rpm` with no `.sig`. Both halves of the constraint are visible on a published
+  release, not inferred from plugin source.
 - The `agency-rules` `integrations/` tree upstream is **stale generated output** —
   regenerate before trusting a red parity run (`docs/BUILD.md`).
 - Multi-line rule values fail closed (C11) rather than emitting bytes that differ from

@@ -101,7 +101,14 @@ comments did not move with it.
 | New dependencies | — | **0** |
 | Files | — | 23 (+1304 / −52) |
 
-CI: **10/10 checks green** on PR #102 before merge. `mise run ci` locally in 305s.
+CI: **10/10 checks green** on PR #102 before merge. `mise run ci` locally in 305s. Shipped
+as **v0.12.1** (`e924e09`, published 2026-11-04).
+
+The #56 premise is visible on the published release, not just in plugin source: v0.12.1's
+`latest.json` serves `linux-x86_64` → `Agency.Agents_0.12.1_amd64.AppImage.tar.gz`, while
+the same release attaches a `.deb` and an `.rpm` **with no `.sig` beside either**. That is
+both halves of the constraint on one page: one payload per platform, and no signature to
+make a per-installer manifest possible.
 
 ## Not verified (honest status)
 

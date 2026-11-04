@@ -1,14 +1,15 @@
 # November 2026 — Antigravity parity + updater pipeline
 
 ## Current State
-**v0.12.0** (`5234cca`, PR #95) is the latest tag. PR #102 (merged `3ba967d`) landed right
-after it, so the updater fixes it carries ship in **0.13.0**. `main` is green. Every
-release since 0.8.0 is still a **draft with Linux artifacts only**: `latest.json`, the
-Windows payloads and the notarized macOS build are missing, so the updater cannot serve
-them yet.
+**v0.12.1** (`e924e09`, published 2026-11-04) carries PR #102 (`3ba967d`), the updater
+honesty pass. `main` is green. One release gap remains and it is macOS-only: `latest.json`
+is live on `releases/latest/download` with `linux-x86_64`, `windows-x86_64` and
+`windows-aarch64`, while `darwin-aarch64` / `darwin-x86_64` are missing — so
+`mise run verify-updater` returns **FAIL**. The releases themselves are **published**, not
+drafts, from 0.8.1 forward.
 
 ## Goals
-- [ ] Publish: signing secrets, local macOS release run, `verify-updater`.
+- [ ] Publish the macOS payload: local `./scripts/release.sh`, then `mise run verify-updater`.
 - [ ] Native review of the 12-locale strings (Rules, plus the three `updates.*` keys from
   #102).
 - [ ] Decide #56 option B (per-installer manifests + signing for `.deb` / `.rpm`) or accept
