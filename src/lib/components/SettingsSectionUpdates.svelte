@@ -57,6 +57,31 @@
   /** Available-update snapshot for the conditional card. */
   let info = $derived(updater.available);
 
+  /** True when the running build can install updates in place. `.deb` / `.rpm`
+      installs cannot (#56): the plugin's installer rejects the manifest's
+      payload every time, so the card offers the package download instead.
+      `null` before the first check tells us nothing, and nothing is disabled
+      on the strength of a guess. */
+  let canSelfUpdate = $derived(info === null || info.inAppInstall);
+
+  /** The release installer matching this build's package manager, when a
+      download is the only path. */
+  let packageDownload = $derived(info?.inAppInstall === false ? info.packageDownload : undefined);
+
+  /** The format name used in the explanatory sentence and the button label.
+      `deb` / `rpm` are package-manager names, identical in every locale. */
+  let packageFormat = $derived(packageDownload?.format ?? "");
+
+  /** One sentence explaining why a package build cannot update itself, reused
+      as the disabled-toggle hint so the reason cannot drift between the two
+      places that state it.
+
+      Deliberately format-agnostic: the sentence is also shown when the release
+      ships no matching asset, where `packageFormat` is empty and an
+      interpolated `.{format}` would render as a bare dot. The precise format
+      lives on the download button, which only exists when we know it. */
+  let packageBlockedHint = $derived(i18n.t("updates.packageSelfUpdateBlocked"));
+
   function onCheckNow() {
     void updater.checkNow();
   }
@@ -109,6 +134,14 @@
 
   function onOpenReleaseNotes() {
     if (releaseNotesUrl) void safeOpenUrl(releaseNotesUrl);
+  }
+
+  /** Save the release's own installer — the only action that can update a
+      `.deb` / `.rpm` install (#56). Falls back to the release page when the
+      release ships no asset for this format. */
+  function onDownloadPackage() {
+    const target = packageDownload?.url ?? releaseNotesUrl;
+    if (target) void safeOpenUrl(target);
   }
 
   /** Format the last-checked timestamp for the curious user. Locale-
@@ -209,21 +242,28 @@
 
   <!-- Row 2b: Install updates automatically. A stronger opt-in than
        auto-check: enabling it for the first time opens a consent dialog.
-       The runtime gate still honours Offline Mode and the skip-list. -->
+       The runtime gate still honours Offline Mode and the skip-list.
+
+       Disabled on a build that cannot self-update (#56). The toggle would
+       otherwise be a promise nothing keeps: the backend refuses every
+       background install there. Only disabled once a check has proved it —
+       before that, `canSelfUpdate` is true because we have no evidence. -->
   <div class="field">
-    <label class="toggle">
+    <label class="toggle" title={canSelfUpdate ? null : packageBlockedHint}>
       <input
         type="checkbox"
         checked={settings.effective.updateAutoInstall}
         onchange={onToggleAutoInstall}
-        disabled={settings.loading || settings.corruptOnDisk}
+        disabled={settings.loading || settings.corruptOnDisk || !canSelfUpdate}
         aria-describedby="auto-install-hint"
       />
       <span class="toggle-track" aria-hidden="true"></span>
       <span class="toggle-label">{i18n.t("updates.autoInstall")}</span>
     </label>
     <p class="hint" id="auto-install-hint">
-      {i18n.t("updates.autoInstallHint")}
+      {canSelfUpdate
+        ? i18n.t("updates.autoInstallHint")
+        : packageBlockedHint}
     </p>
   </div>
 
@@ -330,6 +370,37 @@
           <ExternalLink size={14} />
           {i18n.t("updates.viewRelease")}
         </button>
+      {:else if !info.inAppInstall}
+        <!-- A `.deb` / `.rpm` install cannot update itself (#56). Offering
+             "Install update" here is what bought the user ~85 MB of
+             bandwidth and a "Network error" for a failure that could never
+             succeed. The release's own installer is the action that works. -->
+        <p class="notes-body package-blocked">{packageBlockedHint}</p>
+        {#if packageDownload}
+          <button
+            type="button"
+            class="btn-primary"
+            onclick={onDownloadPackage}
+            disabled={offline}
+            title={i18n.t("updates.downloadPackageTitle", {
+              name: packageDownload.name,
+            })}
+          >
+            <Download size={14} />
+            {i18n.t("updates.downloadPackage", { format: packageFormat })}
+          </button>
+        {:else}
+          <button
+            type="button"
+            class="btn-secondary"
+            onclick={onOpenReleaseNotes}
+            disabled={offline}
+            title={i18n.t("updates.viewReleaseTitle", { version: info.version })}
+          >
+            <ExternalLink size={14} />
+            {i18n.t("updates.viewRelease")}
+          </button>
+        {/if}
       {:else}
         <button
           type="button"
@@ -649,13 +720,22 @@
     color: var(--color-warning-strong, #b45309);
   }
 
-  /* Release notes body — the manifest's free-form `notes` text. */
+  /* Release notes body — the release body, already reduced to plain text by
+     the backend (`github::releases::strip_markdown`), so `pre-wrap` is enough
+     and no Markdown renderer (or sanitizer) is needed. */
   .notes-body {
     margin: 0;
     font-size: var(--text-body-sm);
     color: var(--color-text-secondary);
     line-height: var(--lh-snug);
     white-space: pre-wrap;
+  }
+
+  /* Why this build cannot self-update (#56). Reads as an explanation, not as a
+     changelog, so it keeps a normal wrapping mode: `pre-wrap` would preserve a
+     stray line break in a translated sentence. */
+  .package-blocked {
+    white-space: normal;
   }
 
   /* Spinner used inline in buttons and progress rows. */

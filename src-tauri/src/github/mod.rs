@@ -74,7 +74,7 @@ pub use auth::{
     read_scopes, DeviceFlowStart, GithubStatusDto, PollResult, PollResultDto, Token,
     GITHUB_OAUTH_CLIENT_ID, GITHUB_OAUTH_SCOPES, KEYCHAIN_ACCOUNT_TOKEN, KEYCHAIN_SERVICE,
 };
-pub use releases::{fetch_channel_release, ReleaseInfo};
+pub use releases::{fetch_channel_release, PackageAsset, PackageFormat, ReleaseInfo};
 pub use stats::{fetch_repo_stats, RepoStats};
 #[allow(unused_imports)]
 pub use url::{extract_github_repo, parse_github_url, GithubRepo};

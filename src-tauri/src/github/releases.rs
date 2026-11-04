@@ -1,11 +1,11 @@
 //! GitHub Releases as the update source of truth.
 //!
-//! The in-app update check used to read the signed manifest at
-//! `agencyagents.app/updater.json`. It now asks GitHub "what is the
-//! latest published release?" and compares that tag with the running
-//! build. The signed manifest is still what the installer downloads
-//! (see `commands::updater`), but the *version decision* is owned by the
-//! published GitHub Release.
+//! The in-app update check used to read a signed manifest from a
+//! third-party host that has since been retired. It now asks GitHub
+//! "what is the latest published release?" and compares that tag with
+//! the running build. The signed manifest is still what the installer
+//! downloads (see `commands::updater`), but the *version decision* is
+//! owned by the published GitHub Release.
 //!
 //! ## Channels (#23)
 //!
@@ -37,7 +37,7 @@
 //!   bogus version.
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::commands::settings::UpdateChannel;
@@ -61,6 +61,55 @@ const MAX_NAME_CHARS: usize = 200;
 /// releases on this repo, so the newest prerelease is always on the first
 /// page without pagination.
 const BETA_RELEASE_PAGE_SIZE: usize = 30;
+
+/// A Linux package format a build can be installed from.
+///
+/// Serializes lowercase (`"deb"` / `"rpm"`) because it reaches the renderer
+/// inside [`PackageAsset`], where it picks the download label and the
+/// `{format}` placeholder of the explanatory sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageFormat {
+    Deb,
+    Rpm,
+}
+
+impl PackageFormat {
+    /// Lowercase name, matching the serde wire form. Used by the
+    /// `self_update_unsupported` error message.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackageFormat::Deb => "deb",
+            PackageFormat::Rpm => "rpm",
+        }
+    }
+
+    /// The extension that identifies this format among the release assets.
+    fn extension(self) -> &'static str {
+        match self {
+            PackageFormat::Deb => ".deb",
+            PackageFormat::Rpm => ".rpm",
+        }
+    }
+}
+
+/// A downloadable installer attached to the release.
+///
+/// Only the two package formats a Linux build can be installed from are
+/// represented: those are the ones whose in-place update path is closed
+/// (issue #56), so they are the only artifacts the UI has to link as a
+/// manual download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageAsset {
+    /// Which package manager installs this asset.
+    pub format: PackageFormat,
+    /// Asset filename as published, e.g. `Agency.Agents_0.13.0_amd64.deb`.
+    /// Shown in the download tooltip so the user knows what they are saving.
+    pub name: String,
+    /// Validated `https://github.com/...` download URL.
+    pub url: String,
+}
 
 /// A published GitHub Release, reduced to the fields the updater needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +136,11 @@ pub struct ReleaseInfo {
     /// uses this to choose the beta manifest endpoint, and to tell a
     /// beta-channel result apart from the beta fallback to stable.
     pub prerelease: bool,
+    /// The `.deb` / `.rpm` installers attached to this release, in asset
+    /// order. Empty when the release ships none. The caller selects the
+    /// one matching the running build's bundle type; a build that cannot
+    /// self-update links this instead of calling the installer (#56).
+    pub package_assets: Vec<PackageAsset>,
 }
 
 // ---------- Raw API shapes (subset of fields actually used) ----------
@@ -117,6 +171,11 @@ struct RawRelease {
 struct RawAsset {
     #[serde(default)]
     name: String,
+    /// GitHub's CDN-backed download URL. Absent on assets uploaded in a
+    /// state that has not finished processing, so it defaults to empty and
+    /// the asset is skipped.
+    #[serde(default)]
+    browser_download_url: String,
 }
 
 // ---------- Public API ----------
@@ -298,17 +357,312 @@ fn convert_raw_release(raw: RawRelease, repo: &GithubRepo) -> Option<ReleaseInfo
     let tag = raw.tag_name.trim().to_string();
     let html_url = safe_release_url(raw.html_url.as_deref(), repo, &tag);
     let installable = raw.assets.iter().any(|asset| asset.name == "latest.json");
+    let package_assets = package_assets(&raw.assets);
 
     Some(ReleaseInfo {
         version,
         tag,
         name: bounded_text(raw.name.as_deref(), MAX_NAME_CHARS),
-        notes: bounded_text(raw.body.as_deref(), MAX_NOTES_CHARS),
+        notes: bounded_notes(raw.body.as_deref()),
         published_at: raw.published_at,
         html_url,
         installable,
         prerelease: raw.prerelease,
+        package_assets,
     })
+}
+
+/// The `.deb` / `.rpm` installers among a release's assets.
+///
+/// An asset qualifies only when its name carries the extension **and** its
+/// download URL survives the same https + `github.com` check as the release
+/// page: the renderer hands the URL to the OS opener, so a hostile or
+/// malformed value must not survive parsing. Anything suspect is dropped
+/// rather than repaired — a missing package link degrades to "View release",
+/// while a poisoned one is a click away from executing.
+fn package_assets(assets: &[RawAsset]) -> Vec<PackageAsset> {
+    assets
+        .iter()
+        .filter_map(|asset| {
+            let name = asset.name.as_str();
+            let lower = name.to_ascii_lowercase();
+            let format = if lower.ends_with(PackageFormat::Deb.extension()) {
+                PackageFormat::Deb
+            } else if lower.ends_with(PackageFormat::Rpm.extension()) {
+                PackageFormat::Rpm
+            } else {
+                return None;
+            };
+            if !is_github_https(&asset.browser_download_url) {
+                tracing::warn!(
+                    asset = %name,
+                    "github releases: package asset has an untrusted download URL; ignoring"
+                );
+                return None;
+            }
+            Some(PackageAsset {
+                format,
+                name: name.to_string(),
+                url: asset.browser_download_url.clone(),
+            })
+        })
+        .collect()
+}
+
+/// Release notes as the Settings card can render them: Markdown flattened to
+/// plain text, **then** bounded.
+///
+/// Order is load-bearing. `release-please` writes the changelog as Markdown, so
+/// per-release bullets arrive as `* **scope:** summary ([#54](url))`. The card
+/// interpolates the value as text (no Markdown pass, no HTML, no sanitizer), so
+/// flattening here is what stops the user seeing `## [0.8.3](…)` verbatim
+/// (#57).
+///
+/// Truncating first would cut a link or a URL in half — a dangling `[` or a
+/// half-target — so the flattening has to happen before `bounded_text` applies
+/// `MAX_NOTES_CHARS`. Doing it in this order makes that class of bug
+/// unrepresentable rather than something to guard against.
+fn bounded_notes(body: Option<&str>) -> Option<String> {
+    let stripped = strip_markdown(body?);
+    bounded_text(Some(&stripped), MAX_NOTES_CHARS)
+}
+
+/// Flatten a Markdown release body to readable plain text.
+///
+/// Deliberately a hand-written scanner, not a Markdown parser and not a
+/// dependency: the only consumer is one Settings card, and building HTML would
+/// mean `dangerouslySetInnerHTML` plus a sanitizer. This emits text, so the
+/// card's `{notes}` interpolation stays auto-escaped.
+///
+/// Handled:
+///
+/// - ATX headings (`#` … `######`) → the heading text
+/// - unordered list markers (`*` / `-` / `+`) → `•`, indentation preserved
+/// - thematic breaks (`---`, `***`, `___`) → a blank line
+/// - inline links `[label](target)` → `label`, including link targets with
+///   their own parentheses and emphasis nested in the label
+/// - emphasis `**bold**`, `__bold__`, `*italic*` → inner text
+/// - code spans `` `code` `` → inner text
+/// - runs of blank lines → one blank line
+///
+/// **Not** handled, on purpose: emphasis markers wrapped in whitespace
+/// (`a * b * c`) and intraword underscores (`IMPLEMENTED_FORMATS`) stay
+/// literal. Underscore delimiters only open at a word boundary and only close
+/// before one, which is what keeps a changelog's `SNAKE_CASE` identifiers
+/// intact — the alternative mangles the most common identifier in these notes.
+///
+/// Tolerant by design: unbalanced syntax (`[text` with no `]`, an unclosed
+/// code span) passes through unchanged rather than being swallowed or
+/// half-consumed. Every early return is "emit the character and move on".
+fn strip_markdown(body: &str) -> String {
+    let mut out: Vec<String> = Vec::with_capacity(body.lines().count());
+    let mut blank_run = 0usize;
+    for raw_line in body.lines() {
+        let flattened = strip_inline(&strip_line_prefix(raw_line));
+        let line = flattened.trim_end();
+        if line.is_empty() {
+            blank_run += 1;
+            // Collapse any run of blank lines into exactly one.
+            if blank_run > 1 {
+                continue;
+            }
+            out.push(String::new());
+        } else {
+            blank_run = 0;
+            out.push(line.to_string());
+        }
+    }
+    while out.first().is_some_and(|line| line.is_empty()) {
+        out.remove(0);
+    }
+    while out.last().is_some_and(|line| line.is_empty()) {
+        out.pop();
+    }
+    out.join("\n")
+}
+
+/// Strip the block-level markers that only matter at the start of a line.
+///
+/// Kept separate from the inline scan because both `#` and `*` mean something
+/// different mid-sentence: a `*` at column zero is a bullet, a `*` between two
+/// words is emphasis. Splitting the two passes is what keeps `* **scope:** x`
+/// from being read as emphasis with a stray asterisk.
+fn strip_line_prefix(line: &str) -> String {
+    let indent_len = line.len() - line.trim_start().len();
+    let (indent, rest) = line.split_at(indent_len);
+
+    // Thematic break: three or more of the same marker and nothing else.
+    if let Some(marker) = rest.chars().next() {
+        if matches!(marker, '-' | '*' | '_')
+            && rest.chars().take_while(|c| *c == marker).count() >= 3
+            && rest.chars().all(|c| c == marker || c.is_whitespace())
+        {
+            return String::new();
+        }
+    }
+
+    // ATX heading: 1–6 `#` followed by a space (or nothing).
+    let hashes = rest.chars().take_while(|c| *c == '#').count();
+    if (1..=6).contains(&hashes)
+        && rest
+            .chars()
+            .nth(hashes)
+            .is_none_or(|c| c == ' ' || c == '\t')
+    {
+        return rest[hashes..].trim_start().to_string();
+    }
+
+    // Unordered list item: marker, then whitespace, then content.
+    let mut chars = rest.chars();
+    if let Some(marker) = chars.next() {
+        if matches!(marker, '*' | '-' | '+') {
+            let after = chars.as_str();
+            if after.starts_with(' ') || after.starts_with('\t') {
+                return format!("{indent}• {}", after.trim_start());
+            }
+        }
+    }
+
+    line.to_string()
+}
+
+/// Strip inline markers: links, emphasis, code spans.
+fn strip_inline(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut out = String::with_capacity(input.len());
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '`' => match find_char(&chars, i + 1, '`') {
+                Some(close) => {
+                    out.extend(&chars[i + 1..close]);
+                    i = close + 1;
+                }
+                None => {
+                    out.push('`');
+                    i += 1;
+                }
+            },
+            '[' => match match_link(&chars, i) {
+                Some((label_end, after_link)) => {
+                    let label: String = chars[i + 1..label_end].iter().collect();
+                    out.push_str(&strip_inline(&label));
+                    i = after_link;
+                }
+                None => {
+                    out.push('[');
+                    i += 1;
+                }
+            },
+            '*' | '_' => {
+                let marker_len = if chars.get(i + 1) == Some(&c) { 2 } else { 1 };
+                // An underscore only opens emphasis at a word boundary, so
+                // `IMPLEMENTED_FORMATS` and `snake_case` survive untouched.
+                if c == '_' && i > 0 && chars[i - 1].is_alphanumeric() {
+                    out.push(c);
+                    i += 1;
+                    continue;
+                }
+                if let Some(close) = find_delimiter(&chars, i + marker_len, c, marker_len) {
+                    let inner: String = chars[i + marker_len..close].iter().collect();
+                    let closes_cleanly = match (c, chars.get(close + marker_len)) {
+                        ('_', Some(next)) => !next.is_alphanumeric(),
+                        _ => true,
+                    };
+                    let inner_flanks = !inner.is_empty()
+                        && !inner.chars().next().is_some_and(char::is_whitespace)
+                        && !inner.chars().next_back().is_some_and(char::is_whitespace);
+                    if closes_cleanly && inner_flanks {
+                        out.push_str(&strip_inline(&inner));
+                        i = close + marker_len;
+                        continue;
+                    }
+                }
+                out.push(c);
+                i += 1;
+            }
+            _ => {
+                out.push(c);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Index of the next `needle` at or after `from`.
+fn find_char(chars: &[char], from: usize, needle: char) -> Option<usize> {
+    (from..chars.len()).find(|&i| chars[i] == needle)
+}
+
+/// Index of the next closing delimiter run at or after `from`.
+///
+/// For a one-character delimiter, an adjacent pair is skipped: `**bold**` must
+/// be read as bold, never as an italic `*` wrapping `*bold*`.
+fn find_delimiter(chars: &[char], from: usize, marker: char, marker_len: usize) -> Option<usize> {
+    let mut i = from;
+    while i < chars.len() {
+        if chars[i] == marker {
+            let paired = chars.get(i + 1) == Some(&marker);
+            if marker_len == 2 && paired {
+                return Some(i);
+            }
+            if marker_len == 1 && !paired {
+                return Some(i);
+            }
+            // Half of a longer run: step past the whole run.
+            i += if paired { 2 } else { 1 };
+            continue;
+        }
+        i += 1;
+    }
+    None
+}
+
+/// Match `[label](target)` at `start`, returning `(label_end, after_link)`.
+///
+/// Parentheses inside the target are counted, so
+/// `[x](https://en.wikipedia.org/wiki/Foo_(bar))` reduces to `x` instead of
+/// stopping at the first `)` and leaking the rest into the card. Unbalanced
+/// brackets or a missing `(` return `None`, which the caller renders literally.
+fn match_link(chars: &[char], start: usize) -> Option<(usize, usize)> {
+    let mut depth = 0usize;
+    let mut label_end = None;
+    let mut i = start;
+    while i < chars.len() {
+        match chars[i] {
+            '[' => depth += 1,
+            ']' => {
+                depth -= 1;
+                if depth == 0 {
+                    label_end = Some(i);
+                    break;
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    let label_end = label_end?;
+    if chars.get(label_end + 1) != Some(&'(') {
+        return None;
+    }
+    let mut depth = 0usize;
+    for (offset, c) in chars[label_end + 1..].iter().enumerate() {
+        let j = label_end + 1 + offset;
+        match c {
+            '(' => depth += 1,
+            ')' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some((label_end, j + 1));
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }
 
 /// Trim, collapse a trailing newline, and truncate on a char boundary.
@@ -331,12 +685,10 @@ fn bounded_text(value: Option<&str>, max_chars: usize) -> Option<String> {
 /// build the canonical URL from the validated repo + tag instead.
 fn safe_release_url(candidate: Option<&str>, repo: &GithubRepo, tag: &str) -> String {
     if let Some(url) = candidate {
-        if let Ok(parsed) = Url::parse(url) {
-            let is_github = parsed.scheme() == "https"
-                && parsed.host_str() == Some("github.com")
-                && parsed.username().is_empty()
-                && parsed.password().is_none();
-            if is_github {
+        if is_github_https(url) {
+            // `Url::parse` succeeded inside the check; re-parsing to get the
+            // normalized form is infallible here.
+            if let Ok(parsed) = Url::parse(url) {
                 return parsed.to_string();
             }
         }
@@ -345,6 +697,19 @@ fn safe_release_url(candidate: Option<&str>, repo: &GithubRepo, tag: &str) -> St
         "https://github.com/{}/{}/releases/tag/{}",
         repo.owner, repo.repo, tag
     )
+}
+
+/// True iff `candidate` parses as a credential-free `https://github.com/...`
+/// URL. Shared by the release-page check and the package-asset filter so the
+/// two cannot drift.
+fn is_github_https(candidate: &str) -> bool {
+    let Ok(parsed) = Url::parse(candidate) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str() == Some("github.com")
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
 }
 
 // ---------- Tests ----------
@@ -567,5 +932,301 @@ mod tests {
     #[test]
     fn beta_treats_an_empty_release_list_as_none() {
         assert!(parse_release_list(b"[]", &repo()).expect("parse").is_none());
+    }
+
+    // ---------- Package assets (#56) ----------
+
+    /// A release whose assets each carry a download URL. `assets` is
+    /// `(name, browser_download_url)` so the URL check can be exercised.
+    fn release_json_with_downloads(assets: &[(&str, &str)]) -> Vec<u8> {
+        let assets_json: Vec<String> = assets
+            .iter()
+            .map(|(name, url)| format!(r#"{{"name":"{name}","browser_download_url":"{url}"}}"#))
+            .collect();
+        format!(
+            r#"{{
+                "tag_name": "v0.13.0",
+                "body": "Patch release.",
+                "html_url": "https://github.com/deuriib/agency-agents-app/releases/tag/v0.13.0",
+                "assets": [{}]
+            }}"#,
+            assets_json.join(",")
+        )
+        .into_bytes()
+    }
+
+    const DEB_URL: &str = "https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/Agency.Agents_0.13.0_amd64.deb";
+    const RPM_URL: &str = "https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/Agency.Agents-0.13.0-1.x86_64.rpm";
+
+    /// The two formats whose in-place path the plugin closes are extracted;
+    /// everything else on the release (AppImage tarball, `latest.json`, the
+    /// `.sig` files) is ignored.
+    #[test]
+    fn parse_extracts_deb_and_rpm_assets() {
+        let bytes = release_json_with_downloads(&[
+            (
+                "latest.json",
+                "https://github.com/x/y/releases/download/v0.13.0/latest.json",
+            ),
+            (
+                "Agency.Agents_0.13.0_amd64.AppImage.tar.gz",
+                "https://github.com/x/y/releases/download/v0.13.0/AppImage.tar.gz",
+            ),
+            ("Agency.Agents_0.13.0_amd64.deb", DEB_URL),
+            ("Agency.Agents-0.13.0-1.x86_64.rpm", RPM_URL),
+            (
+                "Agency.Agents_0.13.0_amd64.deb.sig",
+                "https://github.com/x/y/releases/download/v0.13.0/deb.sig",
+            ),
+        ]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+
+        assert_eq!(
+            release.package_assets,
+            vec![
+                PackageAsset {
+                    format: PackageFormat::Deb,
+                    name: "Agency.Agents_0.13.0_amd64.deb".into(),
+                    url: DEB_URL.into(),
+                },
+                PackageAsset {
+                    format: PackageFormat::Rpm,
+                    name: "Agency.Agents-0.13.0-1.x86_64.rpm".into(),
+                    url: RPM_URL.into(),
+                },
+            ]
+        );
+    }
+
+    /// A release with no package installers (the AppImage-only case) yields an
+    /// empty list rather than an error.
+    #[test]
+    fn parse_reports_no_package_assets_when_the_release_ships_none() {
+        let bytes = release_json_with_downloads(&[(
+            "Agency.Agents_0.13.0_amd64.AppImage.tar.gz",
+            "https://github.com/x/y/releases/download/v0.13.0/AppImage.tar.gz",
+        )]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+        assert!(release.package_assets.is_empty());
+    }
+
+    /// The download URL is handed to the OS opener, so an asset served from a
+    /// host we do not control is dropped, not repaired.
+    #[test]
+    fn parse_drops_package_assets_with_an_untrusted_download_url() {
+        let bytes = release_json_with_downloads(&[
+            (
+                "Agency.Agents_0.13.0_amd64.deb",
+                "https://evil.example/Agency.Agents_0.13.0_amd64.deb",
+            ),
+            ("Agency.Agents-0.13.0-1.x86_64.rpm", "not a url"),
+            // Plain-http github is not good enough either.
+            (
+                "Agency.Agents_0.13.0_arm64.deb",
+                "http://github.com/x/y/releases/download/v0.13.0/a.deb",
+            ),
+        ]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+        assert!(
+            release.package_assets.is_empty(),
+            "untrusted download URLs must not survive parsing: {:?}",
+            release.package_assets
+        );
+    }
+
+    /// The renderer switches on `format` to pick the download label, so the
+    /// lowercase wire form is part of the contract.
+    #[test]
+    fn package_asset_serializes_lowercase_format_in_camel_case() {
+        let asset = PackageAsset {
+            format: PackageFormat::Deb,
+            name: "Agency.Agents_0.13.0_amd64.deb".into(),
+            url: DEB_URL.into(),
+        };
+        let v = serde_json::to_value(&asset).unwrap();
+        assert_eq!(v["format"], "deb");
+        assert_eq!(v["name"], "Agency.Agents_0.13.0_amd64.deb");
+        assert_eq!(v["url"], DEB_URL);
+
+        let v = serde_json::to_value(PackageAsset {
+            format: PackageFormat::Rpm,
+            ..asset
+        })
+        .unwrap();
+        assert_eq!(v["format"], "rpm");
+    }
+
+    #[test]
+    fn package_format_as_str_matches_its_wire_form() {
+        assert_eq!(PackageFormat::Deb.as_str(), "deb");
+        assert_eq!(PackageFormat::Rpm.as_str(), "rpm");
+    }
+
+    // ---------- Release-notes flattening (#57) ----------
+
+    /// Headings lose their `#` markers. This is the first line the reporter
+    /// saw verbatim in the card.
+    #[test]
+    fn strip_removes_heading_markers() {
+        assert_eq!(strip_markdown("## Summary"), "Summary");
+        assert_eq!(strip_markdown("###### Deep"), "Deep");
+        // A `#` that is not a heading (no space) is a hashtag, not a heading.
+        assert_eq!(strip_markdown("#57 is fixed"), "#57 is fixed");
+    }
+
+    /// Bullet markers become a real bullet character, and indentation survives
+    /// so a nested list still reads as nested.
+    #[test]
+    fn strip_turns_list_markers_into_bullets() {
+        assert_eq!(
+            strip_markdown("* one\n- two\n+ three"),
+            "• one\n• two\n• three"
+        );
+        assert_eq!(strip_markdown("  * nested"), "  • nested");
+    }
+
+    /// The exact shape `release-please` writes: heading link, bold scope,
+    /// bullet, and a trailing `[#54](url)` reference.
+    #[test]
+    fn strip_flattens_a_release_please_changelog() {
+        let body = "## [0.8.3](https://github.com/deuriib/agency-agents-app/compare/v0.8.2...v0.8.3) (2026-11-02)\n\n\n### Refactors\n\n* **registry:** read IMPLEMENTED_FORMATS from a shared JSON ([#54](https://github.com/deuriib/agency-agents-app/issues/54)) (abc1234)\n";
+        assert_eq!(
+            strip_markdown(body),
+            "0.8.3 (2026-11-02)\n\nRefactors\n\n• registry: read IMPLEMENTED_FORMATS from a shared JSON (#54) (abc1234)"
+        );
+    }
+
+    /// `[label](target)` reduces to the label. The card's own \"Release notes ↗\"
+    /// link already carries the URL, so nothing is lost.
+    #[test]
+    fn strip_reduces_inline_links_to_their_label() {
+        assert_eq!(
+            strip_markdown("see [the docs](https://example.test/a) now"),
+            "see the docs now"
+        );
+    }
+
+    /// A target containing parentheses must not stop at the first `)`, which
+    /// would leak `_(bar))` into the card.
+    #[test]
+    fn strip_handles_a_link_target_with_parentheses() {
+        assert_eq!(
+            strip_markdown("[x](https://en.wikipedia.org/wiki/Foo_(bar))"),
+            "x"
+        );
+    }
+
+    /// Emphasis nested inside a link label is stripped too — the case that
+    /// makes sure link handling recurses rather than slicing raw text.
+    #[test]
+    fn strip_handles_emphasis_nested_in_a_link_label() {
+        assert_eq!(strip_markdown("[**0.8.3**](https://example.test)"), "0.8.3");
+    }
+
+    #[test]
+    fn strip_removes_bold_and_italic_markers() {
+        assert_eq!(
+            strip_markdown("**bold** and *it* and __b__"),
+            "bold and it and b"
+        );
+    }
+
+    /// Underscores inside identifiers are not emphasis. `SNAKE_CASE` is the
+    /// most common thing in these notes after bullets.
+    #[test]
+    fn strip_leaves_intraword_underscores_alone() {
+        assert_eq!(
+            strip_markdown("read IMPLEMENTED_FORMATS from JSON"),
+            "read IMPLEMENTED_FORMATS from JSON"
+        );
+    }
+
+    #[test]
+    fn strip_removes_code_span_backticks() {
+        assert_eq!(strip_markdown("run `cargo test` now"), "run cargo test now");
+    }
+
+    /// Unbalanced syntax is emitted literally, never swallowed: a hostile or
+    /// truncated body must not eat the rest of the text.
+    #[test]
+    fn strip_tolerates_unbalanced_markdown() {
+        assert_eq!(
+            strip_markdown("[text without a close"),
+            "[text without a close"
+        );
+        assert_eq!(strip_markdown("an `unclosed span"), "an `unclosed span");
+        assert_eq!(
+            strip_markdown("[label] without a target"),
+            "[label] without a target"
+        );
+        assert_eq!(strip_markdown("* lone marker"), "• lone marker");
+        assert_eq!(strip_markdown("a * b * c"), "a * b * c");
+    }
+
+    /// Thematic breaks vanish into a blank line rather than a row of dashes.
+    #[test]
+    fn strip_drops_thematic_breaks() {
+        assert_eq!(strip_markdown("one\n\n---\n\ntwo"), "one\n\ntwo");
+        assert_eq!(strip_markdown("one\n***\ntwo"), "one\n\ntwo");
+    }
+
+    /// Runs of blank lines collapse to one, and the result has no leading or
+    /// trailing blank line — the card should not start with an empty row.
+    #[test]
+    fn strip_collapses_blank_line_runs() {
+        assert_eq!(strip_markdown("\n\n\none\n\n\n\ntwo\n\n\n"), "one\n\ntwo");
+    }
+
+    /// Flattening before bounding is what keeps a URLs out of the truncated
+    /// tail: nothing to cut in half, so the ellipsis can never dangle.
+    #[test]
+    fn notes_are_flattened_before_they_are_truncated() {
+        // A body whose 4 000-character bound lands inside the last link.
+        let filler = "x".repeat(MAX_NOTES_CHARS - 10);
+        let body =
+            format!("{filler}[a-link-with-a-long-target](https://example.test/very/long/target)");
+        let notes = bounded_notes(Some(&body)).expect("notes");
+
+        assert!(
+            !notes.contains('['),
+            "a dangling link marker survived: {notes}"
+        );
+        assert!(!notes.contains("https://"), "a half-URL survived: {notes}");
+        assert!(
+            notes.ends_with('…'),
+            "expected a truncation marker: {notes}"
+        );
+        assert_eq!(notes.chars().count(), MAX_NOTES_CHARS + 1);
+    }
+
+    /// A body shorter than the bound comes through fully flattened.
+    #[test]
+    fn notes_under_the_bound_keep_their_content() {
+        let notes = bounded_notes(Some("### Fixed\n* **updater:** the thing\n"));
+        assert_eq!(notes.as_deref(), Some("Fixed\n• updater: the thing"));
+    }
+
+    /// Whitespace-only and empty bodies stay `None` rather than becoming an
+    /// empty card row.
+    #[test]
+    fn notes_of_blank_bodies_are_none() {
+        assert!(bounded_notes(Some("   \n\n\t\n")).is_none());
+        assert!(bounded_notes(None).is_none());
+    }
+
+    /// End to end: the release the bug was reported against renders clean.
+    #[test]
+    fn parse_flattens_the_release_notes_it_stores() {
+        let bytes = release_json("v0.8.3", &["latest.json"]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+        assert_eq!(release.notes.as_deref(), Some("Fixed the updater."));
     }
 }

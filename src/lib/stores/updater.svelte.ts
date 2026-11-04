@@ -140,6 +140,8 @@ class UpdaterStore {
             pubDate: outcome.pubDate,
             releaseUrl: outcome.releaseUrl,
             installable: outcome.installable,
+            inAppInstall: outcome.inAppInstall,
+            packageDownload: outcome.packageDownload,
             skipped: outcome.skipped,
           };
           break;

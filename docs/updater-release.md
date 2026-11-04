@@ -268,3 +268,29 @@ hand is how a release ends up with a signature for the wrong file.
 | CI fails with `TAURI_SIGNING_PRIVATE_KEY is empty` | The repository secrets were never set | `mise run set-updater-secrets` on the machine holding the key; Linux/Windows is fine |
 | An installed app rejects the new release after a key rotation | The installed binary embeds the old `pubkey` | Ship a transition release signed with the old key, or install one release manually |
 | macOS offers an update that fails | A CI-only manifest has no `darwin-*` entry | Add a `macos-latest` build job, or ignore macOS in this fork |
+| A `.deb` / `.rpm` install shows "Download .deb" instead of "Install update" | Expected, by design (#56). See below | Download the package and install it over the old one |
+| `invalid updater binary format` on a package install | A `.deb` / `.rpm` build handed the AppImage to `install_deb` / `install_rpm` | Fixed in #56: those builds no longer attempt an in-place install |
+
+### Linux package installs are download-only (#56)
+
+`.deb` and `.rpm` installs cannot update themselves. That is a property of the
+updater plugin, not of this app, and no manifest can fix it today:
+
+- `tauri-plugin-updater` picks its installer from the bundle type patched into
+the **binary** at build time (`tauri_utils::config::BundleType`), so a package
+install always calls `install_deb` / `install_rpm`.
+- Those functions validate the payload and reject anything that is not a real
+`.deb` / `.rpm`.
+- A Tauri manifest can only expose **one** artifact per OS/arch —
+`tauri_plugin_updater::target()` builds its key as `{os}-{arch}`, with no
+installer dimension — so `linux-x86_64` carries exactly one payload. Ours is the
+AppImage tarball, because that is the artifact that *can* self-update.
+
+So the app tells the truth instead of failing: the Updates card says the build
+cannot update itself, explains why, and offers the release's matching package
+as a download. Nothing is fetched until the user clicks.
+
+Making Linux package installs genuinely self-updatable is a separate, larger
+change: per-installer manifests (`latest-deb.json`, `latest-rpm.json`) plus a
+signing step for `.deb` / `.rpm`, which do not carry a `.sig` today. See #56
+option B.
