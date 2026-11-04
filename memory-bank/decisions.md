@@ -1,5 +1,78 @@
 # Decisions (ADRs) — Agency Agents
 
+## 2026-11-04 — Gate `main` first, then stop re-running the PR graph on every push
+
+**Context.** Issue #90. `pr-check.yml` ran all eight jobs on `pull_request` and again
+on `push: main`, so every merge repeated the graph on a tree that had just been
+tested: 243s of job time and 9 billed minutes per merge (run `41754881874`), plus a
+duplicate 9s gitleaks scan in `41754881875`.
+
+The obvious fix — delete `push: [main]` — was blocked by an honest counter-argument.
+The merge commit is a new SHA, and nothing forced a PR to be rebased before merging,
+so a PR merged while behind `main` produced a tree that was never tested. `main` was
+not hardened at all: `gh api .../rulesets` returned `[]` and `branches/main/protection`
+404'd, which made the push-to-main run the only post-merge signal. That signal had
+already earned its keep — the `cargo-lock` job failed on `main` twice
+(`41744617675`, `41736166805`) after releases merged with a stale lock.
+
+**Decision.**
+
+1. **Gate first, remove second.** Ruleset `main: PR gate` (`26500514`) targets
+   `~DEFAULT_BRANCH` with `required_status_checks` (the eight `pr-check.yml` jobs plus
+   `gitleaks`), `strict_required_status_checks_policy`, `non_fast_forward` and
+   `deletion`. It went live before the workflow change, so the PR that removed the
+   duplicate was validated by the rule it depends on.
+2. **Pin every required context to `integration_id: 15368`** (GitHub Actions). A check
+   *name* is not a trust boundary: without the pin, a third-party App could publish a
+   green check run called `Rust tests` over a red PR.
+3. **`allow_update_branch` → `true`.** It was `false`, which would have turned
+   "require branches up to date" into a local rebase plus force-push on every stale PR.
+   Enabled, the requirement is a button. A gate that is annoying is a gate that gets
+   switched off within a month.
+4. **Three jobs become `pull_request`-only**: `rust-lint`, `rust-test`, `frontend` —
+   the ones that compile or run `npm ci`.
+5. **Four jobs keep running on `push: main`** as a canary: `rust-fmt`, `cargo-lock`,
+   `scripts`, `vendor` — manifest and pinned-artifact reads, 39s total.
+6. **`gitleaks` becomes the ninth required check** and loses `push: [main]`; it keeps
+   `pull_request` and the weekly `schedule`. Without the required check, dropping the
+   push trigger would leave a secret unseen until Monday's cron — the cleanup, not the
+   gate.
+7. **`release-please.yml` untouched.** `push: main` is its trigger, not a duplicate.
+   `pages.yml` and `sync-labels.yml` are path-filtered deploys.
+
+**Alternatives rejected.**
+
+- **Deleting `push: [main]` first, gating later.** Would delete the only post-merge
+  check while nothing enforced green PRs.
+- **Classic branch protection.** A ruleset is declarative, exportable and the direction
+  GitHub is moving; `branches/main/protection` is the legacy surface.
+- **A merge queue.** Correct for a busy repo, but it needs `merge_group` plumbing in
+  every workflow, and `strict_required_status_checks_policy` already guarantees an
+  up-to-date head on a squash-only repository.
+- **A bypass for the admin role.** Would restore exactly the hole the issue describes:
+  a path that lands a commit on `main` nobody validated. The escape hatch is editing the
+  ruleset, which is deliberate and visible.
+- **The canary in its own workflow file.** Honours AC2's literal wording, but the file
+  would duplicate the `cargo-lock` and `vendor` steps and drift silently from
+  `pr-check.yml`. Three `if:` guards degrade safely instead: a job added without one just
+  runs on both events, which is the old behaviour.
+
+**Consequences.** Per merge, 252s of job time becomes 39s (−85%) and 10 billed minutes
+become 4. `main` can no longer be updated without a green PR — including by a direct
+push, which returns `GH013: Required status check ... is expected` (verified against a
+sacrificial ruleset on a throwaway ref, not assumed), and therefore a correction to a red
+`main` must also be a PR. The gate is **not** unskippable: it declares no
+`bypass_actors`, but a repository admin can still edit or delete the ruleset or use the
+API administrator override. `CONTRIBUTING.md#main-is-gated` says so plainly, because a
+hardening claim the first curious maintainer can disprove costs the rest of the document
+its credibility. Runner minutes on this public fork were never billed, so the win is wall
+clock, concurrency slots and history noise — and `Release Please` still costs 760s of job
+time per release merge, which is where any real runner-time work would go.
+
+**References**: `.github/workflows/pr-check.yml`, `.github/workflows/gitleaks.yml`,
+`CONTRIBUTING.md`, PR #99 (`d186253`), probe PR #100, runs `41754881874` / `41759214920`,
+`tasks/2026-11/261104_drop-push-main-graph.md`.
+
 ## 2026-11-03 — The catalog and rule contracts are pinned submodules, generated into the tree
 
 **Context.** Issue #72. The app consumed `agency-agents` and `agency-rules` by

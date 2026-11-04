@@ -15,6 +15,7 @@
   known issues, and hard-won gotchas (each_key_duplicate, icon re-embed, port 1430, screenshots).
 - `tasks/2026-06/` — monthly README + per-task docs (Phase 0 fork, Phase 1 corpus+discover, etc.).
 - [tasks/2026-09/README.md](tasks/2026-09/README.md) — September 2026 (AppImage child-env fix; the release backlog)
-- [tasks/2026-11/README.md](tasks/2026-11/README.md) — November 2026 (Antigravity per-role tool declarations; tools.json schema gate; updater pipeline; Rules integration)
+- [tasks/2026-11/README.md](tasks/2026-11/README.md) — November 2026 (Antigravity per-role tool declarations; tools.json schema gate; updater pipeline; Rules integration; the main PR gate)
+  - [261104_drop-push-main-graph.md](tasks/2026-11/261104_drop-push-main-graph.md) — gate `main` first, then stop re-running the PR graph on every push
   - [261103_rules-integration.md](tasks/2026-11/261103_rules-integration.md) — native rule compilation, second corpus, ledger domain discriminator, Rules workspace
   - [261102_updater-pipeline.md](tasks/2026-11/261102_updater-pipeline.md) — signed `latest.json`, stable/beta channels, and the release runbook
