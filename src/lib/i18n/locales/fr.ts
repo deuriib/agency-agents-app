@@ -544,7 +544,6 @@ const fr = {
   "network.githubSourceDesc": "Source du catalogue : git clone/pull d’agency-agents, ou archive tar de l’instantané. Uniquement quand vous configurez une source gérée ou un clone, ou quand vous faites un pull.",
   "network.githubApiDesc": "Statistiques du dépôt du catalogue (étoiles, forks, issues), connexion à GitHub (par code d’appareil) et actions étoile/suivi. Facultatif.",
   "network.githubAssetsDesc": "Avatars et fichiers de version référencés dans les réponses de GitHub.",
-  "network.updaterDesc": "Recherche de mises à jour de l’app : manifeste signé du programme de mise à jour. Respecte vos réglages de mise à jour ci-dessous.",
   "network.defaultBrowser": "Navigateur par défaut",
   "network.browserDesc": "Les liens externes sont confiés à la commande open(1) de macOS. Aucun appel réseau de notre part.",
   "network.everyCall": "Chaque appel sortant est listé ici et n’est émis que lorsque vous effectuez une action qui l’exige. Ni télémétrie, ni statistiques d’usage, ni compte obligatoire.",

@@ -503,7 +503,6 @@ const de = {
   "network.githubSourceDesc": "Katalogquelle – Git-Klon/Pull von agency-agents oder der Snapshot-Tarball. Nur wenn Sie eine verwaltete/Klonquelle oder einen Pull bereitstellen.",
   "network.githubApiDesc": "Katalog-Repo-Statistiken (Sterne/Forks/Probleme), GitHub-Anmeldung (Gerätefluss) und Stern-/Beobachtungsaktionen. Optional.",
   "network.githubAssetsDesc": "Avatare und Release-Assets, auf die in GitHub-Antworten verwiesen wird.",
-  "network.updaterDesc": "App-Update-Prüfungen – das signierte Updater-Manifest. Berücksichtigt Ihre Update-Einstellungen unten.",
   "network.defaultBrowser": "Standardbrowser",
   "network.browserDesc": "Beim Öffnen externer Links gehen Sie zu macOS open(1). Kein Netzwerkanruf von uns.",
   "network.everyCall": "Jeder ausgehende Anruf wird hier aufgelistet und nur dann ausgelöst, wenn Sie eine entsprechende Aktion ausführen. Keine Telemetrie, keine Analysen, keine Konten erforderlich.",

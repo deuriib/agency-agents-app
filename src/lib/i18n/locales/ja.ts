@@ -503,7 +503,6 @@ const ja = {
   "network.githubSourceDesc": "カタログ ソース — agency-agents の git clone/pull、またはスナップショット tarball。マネージド/クローン ソースまたはプルをプロビジョニングする場合のみ。",
   "network.githubApiDesc": "カタログ リポジトリ統計 (スター/フォーク/問題)、GitHub サインイン (デバイス フロー)、およびスター/ウォッチ アクション。オプション。",
   "network.githubAssetsDesc": "GitHub 応答によって参照されるアバターとリリース アセット。",
-  "network.updaterDesc": "アプリの更新チェック — 署名されたアップデーター マニフェスト。以下のアップデート設定を尊重します。",
   "network.defaultBrowser": "既定のブラウザ",
   "network.browserDesc": "外部リンクを開くと、macOS open(1) にハンドオフされます。弊社からのネットワーク通話ではありません。",
   "network.everyCall": "すべてのアウトバウンド コールはここにリストされ、必要なアクションを実行した場合にのみ起動されます。テレメトリ、分析、アカウントは必要ありません。",

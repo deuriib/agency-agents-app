@@ -503,7 +503,6 @@ const zhTW = {
   "network.githubSourceDesc": "目錄來源 — agency-agents 的 git clone/pull 或快照 tarball。僅當你配置托管/克隆來源或拉取時。",
   "network.githubApiDesc": "目錄倉庫統計（星標/Fork/Issue）、GitHub 登入（裝置流程）以及加星/關注操作。可選。",
   "network.githubAssetsDesc": "GitHub 回應引用的頭像和發布資產。",
-  "network.updaterDesc": "應用程式更新檢查 — 簽署的更新程式清單。尊重您下面的更新設定。",
   "network.defaultBrowser": "預設瀏覽器",
   "network.browserDesc": "開啟外部連結會交給 macOS open(1)。這不是由我們發起的網路請求。",
   "network.everyCall": "這裡列出了每個出站呼叫，並且僅在您執行需要它的操作時才會觸發。無需遙測、無需分析、無需帳戶。",

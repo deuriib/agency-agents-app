@@ -503,7 +503,6 @@ const ko = {
   "network.githubSourceDesc": "카탈로그 소스 — agency-agents의 git clone/pull 또는 스냅샷 tarball. 관리형/복제 소스를 프로비저닝하거나 가져오는 경우에만 해당됩니다.",
   "network.githubApiDesc": "카탈로그 저장소 통계(별표/포크/문제), GitHub 로그인(장치 흐름) 및 별표/감시 작업. 선택 과목.",
   "network.githubAssetsDesc": "GitHub 응답에서 참조하는 아바타 및 릴리스 자산입니다.",
-  "network.updaterDesc": "앱 업데이트 확인 — 서명된 업데이트 프로그램 매니페스트. 아래 업데이트 설정을 준수합니다.",
   "network.defaultBrowser": "기본 브라우저",
   "network.browserDesc": "외부 링크를 열면 macOS open(1)로 전달됩니다. 우리의 네트워크 통화가 아닙니다.",
   "network.everyCall": "모든 아웃바운드 통화는 여기에 나열되며 필요한 조치를 취할 때만 실행됩니다. 원격 측정, 분석, 계정이 필요하지 않습니다.",

@@ -543,7 +543,6 @@ const en = {
   "network.githubSourceDesc": "Catalog source — git clone/pull of agency-agents, or the snapshot tarball. Only when you provision a managed/clone source or pull.",
   "network.githubApiDesc": "Catalog repo stats (stars/forks/issues), GitHub sign-in (device flow), and star/watch actions. Optional.",
   "network.githubAssetsDesc": "Avatars and release assets referenced by GitHub responses.",
-  "network.updaterDesc": "App update checks — the signed updater manifest. Honors your update settings below.",
   "network.defaultBrowser": "Default browser",
   "network.browserDesc": "Opening external links hands off to macOS open(1). Not a network call from us.",
   "network.everyCall": "Every outbound call is listed here and fires only when you take an action that needs it. No telemetry, no analytics, no accounts required.",

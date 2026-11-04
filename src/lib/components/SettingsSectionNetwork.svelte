@@ -33,6 +33,12 @@
   }
 
   type PathStatus = { label: string; desc: string; allowed: boolean };
+  /** Every origin the app can reach, mirroring the CSP `connect-src` in
+      `tauri.conf.json`. The update check and its artifact download travel to
+      `github.com` / `api.github.com` / `objects.githubusercontent.com`, so they
+      are already represented by the GitHub rows — there is deliberately no
+      separate "third-party updater host" row, because the app has not had one
+      since the check moved to GitHub Releases (#47). */
   let pathStatuses = $derived.by<PathStatus[]>(() => {
     const paranoid = settings.effective.paranoidMode;
     return [
@@ -49,11 +55,6 @@
       {
         label: "raw.githubusercontent.com · objects.githubusercontent.com",
         desc: i18n.t("network.githubAssetsDesc"),
-        allowed: !paranoid,
-      },
-      {
-        label: "agencyagents.app",
-        desc: i18n.t("network.updaterDesc"),
         allowed: !paranoid,
       },
       {

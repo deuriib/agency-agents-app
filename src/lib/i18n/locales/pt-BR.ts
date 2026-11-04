@@ -503,7 +503,6 @@ const ptBR = {
   "network.githubSourceDesc": "Fonte do catálogo — git clone/pull de agency-agents ou o tarball do snapshot. Somente quando você provisiona uma fonte gerenciada/clone ou pull.",
   "network.githubApiDesc": "Estatísticas de repositório de catálogo (estrelas/garfos/problemas), login GitHub (fluxo do dispositivo) e ações de estrela/observação. Opcional.",
   "network.githubAssetsDesc": "Avatares e ativos de lançamento referenciados pelas respostas GitHub.",
-  "network.updaterDesc": "Verificações de atualização de aplicativos — o manifesto do atualizador assinado. Honra suas configurações de atualização abaixo.",
   "network.defaultBrowser": "Navegador padrão",
   "network.browserDesc": "A abertura de links externos passa para macOS open(1). Não é uma chamada de rede nossa.",
   "network.everyCall": "Cada chamada de saída é listada aqui e é acionada somente quando você executa uma ação necessária. Sem telemetria, sem análises, sem necessidade de contas.",

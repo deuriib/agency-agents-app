@@ -503,7 +503,6 @@ const es = {
   "network.githubSourceDesc": "Fuente del catálogo: git clone/pull de agency-agents o el tarball de instantánea. Solo cuando aprovisiona una fuente administrada/clonada o una extracción.",
   "network.githubApiDesc": "Estadísticas de repositorio de catálogo (estrellas/bifurcaciones/problemas), inicio de sesión GitHub (flujo de dispositivos) y acciones de estrella/observación. Opcional.",
   "network.githubAssetsDesc": "Avatares y recursos de lanzamiento a los que hacen referencia las respuestas GitHub.",
-  "network.updaterDesc": "Comprobaciones de actualización de aplicaciones: el manifiesto de actualización firmado. Respeta la configuración de actualización a continuación.",
   "network.defaultBrowser": "Navegador predeterminado",
   "network.browserDesc": "Al abrir enlaces externos, pase a macOS open(1). Ni una llamada de red nuestra.",
   "network.everyCall": "Cada llamada saliente se enumera aquí y se activa solo cuando realiza una acción que lo necesita. Sin telemetría, sin análisis, no se requieren cuentas.",

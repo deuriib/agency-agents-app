@@ -44,7 +44,7 @@ use commands::*;
 //
 // The matching public key the command prints is what goes here.
 // Keep the private key chmod 600 outside the repo — it's the only
-// thing standing between a compromised agencyagents.app and a
+// thing standing between a compromised release host and a
 // malicious binary push.
 //
 // Real minisign public key. The matching private key lives at

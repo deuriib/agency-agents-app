@@ -503,7 +503,6 @@ const zhCN = {
   "network.githubSourceDesc": "目录源 — agency-agents 的 git clone/pull 或快照 tarball。仅当您配置托管/克隆源或拉取时。",
   "network.githubApiDesc": "目录仓库统计（星标/Fork/Issue）、GitHub 登录（设备流程）以及加星/关注操作。可选。",
   "network.githubAssetsDesc": "GitHub 响应引用的头像和发布资产。",
-  "network.updaterDesc": "应用更新检查 — 签名的更新程序清单。尊重您下面的更新设置。",
   "network.defaultBrowser": "默认浏览器",
   "network.browserDesc": "打开外部链接会交给 macOS open(1)。这不是由我们发起的网络请求。",
   "network.everyCall": "此处列出了每个出站呼叫，并且仅当您执行需要它的操作时才会触发。无需遥测、无需分析、无需帐户。",

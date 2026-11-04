@@ -543,7 +543,6 @@ const tr = {
   "network.githubSourceDesc": "Katalog kaynağı — agency-agents'in git clone/pull'u veya anlık görüntü arşivi. Yalnızca yönetilen/klon bir kaynak sağladığınızda veya çekerken.",
   "network.githubApiDesc": "Katalog depo istatistikleri (yıldız/fork/sorunlar), GitHub oturum açma (device flow) ve yıldız/izleme eylemleri. İsteğe bağlı.",
   "network.githubAssetsDesc": "GitHub yanıtlarının referans verdiği avatarlar ve sürüm varlıkları.",
-  "network.updaterDesc": "Uygulama güncelleme kontrolleri — imzalı güncelleyici manifest'i. Aşağıdaki güncelleme ayarlarınıza uyar.",
   "network.defaultBrowser": "Varsayılan tarayıcı",
   "network.browserDesc": "Harici bağlantıları açmak macOS open(1)'e devreder. Bizden gelen bir ağ çağrısı değildir.",
   "network.everyCall": "Giden her çağrı burada listelenir ve yalnızca ihtiyaç duyan bir eylem yaptığınızda tetiklenir. Telemetri yok, analitik yok, hesap gerekmez.",

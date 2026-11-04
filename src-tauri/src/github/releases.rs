@@ -1,11 +1,11 @@
 //! GitHub Releases as the update source of truth.
 //!
-//! The in-app update check used to read the signed manifest at
-//! `agencyagents.app/updater.json`. It now asks GitHub "what is the
-//! latest published release?" and compares that tag with the running
-//! build. The signed manifest is still what the installer downloads
-//! (see `commands::updater`), but the *version decision* is owned by the
-//! published GitHub Release.
+//! The in-app update check used to read a signed manifest from a
+//! third-party host that has since been retired. It now asks GitHub
+//! "what is the latest published release?" and compares that tag with
+//! the running build. The signed manifest is still what the installer
+//! downloads (see `commands::updater`), but the *version decision* is
+//! owned by the published GitHub Release.
 //!
 //! ## Channels (#23)
 //!
