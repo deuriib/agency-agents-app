@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.12.0](https://github.com/deuriib/agency-agents-app/compare/v0.11.0...v0.12.0) (2026-11-04)
+
+
+### Features
+
+* **rules:** install rules through the destinations grid ([#94](https://github.com/deuriib/agency-agents-app/issues/94)) ([ca50d50](https://github.com/deuriib/agency-agents-app/commit/ca50d50347786a10a32210d7c1a626ae5dd7984b))
+
 ## [0.11.0](https://github.com/deuriib/agency-agents-app/compare/v0.10.0...v0.11.0) (2026-11-03)
 
 
