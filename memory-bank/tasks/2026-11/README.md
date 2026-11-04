@@ -13,6 +13,21 @@ notarized macOS build are missing, so the updater cannot serve it yet.
 - [ ] Native review of the 12-locale Rules strings.
 
 ## Recent Achievements
+- Stopped re-running the whole PR graph on every merge (issue #90), in the order the
+  issue demanded: gate first, remove second. `main: PR gate` (`26500514`) requires the
+  eight PR Check jobs plus `gitleaks`, each pinned to the GitHub Actions integration so a
+  check run cannot be spoofed, with `strict_required_status_checks_policy` so a stale PR
+  cannot merge, and it blocks force-pushes and deletion. `allow_update_branch` was
+  switched on in the same breath, because requiring an up-to-date branch without the
+  button is how a gate gets disabled in a month. With that closed, `rust-lint`,
+  `rust-test` and `frontend` became `pull_request`-only and the four manifest jobs stayed
+  on `push: main` as a 39s canary: **252s → 39s of job time per merge (−85%)**. Proven,
+  not assumed — probe PR #100 (`cargo fmt` red, merge refused with "the base branch policy
+  prohibits the merge") and a sacrificial ruleset on a throwaway ref (`GH013: Required
+  status check "Rust tests" is expected` for a direct push). The docs also state what the
+  gate is *not*: no `bypass_actors`, but an admin can still edit the ruleset, so skipping
+  it is deliberate and visible rather than impossible. See
+  [261104_drop-push-main-graph.md](./261104_drop-push-main-graph.md).
 - Gave the release automation its own identity (issue #91): both `release-please.yml` and
   `release-lock.yml` mint a GitHub App installation token and push with it, because a
   `GITHUB_TOKEN` push starts no workflow run at all — which is why `release-lock.yml` never
