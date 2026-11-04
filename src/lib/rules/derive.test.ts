@@ -13,6 +13,8 @@ import {
   previewEntry,
   ruleCategories,
   ruleCategoryTiles,
+  ruleCellCoverage,
+  ruleCellTargets,
   ruleLensCounts,
   ruleListState,
 } from "$lib/rules/derive";
@@ -64,6 +66,88 @@ describe("installFor", () => {
   it("is per (slug, harness, scope): another harness or rule does not match", () => {
     expect(installFor([userRow], "coding-standards", "ohMyPi", "user", null)).toBeNull();
     expect(installFor([userRow], "nexus-strategy", "piAgent", "user", null)).toBeNull();
+  });
+});
+
+describe("ruleCellCoverage", () => {
+  const rowA = ruleInstall({ slug: "a", tool: "piAgent", scope: "user", projectPath: null });
+  const rowB = ruleInstall({ slug: "b", tool: "piAgent", scope: "user", projectPath: null });
+
+  it("is all for one installed slug and neither all nor some for one missing slug", () => {
+    const on = ruleCellCoverage([rowA], ["a"], "piAgent", "user", null);
+    expect(on).toMatchObject({ present: 1, total: 1, all: true, some: false });
+    expect(on.rows).toEqual([rowA]);
+
+    const off = ruleCellCoverage([rowA], ["b"], "piAgent", "user", null);
+    expect(off).toMatchObject({ present: 0, total: 1, all: false, some: false });
+    expect(off.rows).toEqual([]);
+  });
+
+  it("distinguishes all / some / none across two slugs", () => {
+    const all = ruleCellCoverage([rowA, rowB], ["a", "b"], "piAgent", "user", null);
+    expect(all).toMatchObject({ present: 2, total: 2, all: true, some: false });
+    expect(all.rows.map((row) => row.slug)).toEqual(["a", "b"]);
+
+    const some = ruleCellCoverage([rowA], ["a", "b"], "piAgent", "user", null);
+    expect(some).toMatchObject({ present: 1, total: 2, all: false, some: true });
+
+    const none = ruleCellCoverage([], ["a", "b"], "piAgent", "user", null);
+    expect(none).toMatchObject({ present: 0, total: 2, all: false, some: false });
+  });
+
+  it("pins #62: a project scope with no root has no state, even with a user row present", () => {
+    const coverage = ruleCellCoverage([rowA], ["a"], "piAgent", "project", null);
+    // Adopting the user row here is how the UI once offered a delete of the
+    // user-global files; the no-root cell must stay empty.
+    expect(coverage).toMatchObject({ present: 0, total: 1, all: false, some: false });
+    expect(coverage.rows).toEqual([]);
+  });
+
+  it("counts a duplicated slug once so all stays reachable", () => {
+    const coverage = ruleCellCoverage([rowA], ["a", "a"], "piAgent", "user", null);
+    expect(coverage).toMatchObject({ present: 1, total: 1, all: true, some: false });
+    expect(coverage.rows).toHaveLength(1);
+  });
+
+  it("is neither all nor some when no slug is asked about", () => {
+    const coverage = ruleCellCoverage([rowA], [], "piAgent", "user", null);
+    expect(coverage).toMatchObject({ present: 0, total: 0, all: false, some: false });
+  });
+
+  it("does not let another harness, scope or project answer the cell", () => {
+    const rows = [
+      ruleInstall({ slug: "a", tool: "opencode", scope: "user" }),
+      ruleInstall({ slug: "a", tool: "piAgent", scope: "project", projectPath: "/B" }),
+    ];
+    expect(ruleCellCoverage(rows, ["a"], "piAgent", "user", null).present).toBe(0);
+    expect(ruleCellCoverage(rows, ["a"], "opencode", "project", "/B").present).toBe(0);
+  });
+});
+
+describe("ruleCellTargets", () => {
+  it("returns exactly the slugs missing for that cell, with scope and root", () => {
+    const rows = [ruleInstall({ slug: "a", tool: "piAgent", scope: "user", projectPath: null })];
+    expect(ruleCellTargets(rows, ["a", "b"], "piAgent", "user", null)).toEqual([
+      { slug: "b", harness: "piAgent", scope: "user", projectPath: null },
+    ]);
+  });
+
+  it("keeps the picked project root and never adopts another project's row", () => {
+    const rows = [
+      ruleInstall({ slug: "a", tool: "opencode", scope: "project", projectPath: "/B" }),
+    ];
+    expect(ruleCellTargets(rows, ["a"], "opencode", "project", "/A")).toEqual([
+      { slug: "a", harness: "opencode", scope: "project", projectPath: "/A" },
+    ]);
+  });
+
+  it("is the complement of coverage.present for every slug set", () => {
+    const rows = [ruleInstall({ slug: "a" }), ruleInstall({ slug: "b" })];
+    for (const slugs of [["a"], ["a", "b"], ["a", "b", "c"], []]) {
+      const coverage = ruleCellCoverage(rows, slugs, "piAgent", "user", null);
+      const targets = ruleCellTargets(rows, slugs, "piAgent", "user", null);
+      expect(targets).toHaveLength(slugs.length - coverage.present);
+    }
   });
 });
 

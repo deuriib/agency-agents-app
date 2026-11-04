@@ -565,6 +565,38 @@ export type InstallDomain = "agent" | "rule";
 export type RuleInstall = InstallRecord & { domain: "rule" };
 
 /**
+ * One write the rules grid may perform: the exact triple a ledger row is keyed
+ * on. `projectPath` is the *effective* root (`null` for user scope), so a target
+ * can be handed to the store verbatim (issue #92, AC "same bytes as the inline
+ * path").
+ */
+export interface RuleTarget {
+  slug: string;
+  harness: string;
+  scope: Scope;
+  projectPath: string | null;
+}
+
+/**
+ * What `InstallModal` deploys. A discriminated union, never two optional props:
+ * "both" and "neither" are then unrepresentable, which is the invalid state a
+ * future multi-domain grid (#71) would otherwise have to guard at runtime.
+ */
+export type InstallTarget =
+  | { kind: "agents"; agentSlugs: string[] }
+  | { kind: "rules"; ruleSlugs: string[] };
+
+/**
+ * Outcome of one bulk action. Partial failure is the normal case, so a failure
+ * is data (which target, why), never an exception that discards its siblings.
+ */
+export interface RuleApplyResult {
+  ok: number;
+  fail: number;
+  failures: { target: RuleTarget; error: string }[];
+}
+
+/**
  * A rule harness id, e.g. `"ohMyPi"` — the same camelCase id the agent registry
  * uses for the same product (issue #68). A plain string for the same reason
  * `Tool` is: the set lives in `src-tauri/data/rules-tools.json`, and

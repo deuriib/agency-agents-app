@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ruleInstall, rulePreview, ruleStatus, ruleSummary } from "$lib/test/fixtures";
+import type { RuleTarget } from "$lib/types";
 
 /**
  * The IPC boundary is the only thing stubbed: `invoke` is the app's single door
@@ -188,3 +189,177 @@ describe("selection race", () => {
     expect(rules.detail?.slug).toBe("nexus-strategy");
   });
 });
+
+describe("install wire args", () => {
+  it("writes through rules_install and then re-reads the ledger once", async () => {
+    const rules = await freshStore();
+    const order: string[] = [];
+    mocks.invoke.mockImplementation(async (command: string) => {
+      order.push(command);
+      if (command === "rules_install") return ruleInstall();
+      if (command === "rules_installs") return [ruleInstall()];
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await rules.install("coding-standards", "piAgent", "user", null);
+
+    // Same triple the inline path sends: `projectPath: null` is the user key.
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "rules_install", {
+      slug: "coding-standards",
+      harness: "piAgent",
+      projectPath: null,
+    });
+    expect(order).toEqual(["rules_install", "rules_installs"]);
+    expect(rules.installations).toHaveLength(1);
+    expect(rules.busy).toBeNull();
+  });
+});
+
+describe("apply", () => {
+  const good: RuleTarget = {
+    slug: "coding-standards",
+    harness: "piAgent",
+    scope: "user",
+    projectPath: null,
+  };
+  const bad: RuleTarget = {
+    slug: "broken",
+    harness: "piAgent",
+    scope: "user",
+    projectPath: null,
+  };
+
+  it("reports a partial failure and re-reads the ledger exactly once", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string, args: { slug?: string }) => {
+      if (command === "rules_install") {
+        if (args.slug === "broken") throw new Error("disk full");
+        return ruleInstall();
+      }
+      if (command === "rules_installs") return [ruleInstall()];
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const result = await rules.apply("install", [good, bad]);
+
+    expect(result.ok).toBe(1);
+    expect(result.fail).toBe(1);
+    expect(result.failures).toEqual([{ target: bad, error: "disk full" }]);
+    // Both writes were attempted, so the rejected target did not abort its
+    // sibling; the ledger was read once for the whole action, not per target.
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "rules_install"),
+    ).toHaveLength(2);
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "rules_installs"),
+    ).toHaveLength(1);
+    expect(rules.installations).toHaveLength(1);
+    expect(rules.busy).toBeNull();
+  });
+
+  it("refuses a project scope without a root per target and writes nothing", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "rules_installs") return [];
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const result = await rules.apply("install", [
+      { slug: "coding-standards", harness: "piAgent", scope: "project", projectPath: null },
+    ]);
+
+    expect(result).toMatchObject({ ok: 0, fail: 1 });
+    expect(result.failures[0].error).toMatch(/project scope requires a project path/);
+    // `project_path: null` would be a user-scope write; it must never be sent.
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "rules_install"),
+    ).toHaveLength(0);
+  });
+
+  it("rejects while another operation holds the store", async () => {
+    const rules = await freshStore();
+    rules.busy = "coding-standards\u0000piAgent\u0000user\u0000";
+
+    // A success-shaped no-op would be indistinguishable from "wrote everything".
+    await expect(rules.apply("install", [good])).rejects.toThrow(
+      /another operation is in progress/,
+    );
+    expect(mocks.invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects when the ledger re-read fails after the writes", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "rules_install") return ruleInstall();
+      if (command === "rules_installs") throw new Error("ledger unreadable");
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    // Fail closed: a write the app cannot confirm is not a success.
+    await expect(rules.apply("install", [good])).rejects.toThrow(/ledger unreadable/);
+    expect(rules.busy).toBeNull();
+  });
+
+  it("sends rules_uninstall for a remove action", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "rules_uninstall") return null;
+      if (command === "rules_installs") return [];
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const result = await rules.apply("uninstall", [good]);
+
+    expect(result).toMatchObject({ ok: 1, fail: 0, failures: [] });
+    expect(mocks.invoke).toHaveBeenNthCalledWith(1, "rules_uninstall", {
+      slug: "coding-standards",
+      harness: "piAgent",
+      projectPath: null,
+    });
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "rules_install"),
+    ).toHaveLength(0);
+  });
+});
+
+describe("previewFor", () => {
+  it("caches per (slug, project root) and never touches the detail pane state", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string) => {
+      if (command === "rules_preview") return rulePreview();
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    const first = await rules.previewFor("coding-standards", null);
+    const second = await rules.previewFor("coding-standards", null);
+
+    expect(second).toBe(first);
+    expect(
+      mocks.invoke.mock.calls.filter(([command]) => command === "rules_preview"),
+    ).toHaveLength(1);
+    // The whole point of previewFor: the grid must not clobber the pane.
+    expect(rules.previewResult).toBeNull();
+    expect(rules.previewError).toBeNull();
+    expect(rules.previewLoading).toBe(false);
+  });
+
+  it("keys the cache by project root", async () => {
+    const rules = await freshStore();
+    mocks.invoke.mockImplementation(async (command: string, args: { projectPath: string | null }) => {
+      if (command === "rules_preview") {
+        return rulePreview({ scope: "project", projectPath: args.projectPath });
+      }
+      throw new Error(`unexpected command ${command}`);
+    });
+
+    await rules.previewFor("coding-standards", "/A");
+    await rules.previewFor("coding-standards", "/B");
+
+    expect(mocks.invoke).toHaveBeenNthCalledWith(2, "rules_preview", {
+      slug: "coding-standards",
+      projectPath: "/B",
+    });
+    expect(rules.previewResult).toBeNull();
+  });
+});
+

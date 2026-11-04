@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import Rules from "$lib/components/Rules.svelte";
+import { installableHarnesses } from "$lib/data/ruleRegistry";
 import { i18n } from "$lib/stores/i18n.svelte";
 import { rules } from "$lib/stores/rules.svelte";
-import { ruleInstall, ruleStatus, ruleSummary } from "$lib/test/fixtures";
+import { ruleInstall, rulePreview, ruleStatus, ruleSummary } from "$lib/test/fixtures";
 import type { RuleSummary } from "$lib/types";
 
 /**
@@ -23,12 +24,31 @@ function answer({
   list = [] as RuleSummary[],
   installs = [] as ReturnType<typeof ruleInstall>[],
 } = {}) {
-  mocks.invoke.mockImplementation(async (command: string) => {
-    if (command === "rules_status") return status;
-    if (command === "rules_list") return list;
-    if (command === "rules_installs") return installs;
-    throw new Error(`unexpected command ${command}`);
-  });
+  mocks.invoke.mockImplementation(
+    async (command: string, args: Record<string, unknown> = {}) => {
+      if (command === "rules_status") return status;
+      if (command === "rules_list") return list;
+      if (command === "rules_installs") return installs;
+      // The detail pane's body fetch, issued once a row is selected.
+      if (command === "rules_get") {
+        const slug = String(args.slug);
+        const summary = list.find((rule) => rule.slug === slug) ?? ruleSummary({ slug });
+        return { ...summary, body: "# Body\n", sourceHash: "source", bodyHash: "body" };
+      }
+      // One compile per scope: the detail pane's preview and every grid row.
+      if (command === "rules_preview") {
+        const projectPath = (args.projectPath as string | null) ?? null;
+        return rulePreview({
+          slug: String(args.slug),
+          scope: projectPath === null ? "user" : "project",
+          projectPath,
+        });
+      }
+      // `InstallModal` mounts `projects.refresh()`, which reconciles agents.
+      if (command === "installs_reconcile") return [];
+      throw new Error(`unexpected command ${command}`);
+    },
+  );
 }
 
 beforeEach(() => {
@@ -221,5 +241,63 @@ describe("per-rule install state", () => {
 
     const row = await screen.findByRole("button", { name: /Coding Standards/ });
     expect(row.getAttribute("aria-label")).not.toContain(i18n.t("rules.install.installed"));
+  });
+});
+
+describe("install grid entry point (#92)", () => {
+  it("selecting a rule reveals the header action, which opens the harness grid", async () => {
+    rules.categoryFilter = "base";
+    answer({ list: [ruleSummary()], status: ruleStatus({ count: 1 }) });
+
+    render(Rules);
+
+    // Before a selection there is no detail pane, so the row is the only match.
+    await fireEvent.click(await screen.findByRole("button", { name: /Coding Standards/ }));
+
+    // The accessible name carries the rule name; the visible label is the action.
+    const action = await screen.findByRole("button", {
+      name: i18n.t("rules.install.gridTitle", { rule: "Coding Standards" }),
+    });
+    expect(action).toBeEnabled();
+    expect(action).toHaveTextContent(i18n.t("rules.install.gridOpen"));
+
+    await fireEvent.click(action);
+
+    const dialog = await screen.findByRole("dialog");
+    expect(dialog).toHaveTextContent(
+      i18n.t("rules.install.gridTitle", { rule: "Coding Standards" }),
+    );
+    // Columns are exactly the four installable harnesses (`ruleRegistry`).
+    for (const harness of installableHarnesses()) {
+      expect(dialog).toHaveTextContent(harness.label);
+    }
+  });
+
+  it("an invalid rule disables the action and states the reason", async () => {
+    rules.categoryFilter = "base";
+    answer({
+      list: [
+        ruleSummary({
+          slug: "broken-rule",
+          name: "Broken Rule",
+          validation: { valid: false, errors: ["missing description"] },
+        }),
+      ],
+      status: ruleStatus({ count: 1 }),
+    });
+
+    render(Rules);
+
+    await fireEvent.click(await screen.findByRole("button", { name: /Broken Rule/ }));
+
+    const reason = i18n.t("rules.install.reasonInvalid");
+    const action = await screen.findByRole("button", {
+      name: `${i18n.t("rules.install.gridTitle", { rule: "Broken Rule" })} — ${reason}`,
+    });
+    expect(action).toBeDisabled();
+    expect(action).toHaveAttribute("title", reason);
+    expect(action.getAttribute("aria-label")).toContain(reason);
+    // The disabled control still names the rule it belongs to.
+    expect(action.getAttribute("aria-label")).toContain("Broken Rule");
   });
 });

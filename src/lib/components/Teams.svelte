@@ -419,7 +419,7 @@
 </section>
 
 {#if deployTarget}
-  <InstallModal title={deployTarget.title} agentSlugs={deployTarget.agents} onClose={() => (deployTarget = null)} />
+  <InstallModal title={deployTarget.title} target={{ kind: "agents", agentSlugs: deployTarget.agents }} onClose={() => (deployTarget = null)} />
 {/if}
 
 {#if saveOpen}

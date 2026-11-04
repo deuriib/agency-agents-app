@@ -140,7 +140,7 @@
 {#if modalOpen}
   {@const slugs = corpus.agents.filter((a) => selected.has(a.category)).map((a) => a.slug)}
   {@const dTitle = selected.size === 1 ? i18n.t("divisions.deployOneTitle", { division: corpus.labelOf([...selected][0]) }) : i18n.t("divisions.deployManyTitle", { count: selected.size })}
-  <InstallModal title={dTitle} agentSlugs={slugs} onClose={() => (modalOpen = false)} />
+  <InstallModal title={dTitle} target={{ kind: "agents", agentSlugs: slugs }} onClose={() => (modalOpen = false)} />
 {/if}
 
 {#if updatesOpen}

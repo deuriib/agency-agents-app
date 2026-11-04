@@ -19,6 +19,7 @@ import type {
   RulePreviewEntry,
   RuleSummary,
   RuleStatus,
+  RuleTarget,
   Scope,
 } from "$lib/types";
 
@@ -66,6 +67,71 @@ export function installFor(
         (row.projectPath ?? null) === root,
     ) ?? null
   );
+}
+
+/**
+ * The install state of one grid cell: one `(harness, scope, root)` across a set
+ * of rule slugs. `all`/`some` mirror the agents grid's `cover()` so a future
+ * multi-rule payload (#71) renders the same half-dot without a second code path.
+ *
+ * Built on {@link installFor} on purpose: a project row with no root therefore
+ * yields `present: 0` and never adopts the user-scope row (issue #62).
+ */
+export interface RuleCellCoverage {
+  /** Slugs with a ledger row for this exact cell. */
+  present: number;
+  /** Distinct slugs asked about (a duplicated slug counts once). */
+  total: number;
+  /** Really "every asked slug is installed" — an empty cell is neither all nor some. */
+  all: boolean;
+  /** At least one but not every slug is installed. */
+  some: boolean;
+  /** The ledger rows behind `present`, in slug order. */
+  rows: RuleInstall[];
+}
+
+export function ruleCellCoverage(
+  installations: readonly RuleInstall[],
+  slugs: readonly string[],
+  harness: string,
+  scope: Scope,
+  projectPath: string | null,
+): RuleCellCoverage {
+  // A duplicated slug would make `all` unreachable (`total` 2, one row).
+  const unique = [...new Set(slugs)];
+  const rows: RuleInstall[] = [];
+  for (const slug of unique) {
+    const row = installFor(installations, slug, harness, scope, projectPath);
+    if (row !== null) rows.push(row);
+  }
+  const total = unique.length;
+  const present = rows.length;
+  return {
+    present,
+    total,
+    all: total > 0 && present === total,
+    some: present > 0 && present < total,
+    rows,
+  };
+}
+
+/**
+ * What an install click must write for one cell: the slugs **missing** from the
+ * ledger, each as the exact triple the backend keys on — the complement of
+ * {@link ruleCellCoverage}'s `present`. Install state is per triple, so a cell
+ * never rewrites a row that already exists.
+ */
+export function ruleCellTargets(
+  installations: readonly RuleInstall[],
+  slugs: readonly string[],
+  harness: string,
+  scope: Scope,
+  projectPath: string | null,
+): RuleTarget[] {
+  const root = effectiveRoot(scope, projectPath);
+  return [...new Set(slugs)]
+    .filter((slug) => installFor(installations, slug, harness, scope, projectPath) === null)
+    .map((slug) => ({ slug, harness, scope, projectPath: root }));
 }
 
 /** Deterministic (code-unit) ordering — matches the Rust `Ord` for ASCII. */

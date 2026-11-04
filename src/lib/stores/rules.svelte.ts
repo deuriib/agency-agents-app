@@ -28,11 +28,13 @@ import { invoke } from "@tauri-apps/api/core";
 import type {
   InstallRecord,
   Rule,
+  RuleApplyResult,
   RuleInstall,
   RulePreview,
   RulePreviewEntry,
   RuleStatus,
   RuleSummary,
+  RuleTarget,
   Scope,
 } from "$lib/types";
 import { errorText } from "$lib/types";
@@ -254,6 +256,23 @@ class RulesStore {
     return previewEntryOf(this.previewResult, slug, harness, scope, projectPath);
   }
 
+  /**
+   * Compile `slug` for one project root and return it, cache-first.
+   *
+   * Deliberately NOT `preview()`: several grids read previews in parallel for
+   * rows the detail pane is not showing, so this must never write
+   * `previewResult` / `previewError` / `previewLoading` — one grid cell
+   * resolving must not swap the bytes under the rule detail pane (issue #92).
+   */
+  async previewFor(slug: string, projectPath: string | null): Promise<RulePreview> {
+    const key = previewKey(slug, projectPath);
+    const cached = previewCache.get(key);
+    if (cached) return cached;
+    const result = await invoke<RulePreview>("rules_preview", { slug, projectPath });
+    previewCache.set(key, result);
+    return result;
+  }
+
   // ── Install lifecycle ───────────────────────────────────────────────────
 
   /**
@@ -324,8 +343,7 @@ class RulesStore {
     if (this.busy !== null) return;
     this.busy = busyKey(slug, harness, scope, root);
     try {
-      await invoke<InstallRecord>("rules_install", { slug, harness, projectPath: root });
-      previewCache.delete(previewKey(slug, root));
+      await this.writeOne("install", { slug, harness, scope, projectPath: root });
       await this.reloadInstallations();
     } finally {
       this.busy = null;
@@ -348,11 +366,76 @@ class RulesStore {
     if (this.busy !== null) return;
     this.busy = busyKey(slug, harness, scope, root);
     try {
-      await invoke<void>("rules_uninstall", { slug, harness, projectPath: root });
-      previewCache.delete(previewKey(slug, root));
+      await this.writeOne("uninstall", { slug, harness, scope, projectPath: root });
       await this.reloadInstallations();
     } finally {
       this.busy = null;
+    }
+  }
+
+  /**
+   * Run one bulk action over several targets — the rules grid's single cell
+   * action can carry >1 slug, and every caller must not re-read the ledger per
+   * target.
+   *
+   * Failures are collected, never thrown away: a rejected target does not abort
+   * its siblings (AC: partial failure must be visible as `ok / fail`). The ONE
+   * ledger re-read happens after the loop and *is* allowed to reject — if the
+   * app cannot confirm the writes, the whole action fails closed.
+   *
+   * Busy is a hard refusal, not a silent no-op: the caller must be able to tell
+   * "nothing was written because another operation holds the store" apart from
+   * "everything was written".
+   */
+  async apply(
+    action: "install" | "uninstall",
+    targets: readonly RuleTarget[],
+  ): Promise<RuleApplyResult> {
+    if (this.busy !== null) {
+      throw new Error("rules: another operation is in progress");
+    }
+    let ok = 0;
+    const failures: { target: RuleTarget; error: string }[] = [];
+    for (const target of targets) {
+      const root = effectiveRoot(target.scope, target.projectPath);
+      this.busy = busyKey(target.slug, target.harness, target.scope, root);
+      try {
+        await this.writeOne(action, target);
+        ok++;
+      } catch (e) {
+        failures.push({ target, error: errorText(e) });
+      } finally {
+        this.busy = null;
+      }
+    }
+    await this.reloadInstallations();
+    return { ok, fail: failures.length, failures };
+  }
+
+  /**
+   * The single write body shared by `install`, `uninstall` and `apply`, so the
+   * wire args (and therefore the bytes on disk) are identical on every path:
+   * the root guard, cache invalidation, then one IPC call.
+   */
+  private async writeOne(action: "install" | "uninstall", target: RuleTarget): Promise<void> {
+    const root = effectiveRoot(target.scope, target.projectPath);
+    if (target.scope === "project" && root === null) {
+      throw new Error("project scope requires a project path");
+    }
+    // The resolved destinations changed, so the cached preview is now a lie.
+    previewCache.delete(previewKey(target.slug, root));
+    if (action === "install") {
+      await invoke<InstallRecord>("rules_install", {
+        slug: target.slug,
+        harness: target.harness,
+        projectPath: root,
+      });
+    } else {
+      await invoke<void>("rules_uninstall", {
+        slug: target.slug,
+        harness: target.harness,
+        projectPath: root,
+      });
     }
   }
 

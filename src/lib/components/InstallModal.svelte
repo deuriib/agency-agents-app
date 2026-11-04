@@ -1,49 +1,91 @@
 <script lang="ts">
   /**
-   * InstallModal — the ONE place agents get deployed. A destinations × tools
-   * grid: rows are destinations (Global + each registered project), columns are
-   * the detected tools, and every cell is a toggle that installs/removes the
-   * agent set into that (scope, tool).
+   * InstallModal — the ONE place agents and rules get deployed. A destinations ×
+   * columns grid: rows are destinations (Global + each registered project),
+   * columns are the tools (agents) or the rule harnesses (rules), and every cell
+   * is a toggle that installs/removes the payload into that (scope, column).
    *
-   * Driven by an agent SET (`agentSlugs`) so it serves a single agent (from the
-   * detail pane), a whole division, or a team — same component. For a single
-   * agent a cell is on/off; for a set it's tri-state (all / some / none), and
-   * toggling fills the missing ones or removes the whole set.
+   * Driven by an `InstallTarget` discriminated union: `{ kind: "agents" }` for a
+   * single agent, a division, or a team; `{ kind: "rules" }` for one rule's
+   * destinations × harnesses grid. The agent branch is the original surface,
+   * byte for byte — only the rule branch adds a state machine.
    *
-   * "Global" only offers user-capable tools (Cursor's global cell is blank — its
-   * global rules are UI-only). Removal of `foreign` files asks first.
+   * Install truth is NEVER held here: every on/off answer is derived from the
+   * ledger (`rules.installations` / agent `install.installed`). The only local
+   * state is the per-row preview cache (destinations), a transient action, and
+   * its per-cell result.
+   *
+   * "Global" only offers user-capable columns (Cursor's global cell is blank —
+   * its global rules are UI-only). Removal of `foreign` agent files asks first.
    */
-  import { onMount } from "svelte";
+  import { onMount, untrack } from "svelte";
   import FolderPlus from "@lucide/svelte/icons/folder-plus";
   import FolderIcon from "@lucide/svelte/icons/folder";
   import GlobeIcon from "@lucide/svelte/icons/globe";
   import Modal from "./Modal.svelte";
   import Button from "./Button.svelte";
   import DestructiveConfirm from "./DestructiveConfirm.svelte";
+  import {
+    harnessLabel,
+    installableHarnesses,
+    isHarnessInstallable,
+    ruleHarness,
+  } from "$lib/data/ruleRegistry";
+  import {
+    installBlockReason,
+    previewEntry,
+    ruleCellCoverage,
+    ruleCellTargets,
+    type InstallBlockReason,
+    type RuleCellCoverage,
+  } from "$lib/rules/derive";
   import { corpus } from "$lib/stores/corpus.svelte";
   import { install, SUPPORTED_TOOLS, type ToolDef } from "$lib/stores/install.svelte";
   import { projects } from "$lib/stores/projects.svelte";
+  import { rules } from "$lib/stores/rules.svelte";
   import { toast } from "$lib/stores/toast.svelte";
   import { i18n } from "$lib/stores/i18n.svelte";
-  import type { Tool, Agent, InstalledAgent } from "$lib/types";
+  import {
+    errorText,
+    type Agent,
+    type InstallTarget,
+    type InstalledAgent,
+    type RulePreview,
+    type RulePreviewEntry,
+    type RuleTarget,
+    type Scope,
+    type Tool,
+  } from "$lib/types";
 
   interface Props {
     title: string;
-    agentSlugs: string[];
+    target: InstallTarget;
     onClose: () => void;
   }
-  let { title, agentSlugs, onClose }: Props = $props();
+  let { title, target, onClose }: Props = $props();
+
+  const isRule = $derived(target.kind === "rules");
+  const ruleSlugs = $derived(target.kind === "rules" ? target.ruleSlugs : []);
+  const agentSlugs = $derived(target.kind === "agents" ? target.agentSlugs : []);
 
   onMount(() => {
     projects.refresh();
-    // Refresh detection so the columns reflect tools ACTUALLY on this device.
-    void install.loadTools();
+    // Tool detection is agent-only work; a rules surface must not run
+    // `tools_list` / `installs_reconcile` for nothing (D9).
+    if (!isRule) void install.loadTools();
   });
 
   // The agents in this set that exist in the corpus (stale slugs skipped).
   const slugSet = $derived(new Set(agentSlugs));
   const agents = $derived<Agent[]>(corpus.agents.filter((a) => slugSet.has(a.slug)));
   const total = $derived(agents.length);
+
+  /** Deduplicated: a duplicated slug would make `all` unreachable. */
+  const ruleSlugSet = $derived(new Set(ruleSlugs));
+  /** Unknown slugs do not block — the preview will reject them with a reason. */
+  const ruleValid = $derived(
+    ruleSlugs.every((slug) => rules.list.find((r) => r.slug === slug)?.validation.valid ?? true),
+  );
 
   // Columns = tools present on this device (detected, or already holding an
   // install of this set), that can take an agent in SOME scope.
@@ -55,34 +97,86 @@
     );
   }
 
-  const cols = $derived(SUPPORTED_TOOLS.filter((t) => (t.supportsUser || t.supportsProject) && detected(t)));
+  /**
+   * One normalized column type for both modes (D3). `RuleHarnessMeta` has no
+   * `supportsUser/supportsProject`, so `applicable`/`naReason` cannot read the
+   * shape directly; mapping each source keeps agent copy and behaviour
+   * identical while rule mode never filters by `detected()`.
+   */
+  type GridCol = { id: string; label: string; user: boolean; project: boolean };
+
+  const cols = $derived<GridCol[]>(
+    isRule
+      ? installableHarnesses().map((h) => ({
+          id: h.id,
+          label: h.label,
+          user: h.dest.user !== undefined,
+          project: h.dest.project !== undefined,
+        }))
+      : SUPPORTED_TOOLS.filter((t) => (t.supportsUser || t.supportsProject) && detected(t)).map(
+          (t) => ({ id: t.id, label: t.label, user: t.supportsUser, project: t.supportsProject }),
+        ),
+  );
 
   // Rows = Global + each registered/used project.
   type Row = { kind: "global" } | { kind: "project"; path: string; label: string };
-  const rows = $derived<Row[]>([
-    { kind: "global" },
-    ...projects.list.map((p) => ({ kind: "project" as const, path: p.path, label: p.label })),
+
+  /**
+   * Rule-ledger project roots. `projects.list` unions only the AGENT ledger, so
+   * a rule installed into a folder later unregistered from Projects would lose
+   * its grid row and could only be removed from the detail pane (D4).
+   */
+  const rulePaths = $derived([
+    ...new Set(
+      rules.installations
+        .map((r) => r.projectPath)
+        .filter((p): p is string => p !== null && p !== ""),
+    ),
   ]);
+
+  const projectRows = $derived.by((): Row[] => {
+    if (!isRule) {
+      return projects.list.map((p) => ({ kind: "project" as const, path: p.path, label: p.label }));
+    }
+    const labelByPath = new Map(projects.list.map((p) => [p.path, p.label]));
+    const extra = rulePaths
+      .filter((path) => !labelByPath.has(path))
+      .sort((a, b) => a.localeCompare(b));
+    return [
+      ...projects.list.map((p) => ({ kind: "project" as const, path: p.path, label: p.label })),
+      ...extra.map((path) => ({ kind: "project" as const, path, label: labelOf(path) })),
+    ];
+  });
+
+  const rows = $derived<Row[]>([{ kind: "global" }, ...projectRows]);
 
   function targetOf(row: Row): string | null {
     return row.kind === "global" ? null : row.path;
   }
-  function applicable(row: Row, t: ToolDef): boolean {
-    return row.kind === "global" ? t.supportsUser : t.supportsProject;
+
+  /** Stable key for the per-row preview cache and the `{#each}` identity. */
+  function rowId(row: Row): string {
+    return row.kind === "global" ? "global" : `project:${row.path}`;
   }
 
-  // Tools in this grid that ONLY install per-project (no global scope) — e.g.
+  function applicable(row: Row, col: GridCol): boolean {
+    return row.kind === "global" ? col.user : col.project;
+  }
+
+  // Columns in this grid that ONLY install per-project (no global scope) — e.g.
   // Cursor, whose "global" rules are a UI setting, not a writable file. With no
   // projects registered their only cell is the Global-row "—", a dead end (#40),
   // so we name them and steer the user to add a project.
-  const projectOnlyCols = $derived(cols.filter((t) => t.supportsProject && !t.supportsUser));
-  const noProjects = $derived(projects.list.length === 0);
+  const projectOnlyCols = $derived(cols.filter((col) => col.project && !col.user));
+  const noProjects = $derived(
+    isRule ? rulePaths.length === 0 && projects.list.length === 0 : projects.list.length === 0,
+  );
 
   /** Why a cell shows "—" (not installable there), for its tooltip + a11y. */
-  function naReason(row: Row, t: ToolDef): string {
+  function naReason(row: Row, col: GridCol): string {
     return row.kind === "global"
-      ? i18n.t("install.naProjectOnly", { tool: t.label })
-      : i18n.t("install.naUserOnly", { tool: t.label });
+      ? i18n.t("install.naProjectOnly", { tool: col.label })
+      : i18n.t("install.naUserOnly", { tool: col.label });
   }
 
   // Coverage of the set in one (tool, target) cell.
@@ -157,6 +251,335 @@
     return path.replace(/\/+$/, "").split("/").pop() || path;
   }
 
+  // ── Rule mode ───────────────────────────────────────────────────────────
+
+  /** Destinations for one (row, slug) pair: a preview either resolves or rejects. */
+  type RowPreview = { loading: boolean; error: string | null; result: RulePreview | null };
+
+  /**
+   * Per-row, per-slug destination cache: `rowId → slug → preview`.
+   *
+   * One slot per row would be wrong for a multi-rule payload — each slug compiles
+   * to its OWN destination set, so the last slug to resolve would overwrite every
+   * earlier one and their cells would be labelled with a foreign destination (or
+   * none). Each slug therefore owns its own entry from the first paint.
+   *
+   * `$state.raw` because the value is replaced as a whole; `previewsRef` is the
+   * non-reactive mirror the effect writes through, so a completion can merge
+   * without READING the reactive map inside the same effect (which would
+   * retrigger it forever — D8).
+   */
+  type RowPreviewCache = Record<string, Record<string, RowPreview>>;
+  let previews = $state.raw<RowPreviewCache>({});
+  let previewsRef: RowPreviewCache = {};
+  let previewRun = 0;
+
+  type Cell = {
+    coverage: RuleCellCoverage;
+    busy: boolean;
+    disabled: boolean;
+    dest: string | null;
+    reasonKey: InstallBlockReason | null;
+    reason: string | null;
+  };
+
+  type Action = {
+    kind: "install" | "remove";
+    harness: string;
+    target: string | null;
+    targets: RuleTarget[];
+  };
+
+  type CellResult = {
+    kind: "install" | "remove";
+    harness: string;
+    target: string | null;
+    ok: number;
+    fail: number;
+    errors: string[];
+  };
+
+  /** One action at a time; the confirm dialog and its payload. */
+  let action = $state<Action | null>(null);
+  let acting = $state(false);
+  /** Outcome text for the last action, keyed by cell. Cleared on each action. */
+  let lastResult = $state<Record<string, CellResult>>({});
+
+  /**
+   * One preview cache per row (one entry per slug inside it), keyed on the row
+   * IDS + slug set + validity. Keying on the ID string (not the array identity)
+   * matters: `projects.refresh()` swaps in an equal list on mount, and an
+   * array-keyed effect would refetch every row for nothing.
+   */
+  const rowPlanKey = $derived(rows.map((row) => rowId(row)).join("\u0000"));
+
+  $effect(() => {
+    if (!isRule) return;
+    const run = ++previewRun;
+    void rowPlanKey;
+    const plan = untrack(() => rows.map((row) => ({ id: rowId(row), root: targetOf(row) })));
+    const slugs = [...ruleSlugSet];
+    const valid = ruleValid;
+
+    // Every (row, slug) pair starts in its own slot — loading while the preview
+    // resolves, terminally idle when the payload is already invalid. Filling all
+    // pairs up front means a completion can only ever land in its own entry.
+    previewsRef = Object.fromEntries(
+      plan.map((entry) => [
+        entry.id,
+        Object.fromEntries(
+          slugs.map((slug) => [slug, { loading: valid, error: null, result: null }]),
+        ),
+      ]),
+    );
+    previews = previewsRef;
+    if (!valid || slugs.length === 0) return;
+
+    void (async () => {
+      for (const entry of plan) {
+        for (const slug of slugs) {
+          try {
+            const result = await rules.previewFor(slug, entry.root);
+            if (run !== previewRun) return;
+            writePreview(entry.id, slug, { loading: false, error: null, result });
+          } catch (e) {
+            if (run !== previewRun) return;
+            writePreview(entry.id, slug, { loading: false, error: errorText(e), result: null });
+          }
+        }
+      }
+    })();
+  });
+
+  /** Merge one (row, slug) result without reading the reactive map. */
+  function writePreview(rowKey: string, slug: string, next: RowPreview): void {
+    const row = previewsRef[rowKey] ?? {};
+    previewsRef = { ...previewsRef, [rowKey]: { ...row, [slug]: next } };
+    previews = previewsRef;
+  }
+
+  /**
+   * The row's aggregate preview state: loading while ANY slug in the payload is
+   * still resolving, and the first slug error once one rejected. A row therefore
+   * never reads as settled while a part of its payload is unresolved, and with a
+   * single slug this is the old one-slot behaviour unchanged.
+   */
+  function rowPreview(row: Row): { loading: boolean; error: string | null } {
+    const slots = previews[rowId(row)];
+    // Before the effect's first pass there is no cache entry; a valid rule is
+    // still resolving, so report loading rather than a false "no destination".
+    if (slots === undefined) return { loading: ruleValid, error: null };
+    return {
+      loading: ruleSlugs.some((slug) => slots[slug]?.loading ?? false),
+      error: ruleSlugs.reduce<string | null>(
+        (first, slug) => first ?? slots[slug]?.error ?? null,
+        null,
+      ),
+    };
+  }
+
+  /**
+   * The row's compiled entry for one harness. Every slug is consulted against its
+   * OWN cached preview, in payload order; the first match wins. `derive.previewEntry`
+   * is the guard (D12): a user-scope preview must never answer a project row, and
+   * one slug's preview must never answer another slug's cell.
+   */
+  function previewEntryFor(row: Row, col: GridCol): RulePreviewEntry | null {
+    const slots = previews[rowId(row)];
+    if (slots === undefined) return null;
+    const scope: Scope = row.kind === "global" ? "user" : "project";
+    const root = targetOf(row);
+    for (const slug of ruleSlugs) {
+      const result = slots[slug]?.result ?? null;
+      if (result === null) continue;
+      const entry = previewEntry(result, slug, col.id, scope, root);
+      if (entry !== null) return entry;
+    }
+    return null;
+  }
+
+  /** The five ready-to-display reason lines; keys come from `installBlockReason`. */
+  function reasonText(key: InstallBlockReason | null): string | null {
+    switch (key) {
+      case null:
+        return null;
+      case "invalid":
+        return i18n.t("rules.install.reasonInvalid");
+      case "noProjectRoot":
+        return i18n.t("rules.install.reasonNoProjectRoot");
+      case "notInstallable":
+        return i18n.t("rules.install.reasonNotInstallable");
+      case "previewLoading":
+        return i18n.t("rules.install.reasonPreviewLoading");
+      case "previewFailed":
+        return i18n.t("rules.install.reasonPreviewFailed");
+    }
+  }
+
+  /**
+   * Install state, destination, and block reason for one cell.
+   *
+   * Enablement (D1): a reason gates INSTALL only. An already-installed cell
+   * stays clickable when its row's preview failed, so the ledger row can still
+   * be removed — the inline panel behaves the same way.
+   */
+  function cellFor(row: Row, col: GridCol): Cell {
+    const scope: Scope = row.kind === "global" ? "user" : "project";
+    const root = targetOf(row);
+    const slugs = [...ruleSlugSet];
+    const coverage = ruleCellCoverage(rules.installations, slugs, col.id, scope, root);
+    const cellBusy = acting || ruleSlugs.some((slug) => rules.isBusy(slug, col.id, scope, root));
+    const preview = rowPreview(row);
+    const entry = previewEntryFor(row, col);
+    // An installed cell keeps the ledger's own destination: the preview may be
+    // gone (failed) while the files are still on disk.
+    const dest = coverage.all
+      ? (coverage.rows[0]?.dest ?? entry?.dest ?? null)
+      : (entry?.dest ?? null);
+    const harness = ruleHarness(col.id);
+    const reasonKey = installBlockReason({
+      valid: ruleValid,
+      harness: col.id,
+      installable: harness !== null && isHarnessInstallable(harness),
+      scope,
+      projectPath: root,
+      previewLoading: preview.loading,
+      previewError: preview.error,
+      dest: entry?.dest ?? null,
+    });
+    const reason = reasonText(reasonKey);
+    return {
+      coverage,
+      busy: cellBusy,
+      disabled: cellBusy || (!coverage.all && reason !== null),
+      dest,
+      reasonKey,
+      reason,
+    };
+  }
+
+  /**
+   * Composed accessible name: harness + destination + state, plus the block
+   * reason when the cell is disabled (disabled-without-a-reason is a defect).
+   */
+  function cellLabel(row: Row, col: GridCol, cell: Cell): string {
+    const key = cell.coverage.all
+      ? "rules.install.cellOn"
+      : cell.coverage.some
+        ? "rules.install.cellPartial"
+        : "rules.install.cellOff";
+    const target = row.kind === "global" ? i18n.t("common.global") : row.label;
+    const base = i18n.t(key, { harness: col.label, target, dest: cell.dest ?? "—" });
+    return cell.disabled && cell.reason !== null ? `${base} — ${cell.reason}` : base;
+  }
+
+  function openAction(row: Row, col: GridCol): void {
+    if (acting) return;
+    const scope: Scope = row.kind === "global" ? "user" : "project";
+    const root = targetOf(row);
+    const coverage = ruleCellCoverage(rules.installations, [...ruleSlugSet], col.id, scope, root);
+    const targets = coverage.all
+      ? coverage.rows.map((installed) => ({
+          slug: installed.slug,
+          harness: installed.tool,
+          scope: installed.scope,
+          projectPath: installed.projectPath,
+        }))
+      : ruleCellTargets(rules.installations, [...ruleSlugSet], col.id, scope, root);
+    if (targets.length === 0) return;
+    action = {
+      kind: coverage.all ? "remove" : "install",
+      harness: col.id,
+      target: root,
+      targets,
+    };
+  }
+
+  /**
+   * One action, one toast. Success is emitted only when every target landed and
+   * at least one did; a refusal or a ledger re-read failure is `gridFailed`,
+   * never success (D2/§4).
+   */
+  async function runAction(): Promise<void> {
+    const pending = action;
+    action = null;
+    if (pending === null) return;
+    const key = cellKey(pending.harness, pending.target);
+    lastResult = {};
+    acting = true;
+    try {
+      const result = await rules.apply(
+        pending.kind === "install" ? "install" : "uninstall",
+        pending.targets,
+      );
+      lastResult = {
+        [key]: {
+          kind: pending.kind,
+          harness: pending.harness,
+          target: pending.target,
+          ok: result.ok,
+          fail: result.fail,
+          errors: result.failures.map((failure) => failure.error),
+        },
+      };
+      if (result.fail === 0 && result.ok > 0) {
+        toast.success(
+          i18n.t(
+            pending.kind === "install"
+              ? "rules.install.gridInstalled"
+              : "rules.install.gridRemoved",
+            { count: result.ok },
+          ),
+        );
+      } else if (result.fail > 0) {
+        toast.error(i18n.t("rules.install.gridPartial", { ok: result.ok, fail: result.fail }));
+      }
+    } catch (e) {
+      lastResult = {
+        [key]: {
+          kind: pending.kind,
+          harness: pending.harness,
+          target: pending.target,
+          ok: 0,
+          fail: pending.targets.length,
+          errors: [errorText(e)],
+        },
+      };
+      toast.error(i18n.t("rules.install.gridFailed", { error: errorText(e) }));
+    } finally {
+      acting = false;
+    }
+  }
+
+  function resultCounts(result: CellResult): string {
+    if (result.fail === 0) {
+      return i18n.t(
+        result.kind === "install" ? "rules.install.gridInstalled" : "rules.install.gridRemoved",
+        { count: result.ok },
+      );
+    }
+    return i18n.t("rules.install.gridPartial", { ok: result.ok, fail: result.fail });
+  }
+
+  const resultLines = $derived(
+    Object.entries(lastResult).map(([key, value]) => ({ key, ...value })),
+  );
+
+  const actionTitle = $derived(
+    action === null
+      ? ""
+      : i18n.t(
+          action.kind === "install"
+            ? "rules.install.gridInstallTitle"
+            : "rules.install.gridRemoveTitle",
+          { count: action.targets.length },
+        ),
+  );
+
+  const actionPlugin = $derived(
+    action === null ? null : (ruleHarness(action.harness)?.plugin ?? null),
+  );
+
   // ── "Add project…" popover ──
   // Instead of firing a native folder dialog on click (which feels broken in the
   // dev shim and is easy to spam), open a list of the projects you already manage
@@ -193,17 +616,25 @@
 </script>
 
 <Modal open {title} size="wide" onClose={onClose}>
-  <p class="sub">{i18n.t("install.sub", { count: total })}</p>
+  <p class="sub">
+    {isRule
+      ? i18n.t("rules.install.gridSub", { count: ruleSlugs.length })
+      : i18n.t("install.sub", { count: total })}
+  </p>
 
   {#if cols.length === 0}
     <p class="no-tools">{i18n.t("install.noTools")}</p>
   {:else}
   <div class="grid-wrap">
-  <div class="grid" style="--cols: {cols.length}">
+  <div
+    class="grid"
+    style="--cols: {cols.length}"
+    aria-busy={isRule && acting ? "true" : undefined}
+  >
     <!-- header row -->
     <div class="cell head corner"></div>
-    {#each cols as t (t.id)}
-      <div class="cell head tool" title={t.label}>{t.label}</div>
+    {#each cols as col (col.id)}
+      <div class="cell head tool" title={col.label}>{col.label}</div>
     {/each}
 
     {#each rows as row (row.kind === "global" ? "global" : row.path)}
@@ -216,26 +647,46 @@
           <span class="d-body"><span class="d-label">{row.label}</span><span class="d-path" title={row.path}>{row.path}</span></span>
         {/if}
       </div>
-      {#each cols as t (t.id)}
-        {#if applicable(row, t)}
-          {@const cov = cover(t.id, targetOf(row))}
-          {@const isBusy = busy === cellKey(t.id, targetOf(row))}
-          <button
-            class="cell toggle"
-            class:on={cov.all}
-            class:partial={cov.some}
-            disabled={isBusy || total === 0}
-            title={i18n.t("install.cellTitle", { tool: t.label, target: row.kind === "global" ? i18n.t("common.global") : row.label })}
-            aria-label={i18n.t(cov.all ? "install.removeFromAria" : "install.installIntoAria", { tool: t.label, target: row.kind === "global" ? i18n.t("install.globally") : i18n.t("install.inProject", { project: row.label }) })}
-            onclick={() => toggle(t.id, targetOf(row))}
-          >
-            {#if isBusy}<span class="dot busy"></span>
-            {:else if cov.all}<span class="dot full"></span>
-            {:else if cov.some}<span class="dot half"></span>
-            {:else}<span class="dot"></span>{/if}
-          </button>
+      {#each cols as col (col.id)}
+        {#if applicable(row, col)}
+          {#if isRule}
+            {@const cell = cellFor(row, col)}
+            {@const label = cellLabel(row, col, cell)}
+            <button
+              class="cell toggle"
+              class:on={cell.coverage.all}
+              class:partial={cell.coverage.some}
+              disabled={cell.disabled}
+              title={cell.disabled && cell.reason !== null ? cell.reason : label}
+              aria-label={label}
+              aria-pressed={cell.coverage.all}
+              onclick={() => openAction(row, col)}
+            >
+              {#if cell.busy}<span class="dot busy"></span>
+              {:else if cell.coverage.all}<span class="dot full"></span>
+              {:else if cell.coverage.some}<span class="dot half"></span>
+              {:else}<span class="dot"></span>{/if}
+            </button>
+          {:else}
+            {@const cov = cover(col.id, targetOf(row))}
+            {@const isBusy = busy === cellKey(col.id, targetOf(row))}
+            <button
+              class="cell toggle"
+              class:on={cov.all}
+              class:partial={cov.some}
+              disabled={isBusy || total === 0}
+              title={i18n.t("install.cellTitle", { tool: col.label, target: row.kind === "global" ? i18n.t("common.global") : row.label })}
+              aria-label={i18n.t(cov.all ? "install.removeFromAria" : "install.installIntoAria", { tool: col.label, target: row.kind === "global" ? i18n.t("install.globally") : i18n.t("install.inProject", { project: row.label }) })}
+              onclick={() => toggle(col.id, targetOf(row))}
+            >
+              {#if isBusy}<span class="dot busy"></span>
+              {:else if cov.all}<span class="dot full"></span>
+              {:else if cov.some}<span class="dot half"></span>
+              {:else}<span class="dot"></span>{/if}
+            </button>
+          {/if}
         {:else}
-          <div class="cell na" title={naReason(row, t)} aria-label={naReason(row, t)}>—</div>
+          <div class="cell na" title={naReason(row, col)} aria-label={naReason(row, col)}>—</div>
         {/if}
       {/each}
     {/each}
@@ -243,10 +694,39 @@
   </div>
   {/if}
 
-  {#if cols.length > 0 && projectOnlyCols.length > 0 && noProjects}
+  {#if isRule}
+    <!--
+      Created empty and kept mounted: a live region that is inserted together
+      with its text is not reliably announced. The content is the only thing that
+      appears/disappears (agent mode keeps its original markup — no live region).
+    -->
+    <p
+      class="grid-status"
+      class:blank={resultLines.length === 0}
+      role="status"
+      aria-live="polite"
+    >
+      {#if resultLines.length > 0}
+        {#each resultLines as result (result.key)}
+          <span
+            title={result.errors.length > 0
+              ? result.errors.join("\n")
+              : `${harnessLabel(result.harness)} · ${result.target === null ? i18n.t("common.global") : labelOf(result.target)}`}
+          >{resultCounts(result)}</span>
+        {/each}
+      {/if}
+    </p>
+  {/if}
+
+  {#if isRule && noProjects}
     <p class="scope-hint">
       <FolderPlus size={13} />
-      <span>{i18n.t("install.projectOnlyHint", { tools: projectOnlyCols.map((t) => t.label).join(", ") })}</span>
+      <span>{i18n.t("rules.install.gridProjectHint")}</span>
+    </p>
+  {:else if !isRule && cols.length > 0 && projectOnlyCols.length > 0 && noProjects}
+    <p class="scope-hint">
+      <FolderPlus size={13} />
+      <span>{i18n.t("install.projectOnlyHint", { tools: projectOnlyCols.map((col) => col.label).join(", ") })}</span>
     </p>
   {/if}
 
@@ -300,6 +780,25 @@
   </DestructiveConfirm>
 {/if}
 
+{#if action !== null}
+  <DestructiveConfirm
+    open
+    title={actionTitle}
+    confirmLabel={action.kind === "install" ? i18n.t("rules.install.action") : i18n.t("rules.uninstall.action")}
+    cancelLabel={i18n.t("common.cancel")}
+    confirmVariant={action.kind === "install" ? "primary" : "danger"}
+    onConfirm={() => void runAction()}
+    onCancel={() => (action = null)}
+  >
+    {#if action.kind === "remove"}
+      <p>{i18n.t("rules.uninstall.confirm")}</p>
+      {#if actionPlugin !== null}
+        <p>{i18n.t("rules.uninstall.pluginKept", { plugin: actionPlugin.package })}</p>
+      {/if}
+    {/if}
+  </DestructiveConfirm>
+{/if}
+
 <style>
   .sub { font-size: var(--text-body-sm); color: var(--color-text-muted); margin-bottom: var(--space-3); }
   .no-tools { font-size: var(--text-body-sm); color: var(--color-text-muted); }
@@ -333,6 +832,15 @@
   .dot.half { border-color: var(--color-brand); background: linear-gradient(90deg, var(--color-brand) 50%, transparent 50%); }
   .dot.busy { border-color: var(--color-text-muted); border-top-color: transparent; animation: spin 0.6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  .grid-status {
+    display: flex; flex-wrap: wrap; gap: var(--space-3);
+    margin-top: var(--space-2);
+    font-size: var(--text-caption); color: var(--color-text-secondary);
+  }
+  /* The region is always mounted in rule mode (live-region reliability); an
+     empty one must not leave a gap behind. */
+  .grid-status.blank { margin-top: 0; }
 
   .scope-hint {
     display: flex; align-items: center; gap: 7px;

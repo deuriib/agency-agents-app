@@ -1,3 +1,14 @@
+<script module lang="ts">
+  /**
+   * Open dialogs, in mount order. Every Modal listens for `keydown` on the same
+   * window node, so `stopPropagation()` cannot separate them: a confirm rendered
+   * alongside its grid would close both on one Escape. Only the topmost entry
+   * answers Escape and runs the Tab trap. Opaque tokens — no ids, no markup
+   * coupling — and a closed dialog removes its own entry, leaving no residue.
+   */
+  const dialogStack: symbol[] = [];
+</script>
+
 <script lang="ts">
   import type { Snippet } from "svelte";
   import { onMount } from "svelte";
@@ -38,6 +49,10 @@
 
   let dialogEl: HTMLDivElement | undefined = $state();
 
+  /** Per-instance token for the dialog stack, plus a per-instance title id. */
+  const dialogToken = Symbol("dialog");
+  const titleId = $props.id();
+
   const FOCUSABLE =
     "button, [href], input, select, textarea, [tabindex]:not([tabindex='-1'])";
 
@@ -77,12 +92,30 @@
     }
   });
 
+  // A dialog becomes topmost when it opens later than the one beneath it, and
+  // leaves the stack when it closes, so the next-lower dialog takes over.
+  $effect(() => {
+    if (!open) return;
+    dialogStack.push(dialogToken);
+    return () => {
+      const index = dialogStack.lastIndexOf(dialogToken);
+      if (index !== -1) dialogStack.splice(index, 1);
+    };
+  });
+
+  function isTopmostDialog(): boolean {
+    return dialogStack[dialogStack.length - 1] === dialogToken;
+  }
+
   function backdropClick() {
     if (dismissible) onClose?.();
   }
 
   function keydown(e: KeyboardEvent) {
     if (!open) return;
+    // Escape and the Tab trap belong to the topmost dialog only — a confirm on
+    // top of a grid must not let the grid also close and drop its previews.
+    if (!isTopmostDialog()) return;
     if (e.key === "Escape" && dismissible) {
       e.stopPropagation();
       onClose?.();
@@ -109,10 +142,10 @@
 
 {#if open}
   <div class="scrim" role="presentation" onclick={backdropClick}></div>
-  <div class="modal-wrap" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+  <div class="modal-wrap" role="dialog" aria-modal="true" aria-labelledby={titleId}>
     <div class="modal" class:wide={size === "wide"} bind:this={dialogEl}>
       <header>
-        <h1 id="modal-title">{title}</h1>
+        <h1 id={titleId}>{title}</h1>
         {#if dismissible}
           <button class="close" aria-label={i18n.t("common.close")} onclick={() => onClose?.()}>
             <X size={16} />
