@@ -9,12 +9,14 @@
 > copied from. If a value is not a token, it is a `calc()` of tokens or a stated
 > structural constant — never a magic number chosen for taste.
 >
-> **Superseded in part by issue #66.** Sections 2.1–2.4 described a second,
-> independent workspace (its own `<h1>`, a CSS grid split with no resizer, and
-> native `<select>` filters). The delivered Rules workspace now renders through
-> the shared `WorkspaceShell` and reuses the Agents grammar; those sections were
-> rewritten to match. The state model, the scope control and the preview contract
-> below are unchanged.
+> **Superseded in part by issues #66 and #92.** Sections 2.1–2.4 described a
+> second, independent workspace (its own `<h1>`, a CSS grid split with no
+> resizer, and native `<select>` filters). The delivered Rules workspace now
+> renders through the shared `WorkspaceShell` and reuses the Agents grammar;
+> those sections were rewritten to match. Issue #92 added a second install path
+> — a destinations × harnesses grid opened from the detail header — described in
+> §5.6. The state model, the scope control and the preview contract below are
+> otherwise unchanged.
 
 ---
 
@@ -246,8 +248,14 @@ The banner in state 5 uses `--color-warning-strong` for its **text**, never
 ### 4.1 Scope control (owned by `RuleDetail`, not `RulePreview`)
 
 There is exactly **one** scope control in the pane, and it drives both the preview
-and the install action. Two scope controls would let the user preview user-scope
-bytes while installing to a project (ENG-17: no duplicated state).
+and the inline install panel (`RuleInstallControls`). Two scope controls would let
+the user preview user-scope bytes while installing to a project (ENG-17: no
+duplicated state).
+
+That control belongs to the **inline** path. The bulk path is the destinations ×
+harnesses grid (§5.6), which has no scope control of its own: each row carries the
+scope it means (Global = user, a project row = that root). Both paths derive every
+on/off answer from `rules.installations` — neither keeps install state of its own.
 
 ```
 RuleDetail owns:  let scope = $state<"user" | "project">("user");
@@ -352,6 +360,9 @@ picked directory's basename. Use `DestructiveConfirm.svelte` with
 and `defaultFocus="cancel"` (the component's default) so an accidental Enter is
 the safe path.
 
+This per-triple confirm governs the **inline** panel. The bulk grid (§5.6)
+confirms once per action, over every target the clicked cell resolves to.
+
 ### 5.2 OpenCode plugin notice
 
 Shown when the active harness is `opencode`, above the install button, always
@@ -416,6 +427,83 @@ already there, and a false "nothing else will change" is worse than a conditiona
   awaits `rules.installations` being re-read (`rules_installs`) and re-derives.
   A failure leaves the previous install state untouched and displays the error;
   it never claims success (TASK 21).
+
+### 5.6 Bulk grid (issue #92)
+
+The detail header carries an **Install…** action (`rules.install.gridOpen`) that
+opens the shared `InstallModal` — the same destinations × harnesses grid Agents
+use — with `target = { kind: "rules", ruleSlugs: [slug] }`. Its accessible name is
+`rules.install.gridTitle` interpolated with the rule name, so a screen reader hears
+*which* rule it installs. On an invalid rule the button is disabled and states
+`rules.install.reasonInvalid` in both `title` and the accessible name
+(disabled-without-a-reason is a defect).
+
+Rows are `Global` plus every project root, where the project set is the
+Projects registry ∪ the distinct `projectPath` values of the rule ledger. The grid
+adds the ledger paths itself because `projects.list` unions only the agent ledger;
+without that, a rule installed into a folder later removed from Projects would lose
+its row and could only be uninstalled from the pane's "Installed in" list.
+
+Columns are exactly `installableHarnesses()` from `ruleRegistry.ts` — the four
+harnesses this app can write. No agent tool appears, and rule columns are not
+filtered by device detection: a harness that never put a file on this machine is
+still a valid install destination.
+
+A cell's state is `ruleCellCoverage(rules.installations, …)` over
+`(slug, harness, scope, projectPath)`; a project row with no folder resolves to no
+state. `aria-pressed` is true when every slug in the payload is installed in that
+cell, and the half dot renders a partial (the payload is a set from day one; one
+rule is on or off today).
+
+Destinations come from `rules_preview`: one call per (row, rule in the payload),
+issued through the store's `previewFor` — never the detail pane's `preview()`,
+which owns `previewResult`/`previewError`/`previewLoading`. With today's
+single-rule entry point that is one call per row. The backend answers one rule
+for every installable harness or rejects that call, so a single rule is never
+half-resolved: the cache holds one entry per row **and** per rule, and each entry
+carries that rule's whole answer or its error. A row aggregates its entries — it
+is loading while any rule is still resolving and failed as soon as one rule
+rejected — so a multi-rule payload never reads as settled while part of it is
+unresolved.
+
+The payload is one rule today, so a cell shows exactly one destination. A
+multi-rule payload (#71) can resolve the same harness for several rules; the cell
+is then labelled with the first rule that resolves it, and the others are not
+surfaced yet.
+
+A cell with no usable destination is disabled with a reason from
+`installBlockReason`, mapped through the existing `rules.install.reason*` strings
+and carried in both `title` and the composed accessible name. **The reason gates
+install only**: an already-installed cell stays clickable when its row's preview
+failed, so its ledger row can still be removed — the inline panel has always
+behaved that way, and disabling removal would be a regression.
+
+One action is one cell. There is deliberately no row-level "install everywhere"
+button; `rules.apply` already accepts a target list, so batching remains possible
+for a follow-up, but no control in this grid produces it. Install and removal both
+write or delete user files, so both confirm: one `DestructiveConfirm` per action,
+titled `rules.install.gridInstallTitle` / `rules.install.gridRemoveTitle` with
+`{count}`, with `rules.uninstall.confirm` as the body on removal and
+`rules.uninstall.pluginKept` added when the harness carries a plugin (OpenCode).
+
+Results are reported per cell, not per target: the clicked cell keeps its
+`{ok, fail, errors}` and the grid renders a `role="status" aria-live="polite"`
+summary line. Exactly one toast fires per action — `gridInstalled` / `gridRemoved`
+when every target landed, `gridPartial` (`{ok}`, `{fail}`) when some failed, and
+`gridFailed` when the action itself rejected (including a failed ledger re-read).
+A partial or failed action never emits a success toast, and a no-op emits nothing.
+
+The store re-reads `rules_installs` exactly once after the action and every cell
+re-derives from it. Nothing is set optimistically: a cell only turns on because the
+ledger answered with the new row.
+
+With no project registered the grid does not invent a row: it keeps the
+**Add project…** popover and renders `rules.install.gridProjectHint` above it.
+A row is always a real path, so a destination with "no folder" cannot exist.
+
+The inline panel (§4.1, §5.1–§5.5) remains the **precise** path: it is the only
+place with a real folder picker, the per-harness reason strings, and the OpenCode
+plugin contract (§5.2). The grid is an additional path, never the only one.
 
 ---
 
