@@ -37,7 +37,7 @@
 //!   bogus version.
 
 use serde::de::DeserializeOwned;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::commands::settings::UpdateChannel;
@@ -61,6 +61,55 @@ const MAX_NAME_CHARS: usize = 200;
 /// releases on this repo, so the newest prerelease is always on the first
 /// page without pagination.
 const BETA_RELEASE_PAGE_SIZE: usize = 30;
+
+/// A Linux package format a build can be installed from.
+///
+/// Serializes lowercase (`"deb"` / `"rpm"`) because it reaches the renderer
+/// inside [`PackageAsset`], where it picks the download label and the
+/// `{format}` placeholder of the explanatory sentence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PackageFormat {
+    Deb,
+    Rpm,
+}
+
+impl PackageFormat {
+    /// Lowercase name, matching the serde wire form. Used by the
+    /// `self_update_unsupported` error message.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            PackageFormat::Deb => "deb",
+            PackageFormat::Rpm => "rpm",
+        }
+    }
+
+    /// The extension that identifies this format among the release assets.
+    fn extension(self) -> &'static str {
+        match self {
+            PackageFormat::Deb => ".deb",
+            PackageFormat::Rpm => ".rpm",
+        }
+    }
+}
+
+/// A downloadable installer attached to the release.
+///
+/// Only the two package formats a Linux build can be installed from are
+/// represented: those are the ones whose in-place update path is closed
+/// (issue #56), so they are the only artifacts the UI has to link as a
+/// manual download.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PackageAsset {
+    /// Which package manager installs this asset.
+    pub format: PackageFormat,
+    /// Asset filename as published, e.g. `Agency.Agents_0.13.0_amd64.deb`.
+    /// Shown in the download tooltip so the user knows what they are saving.
+    pub name: String,
+    /// Validated `https://github.com/...` download URL.
+    pub url: String,
+}
 
 /// A published GitHub Release, reduced to the fields the updater needs.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -87,6 +136,11 @@ pub struct ReleaseInfo {
     /// uses this to choose the beta manifest endpoint, and to tell a
     /// beta-channel result apart from the beta fallback to stable.
     pub prerelease: bool,
+    /// The `.deb` / `.rpm` installers attached to this release, in asset
+    /// order. Empty when the release ships none. The caller selects the
+    /// one matching the running build's bundle type; a build that cannot
+    /// self-update links this instead of calling the installer (#56).
+    pub package_assets: Vec<PackageAsset>,
 }
 
 // ---------- Raw API shapes (subset of fields actually used) ----------
@@ -117,6 +171,11 @@ struct RawRelease {
 struct RawAsset {
     #[serde(default)]
     name: String,
+    /// GitHub's CDN-backed download URL. Absent on assets uploaded in a
+    /// state that has not finished processing, so it defaults to empty and
+    /// the asset is skipped.
+    #[serde(default)]
+    browser_download_url: String,
 }
 
 // ---------- Public API ----------
@@ -298,6 +357,7 @@ fn convert_raw_release(raw: RawRelease, repo: &GithubRepo) -> Option<ReleaseInfo
     let tag = raw.tag_name.trim().to_string();
     let html_url = safe_release_url(raw.html_url.as_deref(), repo, &tag);
     let installable = raw.assets.iter().any(|asset| asset.name == "latest.json");
+    let package_assets = package_assets(&raw.assets);
 
     Some(ReleaseInfo {
         version,
@@ -308,7 +368,45 @@ fn convert_raw_release(raw: RawRelease, repo: &GithubRepo) -> Option<ReleaseInfo
         html_url,
         installable,
         prerelease: raw.prerelease,
+        package_assets,
     })
+}
+
+/// The `.deb` / `.rpm` installers among a release's assets.
+///
+/// An asset qualifies only when its name carries the extension **and** its
+/// download URL survives the same https + `github.com` check as the release
+/// page: the renderer hands the URL to the OS opener, so a hostile or
+/// malformed value must not survive parsing. Anything suspect is dropped
+/// rather than repaired — a missing package link degrades to "View release",
+/// while a poisoned one is a click away from executing.
+fn package_assets(assets: &[RawAsset]) -> Vec<PackageAsset> {
+    assets
+        .iter()
+        .filter_map(|asset| {
+            let name = asset.name.as_str();
+            let lower = name.to_ascii_lowercase();
+            let format = if lower.ends_with(PackageFormat::Deb.extension()) {
+                PackageFormat::Deb
+            } else if lower.ends_with(PackageFormat::Rpm.extension()) {
+                PackageFormat::Rpm
+            } else {
+                return None;
+            };
+            if !is_github_https(&asset.browser_download_url) {
+                tracing::warn!(
+                    asset = %name,
+                    "github releases: package asset has an untrusted download URL; ignoring"
+                );
+                return None;
+            }
+            Some(PackageAsset {
+                format,
+                name: name.to_string(),
+                url: asset.browser_download_url.clone(),
+            })
+        })
+        .collect()
 }
 
 /// Trim, collapse a trailing newline, and truncate on a char boundary.
@@ -331,12 +429,10 @@ fn bounded_text(value: Option<&str>, max_chars: usize) -> Option<String> {
 /// build the canonical URL from the validated repo + tag instead.
 fn safe_release_url(candidate: Option<&str>, repo: &GithubRepo, tag: &str) -> String {
     if let Some(url) = candidate {
-        if let Ok(parsed) = Url::parse(url) {
-            let is_github = parsed.scheme() == "https"
-                && parsed.host_str() == Some("github.com")
-                && parsed.username().is_empty()
-                && parsed.password().is_none();
-            if is_github {
+        if is_github_https(url) {
+            // `Url::parse` succeeded inside the check; re-parsing to get the
+            // normalized form is infallible here.
+            if let Ok(parsed) = Url::parse(url) {
                 return parsed.to_string();
             }
         }
@@ -345,6 +441,19 @@ fn safe_release_url(candidate: Option<&str>, repo: &GithubRepo, tag: &str) -> St
         "https://github.com/{}/{}/releases/tag/{}",
         repo.owner, repo.repo, tag
     )
+}
+
+/// True iff `candidate` parses as a credential-free `https://github.com/...`
+/// URL. Shared by the release-page check and the package-asset filter so the
+/// two cannot drift.
+fn is_github_https(candidate: &str) -> bool {
+    let Ok(parsed) = Url::parse(candidate) else {
+        return false;
+    };
+    parsed.scheme() == "https"
+        && parsed.host_str() == Some("github.com")
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
 }
 
 // ---------- Tests ----------
@@ -567,5 +676,135 @@ mod tests {
     #[test]
     fn beta_treats_an_empty_release_list_as_none() {
         assert!(parse_release_list(b"[]", &repo()).expect("parse").is_none());
+    }
+
+    // ---------- Package assets (#56) ----------
+
+    /// A release whose assets each carry a download URL. `assets` is
+    /// `(name, browser_download_url)` so the URL check can be exercised.
+    fn release_json_with_downloads(assets: &[(&str, &str)]) -> Vec<u8> {
+        let assets_json: Vec<String> = assets
+            .iter()
+            .map(|(name, url)| {
+                format!(r#"{{"name":"{name}","browser_download_url":"{url}"}}"#)
+            })
+            .collect();
+        format!(
+            r#"{{
+                "tag_name": "v0.13.0",
+                "body": "Patch release.",
+                "html_url": "https://github.com/deuriib/agency-agents-app/releases/tag/v0.13.0",
+                "assets": [{}]
+            }}"#,
+            assets_json.join(",")
+        )
+        .into_bytes()
+    }
+
+    const DEB_URL: &str = "https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/Agency.Agents_0.13.0_amd64.deb";
+    const RPM_URL: &str = "https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/Agency.Agents-0.13.0-1.x86_64.rpm";
+
+    /// The two formats whose in-place path the plugin closes are extracted;
+    /// everything else on the release (AppImage tarball, `latest.json`, the
+    /// `.sig` files) is ignored.
+    #[test]
+    fn parse_extracts_deb_and_rpm_assets() {
+        let bytes = release_json_with_downloads(&[
+            ("latest.json", "https://github.com/x/y/releases/download/v0.13.0/latest.json"),
+            (
+                "Agency.Agents_0.13.0_amd64.AppImage.tar.gz",
+                "https://github.com/x/y/releases/download/v0.13.0/AppImage.tar.gz",
+            ),
+            ("Agency.Agents_0.13.0_amd64.deb", DEB_URL),
+            ("Agency.Agents-0.13.0-1.x86_64.rpm", RPM_URL),
+            ("Agency.Agents_0.13.0_amd64.deb.sig", "https://github.com/x/y/releases/download/v0.13.0/deb.sig"),
+        ]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+
+        assert_eq!(
+            release.package_assets,
+            vec![
+                PackageAsset {
+                    format: PackageFormat::Deb,
+                    name: "Agency.Agents_0.13.0_amd64.deb".into(),
+                    url: DEB_URL.into(),
+                },
+                PackageAsset {
+                    format: PackageFormat::Rpm,
+                    name: "Agency.Agents-0.13.0-1.x86_64.rpm".into(),
+                    url: RPM_URL.into(),
+                },
+            ]
+        );
+    }
+
+    /// A release with no package installers (the AppImage-only case) yields an
+    /// empty list rather than an error.
+    #[test]
+    fn parse_reports_no_package_assets_when_the_release_ships_none() {
+        let bytes = release_json_with_downloads(&[(
+            "Agency.Agents_0.13.0_amd64.AppImage.tar.gz",
+            "https://github.com/x/y/releases/download/v0.13.0/AppImage.tar.gz",
+        )]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+        assert!(release.package_assets.is_empty());
+    }
+
+    /// The download URL is handed to the OS opener, so an asset served from a
+    /// host we do not control is dropped, not repaired.
+    #[test]
+    fn parse_drops_package_assets_with_an_untrusted_download_url() {
+        let bytes = release_json_with_downloads(&[
+            (
+                "Agency.Agents_0.13.0_amd64.deb",
+                "https://evil.example/Agency.Agents_0.13.0_amd64.deb",
+            ),
+            ("Agency.Agents-0.13.0-1.x86_64.rpm", "not a url"),
+            // Plain-http github is not good enough either.
+            (
+                "Agency.Agents_0.13.0_arm64.deb",
+                "http://github.com/x/y/releases/download/v0.13.0/a.deb",
+            ),
+        ]);
+        let release = parse_release_json(&bytes, &repo())
+            .expect("parse")
+            .expect("release");
+        assert!(
+            release.package_assets.is_empty(),
+            "untrusted download URLs must not survive parsing: {:?}",
+            release.package_assets
+        );
+    }
+
+    /// The renderer switches on `format` to pick the download label, so the
+    /// lowercase wire form is part of the contract.
+    #[test]
+    fn package_asset_serializes_lowercase_format_in_camel_case() {
+        let asset = PackageAsset {
+            format: PackageFormat::Deb,
+            name: "Agency.Agents_0.13.0_amd64.deb".into(),
+            url: DEB_URL.into(),
+        };
+        let v = serde_json::to_value(&asset).unwrap();
+        assert_eq!(v["format"], "deb");
+        assert_eq!(v["name"], "Agency.Agents_0.13.0_amd64.deb");
+        assert_eq!(v["url"], DEB_URL);
+
+        let v = serde_json::to_value(PackageAsset {
+            format: PackageFormat::Rpm,
+            ..asset
+        })
+        .unwrap();
+        assert_eq!(v["format"], "rpm");
+    }
+
+    #[test]
+    fn package_format_as_str_matches_its_wire_form() {
+        assert_eq!(PackageFormat::Deb.as_str(), "deb");
+        assert_eq!(PackageFormat::Rpm.as_str(), "rpm");
     }
 }

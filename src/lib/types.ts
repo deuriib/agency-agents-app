@@ -208,15 +208,25 @@ export interface CreatedIssue {
 // =========================================================
 
 /**
- * A newer Agency Agents version surfaced by the manifest at
- * `agencyagents.app/updater.json`. Held by the updater store
- * once a check returns `available`. Matches the camelCase wire shape
- * the backend's `UpdateCheckOutcome::Available` flattens onto when
- * serde-tagged with `kind`.
+ * A newer Agency Agents version surfaced by the published GitHub
+ * Release. Held by the updater store once a check returns
+ * `available`. Matches the camelCase wire shape the backend's
+ * `UpdateCheckOutcome::Available` flattens onto when serde-tagged with
+ * `kind`.
  *
- * `notes` is the raw `notes` field from the manifest — free-form text
- * (we publish a "See release notes at <url>" sentence by default), so
- * UI renders it as-is.
+ * Two independent booleans decide what the card may offer, and they are
+ * never interchangeable:
+ *
+ *   - `installable` is a property of the **release** — does it carry a
+ *     `latest.json` the plugin can fetch?
+ *   - `inAppInstall` is a property of the **running build** — can this
+ *     binary install anything in place? False for `.deb` / `.rpm`
+ *     installs, whose installer rejects the manifest's payload every
+ *     time (#56).
+ *
+ * `notes` is the release body as Markdown, already reduced to plain
+ * text by the backend (`github::releases::strip_markdown`), so the card
+ * renders it as-is — no Markdown pass, no HTML, no sanitizer.
  *
  * No `sha256` here: the manifest sha256 is verified inside the plugin
  * before signature verification; never exposed to the renderer.
@@ -228,7 +238,33 @@ export interface UpdateInfo {
   pubDate: string | null;
   releaseUrl: string;
   installable: boolean;
+  inAppInstall: boolean;
+  /**
+   * The release's installer matching this build's package format, when
+   * `inAppInstall` is false. `undefined` for a self-updatable build, or
+   * when the release ships no matching asset — both fall back to the
+   * "View release" affordance.
+   */
+  packageDownload?: PackageAsset;
   skipped: boolean;
+}
+
+/**
+ * A Linux package format a build can be installed from. Lowercase on the
+ * wire (`serde(rename_all = "lowercase")` in `github::releases`).
+ */
+export type PackageFormat = "deb" | "rpm";
+
+/**
+ * A downloadable installer attached to the release. Only the two package
+ * formats whose in-place update path is closed are represented (#56).
+ */
+export interface PackageAsset {
+  format: PackageFormat;
+  /** Asset filename as published; shown in the download tooltip. */
+  name: string;
+  /** Validated `https://github.com/...` download URL. */
+  url: string;
 }
 
 /**
@@ -257,6 +293,8 @@ export type UpdateCheckOutcome =
       pubDate: string | null;
       releaseUrl: string;
       installable: boolean;
+      inAppInstall: boolean;
+      packageDownload?: PackageAsset;
       skipped: boolean;
     };
 
@@ -303,6 +341,8 @@ export type AppErrorPayload =
   | { code: "hash_mismatch"; expected: string; actual: string }
   | { code: "signature_verification_failed"; message: string }
   | { code: "downgrade_rejected"; current: string; target: string }
+  | { code: "self_update_unsupported"; bundle: string }
+  | { code: "invalid_updater_format"; message: string }
   | { code: "install_canceled" }
   | { code: "install_in_progress" };
 
@@ -359,6 +399,13 @@ export function appErrorMessage(e: AppErrorPayload): string {
       return `Update aborted: signature verification failed (${e.message}).`;
     case "downgrade_rejected":
       return `Update refused: ${e.target} is not newer than the installed version (${e.current}).`;
+    // Issue #56. Both of these are local, deterministic dead ends — no retry
+    // and no connection check can change the outcome — so the copy names the
+    // one action that works instead of inviting a retry.
+    case "self_update_unsupported":
+      return `This build was installed from a ${e.bundle} package, so it can't update itself. Download the new package from the release page and install it over the old one.`;
+    case "invalid_updater_format":
+      return `Update aborted: the downloaded file isn't a valid installer for this build (${e.message}). Download the package from the release page instead.`;
     case "install_canceled":
       return "Update canceled before it was installed.";
     case "install_in_progress":

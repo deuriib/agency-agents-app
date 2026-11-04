@@ -105,13 +105,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
+use tauri::utils::config::BundleType;
 use tauri::State;
 use tokio::sync::RwLock;
 
 use crate::commands::settings::UpdateChannel;
 use crate::error::AppError;
 use crate::github::auth::Token;
-use crate::github::{self, GithubRepo, ReleaseInfo};
+use crate::github::{self, GithubRepo, PackageAsset, PackageFormat, ReleaseInfo};
 use crate::state::AppState;
 use crate::util::semver;
 
@@ -156,6 +157,21 @@ pub enum UpdateCheckOutcome {
         /// means the UI should offer "View release" (manual download)
         /// instead of "Install update".
         installable: bool,
+        /// True iff this **running build** can install updates in place.
+        ///
+        /// Distinct from `installable`, which is a property of the *release*:
+        /// a release can carry a perfectly good manifest that this particular
+        /// build still cannot consume. False for `.deb` / `.rpm` installs,
+        /// where the plugin's installer rejects the manifest's payload every
+        /// time (#56). The UI uses this to choose the affordance, and to stop
+        /// promising an automatic install it can never perform.
+        in_app_install: bool,
+        /// The release's installer for this build's package format, when the
+        /// build cannot self-update (#56). `None` for a self-updatable build,
+        /// or when the release ships no matching asset — both degrade to
+        /// "View release".
+        #[serde(skip_serializing_if = "Option::is_none")]
+        package_download: Option<PackageAsset>,
         /// True iff the user has already skipped this version via the
         /// title-bar indicator's `×`. UI uses this to suppress the
         /// re-display of the indicator (Settings panel still shows the
@@ -175,6 +191,12 @@ pub struct CachedUpdate {
     pub pub_date: Option<String>,
     pub release_url: String,
     pub installable: bool,
+    /// See [`UpdateCheckOutcome::Available::in_app_install`]. Cached so an
+    /// install attempt made later in the same session is gated on the same
+    /// answer the card was rendered from.
+    pub in_app_install: bool,
+    /// See [`UpdateCheckOutcome::Available::package_download`].
+    pub package_download: Option<PackageAsset>,
     /// Signed manifest the plugin must fetch for this exact release.
     /// Computed at check time from the settings channel and whether the
     /// release is a prerelease (see [`manifest_url`]), so a later settings
@@ -545,18 +567,114 @@ impl<R: tauri::Runtime> InstallBackend for PluginBackend<R> {
 /// releases).
 #[cfg(not(test))]
 fn translate_plugin_error(e: tauri_plugin_updater::Error, context: &str) -> AppError {
-    let msg = e.to_string();
+    classify_plugin_error(&e.to_string(), context)
+}
+
+/// The classifier behind [`translate_plugin_error`], split out so it can be
+/// tested. The production wrapper is `#[cfg(not(test))]` because it needs the
+/// plugin's concrete error type; the *decision* is pure string matching and
+/// deserves coverage.
+///
+/// Order matters. **An installer-format rejection is checked before the
+/// signature branch** because the plugin's message for it mentions neither
+/// signatures nor the network — and landing in `AppError::Network` was the
+/// secondary defect in #56: it told the user to check a connection that was
+/// working, after the full artifact had already downloaded.
+fn classify_plugin_error(msg: &str, context: &str) -> AppError {
     let lower = msg.to_lowercase();
+    // Installer mismatch (#56). The plugin validates the payload against the
+    // bundle type baked into the binary before writing anything:
+    // `install_deb` → `is_deb` false → `Error::InvalidUpdaterFormat`.
+    if lower.contains("invalid updater binary format")
+        || lower.contains("not a valid deb")
+        || lower.contains("not a valid rpm")
+    {
+        return AppError::InvalidUpdaterFormat {
+            message: msg.to_string(),
+        };
+    }
     // Signature / minisign failures map to `SignatureVerificationFailed`
     // so the UI surfaces the same toast as a sha256 mismatch (both are
     // "the bytes did not verify, abort").
     if lower.contains("signature") || lower.contains("minisign") || lower.contains("pubkey") {
-        AppError::SignatureVerificationFailed { message: msg }
+        AppError::SignatureVerificationFailed {
+            message: msg.to_string(),
+        }
     } else {
         AppError::Network {
             url: context.to_string(),
-            message: msg,
+            message: msg.to_string(),
         }
+    }
+}
+
+// ---------- Bundle-type capability (#56) ----------
+
+/// The bundle type of the *running* binary.
+///
+/// `tauri-utils` patchers write a sentinel into the executable when the bundler
+/// produces a `.deb`, `.rpm`, AppImage, `.msi` or NSIS installer; this reads it
+/// back. `None` means "unbundled" — a `tauri dev` run, or a build the patcher
+/// did not touch. Cheap to call (one static read), so it needs no caching.
+fn local_bundle_type() -> Option<BundleType> {
+    tauri::utils::platform::bundle_type()
+}
+
+/// The package format this build **cannot** self-update from, if any.
+///
+/// Pure on purpose: the whole decision is "which bundle am I?", so it is
+/// testable for all five bundle types without a Tauri runtime, a network call
+/// or a built artifact.
+///
+/// # Why `.deb` and `.rpm` are blocked
+///
+/// `tauri-plugin-updater` picks its installer from the bundle type baked into
+/// the binary (`installer_for_bundle_type(bundle_type())`), but the release
+/// manifest serves exactly **one** `linux-x86_64` payload because
+/// `tauri_plugin_updater::target()` builds its key as `{os}-{arch}` with no
+/// installer dimension. Our manifest points that key at the AppImage tarball,
+/// so a package install hands an AppImage to `install_deb`, which rejects it
+/// with `InvalidUpdaterFormat` — deterministically, every time, forever.
+///
+/// Pointing the manifest at the `.deb` instead would fix package installs and
+/// break the AppImage, which self-updates correctly today. Giving up the
+/// working path to rescue the broken one is the worse trade, so a package
+/// build is told the truth: it cannot update itself.
+///
+/// AppImage, macOS `.app`, Windows `.msi`/`.nsis` and `None` (dev) all return
+/// `None` — their in-place path is unchanged.
+pub fn blocked_package_format(bundle: Option<BundleType>) -> Option<PackageFormat> {
+    match bundle? {
+        BundleType::Deb => Some(PackageFormat::Deb),
+        BundleType::Rpm => Some(PackageFormat::Rpm),
+        _ => None,
+    }
+}
+
+/// The release asset that matches this build's package format, if the release
+/// ships one.
+///
+/// `None` in three cases: the build can self-update (nothing to download), the
+/// bundle type is unknown, or the release carries no installer for it. All
+/// three collapse to the same UI outcome — "View release" — so they need no
+/// distinguishing payload.
+fn package_download_for(
+    bundle: Option<BundleType>,
+    assets: &[PackageAsset],
+) -> Option<PackageAsset> {
+    let format = blocked_package_format(bundle)?;
+    assets.iter().find(|a| a.format == format).cloned()
+}
+
+/// [`blocked_package_format`] as a `Result`, so `run_install`'s gate is one
+/// `?` and the error — including the `bundle` string the renderer shows — has
+/// a single construction site that a test can exercise for every bundle type.
+fn self_update_gate(bundle: Option<BundleType>) -> Result<(), AppError> {
+    match blocked_package_format(bundle) {
+        Some(format) => Err(AppError::SelfUpdateUnsupported {
+            bundle: format.as_str().to_string(),
+        }),
+        None => Ok(()),
     }
 }
 
@@ -588,6 +706,12 @@ pub async fn run_check(
     let (outcome, cached) = match latest {
         Some(release) if semver::is_strict_upgrade(current, &release.version) => {
             let skipped = is_version_skipped(state, &release.version).await;
+            // Read the bundle type once per check so the cached payload and
+            // the announced payload cannot disagree about what this build can
+            // do.
+            let bundle = local_bundle_type();
+            let in_app_install = blocked_package_format(bundle.clone()).is_none();
+            let package_download = package_download_for(bundle, &release.package_assets);
             let cached = CachedUpdate {
                 version: release.version.clone(),
                 current_version: current.to_string(),
@@ -595,6 +719,8 @@ pub async fn run_check(
                 pub_date: release.published_at.clone(),
                 release_url: release.html_url.clone(),
                 installable: release.installable,
+                in_app_install,
+                package_download: package_download.clone(),
                 manifest_url: manifest_url(&github::app_repo(), channel, &release),
             };
             let outcome = UpdateCheckOutcome::Available {
@@ -604,6 +730,8 @@ pub async fn run_check(
                 pub_date: release.published_at,
                 release_url: release.html_url,
                 installable: release.installable,
+                in_app_install,
+                package_download,
                 skipped,
             };
             (outcome, Some(cached))
@@ -694,6 +822,20 @@ pub async fn run_install(
             ),
         });
     }
+
+    // 2b. Bundle-type gate (#56). A `.deb` / `.rpm` install has no in-place
+    // path at all: the plugin dispatches to `dpkg` / `rpm` from the bundle
+    // type baked into the binary, and the manifest's single `linux-x86_64`
+    // entry is the AppImage. Refusing here — before `download_and_install` —
+    // is the point of the whole fix: the user stops paying ~85 MB of
+    // bandwidth for an outcome that cannot change. The UI already offers the
+    // package download instead, so this is defense in depth against a stale
+    // card or a direct IPC call, not a user-facing path.
+    //
+    // `cached.in_app_install` was computed at check time; re-deriving from the
+    // live bundle type keeps the two from drifting if the payload ever comes
+    // from somewhere other than `run_check`.
+    self_update_gate(local_bundle_type())?;
 
     // 3. Explicit downgrade rejection (defense in depth; the plugin's
     // own version comparator already does this, but a future plugin
@@ -816,6 +958,11 @@ pub enum AutoInstallSkip {
     SkippedVersion,
     /// A background install is already in flight (single-flight guard).
     AlreadyRunning,
+    /// This build cannot install updates in place at all — a `.deb` / `.rpm`
+    /// install (#56). Distinct from [`Self::NotInstallable`], which is about
+    /// the *release*; this one is about the machine, and no release can fix
+    /// it.
+    UnsupportedBundle,
     /// No cached entry, no in-app manifest, or a downgrade — the cases
     /// `run_install` refuses with a typed gate error.
     NotInstallable,
@@ -838,6 +985,26 @@ pub enum AutoInstallResult {
 /// Kept separate from [`run_auto_install`] so the scheduler can decide whether
 /// emitting a `Started` event is even truthful before it does so.
 pub async fn auto_install_blocker(state: &AppState, version: &str) -> Option<AutoInstallSkip> {
+    auto_install_blocker_for_bundle(state, version, local_bundle_type()).await
+}
+
+/// [`auto_install_blocker`] with the bundle type injected.
+///
+/// Split out for one reason: the public entry point has to read the bundle type
+/// off the running binary, which makes its result depend on how the test
+/// harness was built. Injecting it lets the gate be exercised for every bundle
+/// type on any host.
+///
+/// The bundle-type gate runs with the user's own settings gates but **before**
+/// the skip-list and single-flight checks: on a package install there is no
+/// install to skip or serialize, so reporting any other reason would be noise.
+/// Without this gate the scheduler would emit `Started` and then `Failed` on
+/// every wake — a journal row per day for an outcome that cannot change.
+async fn auto_install_blocker_for_bundle(
+    state: &AppState,
+    version: &str,
+    bundle: Option<BundleType>,
+) -> Option<AutoInstallSkip> {
     use crate::commands::settings::SettingsLoadState;
 
     let (enabled, paranoid_on) = {
@@ -858,6 +1025,9 @@ pub async fn auto_install_blocker(state: &AppState, version: &str) -> Option<Aut
     }
     if !enabled {
         return Some(AutoInstallSkip::Disabled);
+    }
+    if blocked_package_format(bundle).is_some() {
+        return Some(AutoInstallSkip::UnsupportedBundle);
     }
     if is_version_skipped(state, version).await {
         return Some(AutoInstallSkip::SkippedVersion);
@@ -1634,6 +1804,7 @@ mod tests {
             ),
             installable: true,
             prerelease: false,
+            package_assets: Vec::new(),
         }
     }
 
@@ -2026,6 +2197,8 @@ mod tests {
                     "https://github.com/deuriib/agency-agents-app/releases/tag/v{current}"
                 ),
                 installable: true,
+                in_app_install: true,
+                package_download: None,
                 manifest_url: manifest_url(
                     &github::app_repo(),
                     UpdateChannel::Stable,
@@ -2433,6 +2606,8 @@ mod tests {
             pub_date: Some("2026-05-24T00:00:00Z".into()),
             release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1".into(),
             installable: false,
+            in_app_install: true,
+            package_download: None,
             skipped: false,
         })
         .unwrap();
@@ -2446,7 +2621,38 @@ mod tests {
             "https://github.com/deuriib/agency-agents-app/releases/tag/v0.3.1"
         );
         assert_eq!(v["installable"], false);
+        assert_eq!(v["inAppInstall"], true);
+        // Absent rather than `null`: the renderer checks truthiness, and a
+        // present key with a null value invites `in`-style bugs.
+        assert!(v.get("packageDownload").is_none());
         assert_eq!(v["skipped"], false);
+    }
+
+    /// A package build's payload carries the download the card should offer,
+    /// in the camelCase shape `types.ts` declares (#56).
+    #[test]
+    fn update_check_outcome_carries_the_package_download_for_package_builds() {
+        let asset = package_asset(PackageFormat::Deb, "Agency.Agents_0.13.0_amd64.deb");
+        let v = serde_json::to_value(UpdateCheckOutcome::Available {
+            version: "0.13.0".into(),
+            current_version: "0.12.0".into(),
+            notes: None,
+            pub_date: None,
+            release_url: "https://github.com/deuriib/agency-agents-app/releases/tag/v0.13.0"
+                .into(),
+            installable: true,
+            in_app_install: false,
+            package_download: Some(asset.clone()),
+            skipped: false,
+        })
+        .unwrap();
+        assert_eq!(v["inAppInstall"], false);
+        assert_eq!(v["packageDownload"]["format"], "deb");
+        assert_eq!(
+            v["packageDownload"]["name"],
+            "Agency.Agents_0.13.0_amd64.deb"
+        );
+        assert_eq!(v["packageDownload"]["url"], asset.url);
     }
 
     /// `current_app_version` returns a parseable semver-shaped string.
@@ -2454,6 +2660,108 @@ mod tests {
     fn current_app_version_is_semver_shaped() {
         let v = current_app_version();
         assert!(semver::parse(v).is_some(), "{v} did not parse as semver");
+    }
+
+    // ---------- Bundle-type capability (#56) ----------
+
+    /// The decision is exhaustive over the bundle types `tauri-utils` can
+    /// report, so no build silently falls on the wrong side of the gate.
+    ///
+    /// `.deb` / `.rpm` are the two whose installer rejects the manifest's
+    /// single `linux-x86_64` payload (the AppImage). Everything else —
+    /// AppImage, macOS `.app`/`.dmg`, Windows `.msi`/NSIS — keeps its working
+    /// in-place path, and `None` (a `tauri dev` binary, which carries no
+    /// bundle sentinel) is treated like the AppImage path it actually is.
+    #[test]
+    fn blocked_package_format_covers_every_bundle_type() {
+        assert_eq!(
+            blocked_package_format(Some(BundleType::Deb)),
+            Some(PackageFormat::Deb)
+        );
+        assert_eq!(
+            blocked_package_format(Some(BundleType::Rpm)),
+            Some(PackageFormat::Rpm)
+        );
+        assert_eq!(blocked_package_format(Some(BundleType::AppImage)), None);
+        assert_eq!(blocked_package_format(Some(BundleType::App)), None);
+        assert_eq!(blocked_package_format(Some(BundleType::Dmg)), None);
+        assert_eq!(blocked_package_format(Some(BundleType::Msi)), None);
+        assert_eq!(blocked_package_format(Some(BundleType::Nsis)), None);
+        assert_eq!(blocked_package_format(None), None);
+    }
+
+    /// The gate builds the typed error the renderer switches on, with the
+    /// bundle name in the lowercase form its copy expects.
+    #[test]
+    fn self_update_gate_reports_the_package_format() {
+        assert!(self_update_gate(Some(BundleType::AppImage)).is_ok());
+        assert!(self_update_gate(None).is_ok());
+        match self_update_gate(Some(BundleType::Rpm)) {
+            Err(AppError::SelfUpdateUnsupported { bundle }) => assert_eq!(bundle, "rpm"),
+            other => panic!("expected SelfUpdateUnsupported, got {other:?}"),
+        }
+    }
+
+    fn package_asset(format: PackageFormat, name: &str) -> PackageAsset {
+        PackageAsset {
+            format,
+            name: name.to_string(),
+            url: format!("https://github.com/deuriib/agency-agents-app/releases/download/v0.13.0/{name}"),
+        }
+    }
+
+    /// The card links the asset that matches this build's package manager, and
+    /// never links one it cannot install.
+    #[test]
+    fn package_download_picks_the_matching_asset() {
+        let assets = vec![
+            package_asset(PackageFormat::Deb, "a_amd64.deb"),
+            package_asset(PackageFormat::Rpm, "a.x86_64.rpm"),
+        ];
+        assert_eq!(
+            package_download_for(Some(BundleType::Rpm), &assets).map(|a| a.name),
+            Some("a.x86_64.rpm".to_string())
+        );
+        assert_eq!(
+            package_download_for(Some(BundleType::Deb), &assets).map(|a| a.name),
+            Some("a_amd64.deb".to_string())
+        );
+        // A self-updatable build has nothing to download by hand.
+        assert!(package_download_for(Some(BundleType::AppImage), &assets).is_none());
+        assert!(package_download_for(None, &assets).is_none());
+        // A package build whose release ships no installer degrades to
+        // "View release", not to a broken link.
+        assert!(package_download_for(Some(BundleType::Deb), &[]).is_none());
+    }
+
+    /// The secondary defect in #56: an installer-format rejection is local and
+    /// deterministic, and reporting it as a network failure sent the user to
+    /// check a connection that was working.
+    #[test]
+    fn classify_plugin_error_keeps_installer_mismatch_out_of_network() {
+        // The exact `Display` string `install_deb` produces.
+        let e = classify_plugin_error("invalid updater binary format", "manifest");
+        assert!(
+            matches!(e, AppError::InvalidUpdaterFormat { .. }),
+            "installer mismatch must not be a network error: {e:?}"
+        );
+
+        let e = classify_plugin_error("update is not a valid rpm package", "manifest");
+        assert!(matches!(e, AppError::InvalidUpdaterFormat { .. }), "{e:?}");
+
+        // Signature failures keep their own variant.
+        let e = classify_plugin_error("invalid minisign signature", "manifest");
+        assert!(
+            matches!(e, AppError::SignatureVerificationFailed { .. }),
+            "{e:?}"
+        );
+
+        // A genuine transport failure is still a network error, with the
+        // context carried through for the message.
+        match classify_plugin_error("error sending request", "https://example.test/m.json") {
+            AppError::Network { url, .. } => assert_eq!(url, "https://example.test/m.json"),
+            other => panic!("expected Network, got {other:?}"),
+        }
     }
 
     // ---------- Auto-install (Phase 3) ----------
@@ -2481,6 +2789,8 @@ mod tests {
                 "https://github.com/deuriib/agency-agents-app/releases/tag/v{version}"
             ),
             installable,
+            in_app_install: true,
+            package_download: None,
             manifest_url: manifest_url(
                 &github::app_repo(),
                 UpdateChannel::Stable,
@@ -2579,6 +2889,47 @@ mod tests {
     async fn auto_install_blocker_clears_when_all_gates_pass() {
         let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
         assert_eq!(auto_install_blocker(&state, "9.9.9").await, None);
+    }
+
+    /// A `.deb` / `.rpm` install cannot update itself, so the scheduler must
+    /// not start one. Without this gate it would emit `Started` then `Failed`
+    /// on every wake — a journal row per day for an outcome no release can
+    /// change (#56).
+    #[tokio::test]
+    async fn auto_install_blocker_refuses_package_builds() {
+        let state = build_state_with(SettingsLoadState::Loaded(auto_install_on())).await;
+        assert_eq!(
+            auto_install_blocker_for_bundle(&state, "9.9.9", Some(BundleType::Deb)).await,
+            Some(AutoInstallSkip::UnsupportedBundle)
+        );
+        assert_eq!(
+            auto_install_blocker_for_bundle(&state, "9.9.9", Some(BundleType::Rpm)).await,
+            Some(AutoInstallSkip::UnsupportedBundle)
+        );
+        // The same settings on a self-updatable build are unaffected: this is
+        // the gate being narrowed, not switched on.
+        assert_eq!(
+            auto_install_blocker_for_bundle(&state, "9.9.9", Some(BundleType::AppImage)).await,
+            None
+        );
+        assert_eq!(auto_install_blocker_for_bundle(&state, "9.9.9", None).await, None);
+    }
+
+    /// A package build is reported as `UnsupportedBundle` even when the version
+    /// is also skipped or an install is in flight: the bundle type is the
+    /// property the user cannot act on by changing settings, so it is the
+    /// truthful reason.
+    #[tokio::test]
+    async fn auto_install_blocker_prefers_unsupported_bundle_over_other_reasons() {
+        let s = Settings {
+            skipped_update_versions: vec!["9.9.9".into()],
+            ..auto_install_on()
+        };
+        let state = build_state_with(SettingsLoadState::Loaded(s)).await;
+        assert_eq!(
+            auto_install_blocker_for_bundle(&state, "9.9.9", Some(BundleType::Deb)).await,
+            Some(AutoInstallSkip::UnsupportedBundle)
+        );
     }
 
     /// Single-flight: a second attempt while one is running is refused rather

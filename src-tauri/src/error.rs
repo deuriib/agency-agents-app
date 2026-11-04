@@ -91,6 +91,31 @@ pub enum AppError {
     #[error("update would downgrade {current} to {target}; refusing")]
     DowngradeRejected { current: String, target: String },
 
+    /// This build has no in-place update path (issue #56).
+    ///
+    /// A `.deb` / `.rpm` install dispatches to `dpkg` / `rpm` based on a
+    /// bundle type patched into the binary at build time, while the release
+    /// manifest serves exactly one `linux-x86_64` payload — the AppImage
+    /// tarball. The installer therefore rejects the bytes every time, and
+    /// **no retry can change that**. Reported as its own variant (not
+    /// `Network`) so the copy can point at the package download instead of
+    /// sending the user to check a connection that is working fine.
+    ///
+    /// Raised *before* the download, so the user never pays for the artifact.
+    #[error("this {bundle} build cannot update itself in place; download the package instead")]
+    SelfUpdateUnsupported { bundle: String },
+
+    /// The downloaded artifact is not the installer format this build
+    /// expects (`tauri-plugin-updater`'s `InvalidUpdaterFormat`).
+    ///
+    /// Deterministic and local: the payload is not a `.deb` / `.rpm` / app
+    /// archive this build can hand to its installer. Kept separate from
+    /// `Network` because the failure lands *after* the download completes and
+    /// signature verification passes, so blaming the connection hides the one
+    /// actionable sentence.
+    #[error("the update artifact is not a valid installer for this build: {message}")]
+    InvalidUpdaterFormat { message: String },
+
     /// A background (auto-install) download was aborted on purpose: the user
     /// revoked consent, turned Offline Mode on, or asked to cancel. **Fail
     /// closed**: the artifact is dropped after verification and before the
@@ -329,6 +354,33 @@ mod tests {
         // No fields: the renderer only needs the code to pick its message.
         let v: Value = serde_json::to_value(&err).unwrap();
         assert_eq!(v.as_object().map(|o| o.len()), Some(1));
+    }
+
+    /// Issue #56: a package install that cannot self-update gets its own code,
+    /// so the renderer routes to "download the package" instead of the generic
+    /// network copy.
+    #[test]
+    fn self_update_unsupported_serializes_with_bundle() {
+        let err = AppError::SelfUpdateUnsupported {
+            bundle: "deb".into(),
+        };
+        assert_eq!(code_of(&err), "self_update_unsupported");
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["bundle"], "deb");
+    }
+
+    /// Issue #56: an installer-format mismatch is local and deterministic. It
+    /// must never serialize as `network`, which is what sent users to check a
+    /// connection that was working.
+    #[test]
+    fn invalid_updater_format_is_not_a_network_error() {
+        let err = AppError::InvalidUpdaterFormat {
+            message: "update is not a valid deb package".into(),
+        };
+        assert_eq!(code_of(&err), "invalid_updater_format");
+        assert_ne!(code_of(&err), "network");
+        let v: Value = serde_json::to_value(&err).unwrap();
+        assert_eq!(v["message"], "update is not a valid deb package");
     }
 
     #[test]
